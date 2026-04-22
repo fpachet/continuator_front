@@ -428,7 +428,7 @@ input[type="number"]:disabled {
 
 .generation-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
   margin-bottom: 18px;
 }
@@ -439,6 +439,20 @@ input[type="number"]:disabled {
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.generation-actions {
+  margin-bottom: 0;
+}
+
+.danger-button {
+  color: var(--danger);
+  border-color: rgba(255, 142, 114, 0.28);
+  background: rgba(255, 142, 114, 0.12);
+}
+
+.danger-button:hover:not(:disabled) {
+  border-color: rgba(255, 142, 114, 0.44);
 }
 
 .roll-card {
@@ -622,6 +636,10 @@ input[type="number"]:disabled {
   }
 
   .settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .generation-grid {
     grid-template-columns: 1fr;
   }
 

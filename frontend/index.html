@@ -175,6 +175,26 @@
                 Leave empty to match the captured phrase note count.
               </p>
             </div>
+            <div class="field generation-field">
+              <label>Infinite mode</label>
+              <div class="button-row generation-actions">
+                <button id="start-infinite-button" class="ghost" type="button">
+                  Start Infinite
+                </button>
+                <button
+                  id="stop-infinite-button"
+                  class="ghost danger-button"
+                  type="button"
+                  disabled
+                >
+                  Stop
+                </button>
+              </div>
+              <p class="field-hint">
+                Queues the next continuation before the current one ends, using
+                the latest continuation as the next prefix.
+              </p>
+            </div>
           </div>
           <dl class="info-grid">
             <div>

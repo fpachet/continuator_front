@@ -1,6 +1,8 @@
 const BROWSER_SYNTH_ID = "__browser_synth__";
 const PHRASE_TIMEOUT_MS = 1000;
 const PLAYBACK_START_DELAY_MS = 80;
+const INFINITE_MIN_LOOKAHEAD_MS = 600;
+const INFINITE_MAX_LOOKAHEAD_MS = 2200;
 
 const elements = {
   serverStatus: document.querySelector("#server-status"),
@@ -38,6 +40,8 @@ const elements = {
   keepLastInput: document.querySelector("#keep-last-input"),
   decayModeSelect: document.querySelector("#decay-mode-select"),
   continuationLengthInput: document.querySelector("#continuation-length-input"),
+  startInfiniteButton: document.querySelector("#start-infinite-button"),
+  stopInfiniteButton: document.querySelector("#stop-infinite-button"),
   createSessionButton: document.querySelector("#create-session-button"),
   resetSessionButton: document.querySelector("#reset-session-button"),
   applySettingsButton: document.querySelector("#apply-settings-button"),
@@ -62,6 +66,11 @@ const state = {
   previewedMemoryIndex: null,
   previewPulseTimeoutId: null,
   activePlayback: null,
+  infiniteModeEnabled: false,
+  infiniteRequestInFlight: false,
+  infiniteScheduleTimerId: null,
+  infiniteAbortController: null,
+  infiniteRunId: 0,
 };
 
 class BrowserSynth {
@@ -277,6 +286,7 @@ const recorder = new PhraseRecorder(
     state.lastCapturedPhrase = phrase;
     const notes = eventsToNotes(phrase);
     renderCapturedStats(phrase, notes, true);
+    updateInfiniteActionState();
     setPhraseMessage(
       `Phrase complete: ${phrase.length} events / ${notes.length} notes captured.`,
     );
@@ -341,6 +351,49 @@ function normalizedContinuationNoteCount(value) {
     return null;
   }
   return Math.max(1, Math.round(parsed));
+}
+
+function hasLoopSeedPhrase() {
+  return Boolean(state.lastCapturedPhrase.length || state.lastGeneratedPhrase?.events?.length);
+}
+
+function clearInfiniteScheduler() {
+  if (state.infiniteScheduleTimerId) {
+    window.clearTimeout(state.infiniteScheduleTimerId);
+    state.infiniteScheduleTimerId = null;
+  }
+}
+
+function updateInfiniteActionState() {
+  const loopBusy =
+    state.infiniteModeEnabled ||
+    state.infiniteRequestInFlight ||
+    state.infiniteScheduleTimerId != null;
+  elements.startInfiniteButton.disabled = loopBusy || !hasLoopSeedPhrase();
+  elements.stopInfiniteButton.disabled = !(loopBusy || state.activePlayback);
+}
+
+function continuationDurationMs(payload) {
+  if (payload?.duration_seconds != null) {
+    return Math.max(0, Math.round(Number(payload.duration_seconds) * 1000));
+  }
+
+  if (!payload?.events?.length) {
+    return 0;
+  }
+
+  return payload.events.reduce(
+    (total, event) => total + Number(event.delta_seconds || 0) * 1000,
+    0,
+  );
+}
+
+function infiniteLookaheadMs(payload) {
+  const durationMs = continuationDurationMs(payload);
+  return Math.min(
+    INFINITE_MAX_LOOKAHEAD_MS,
+    Math.max(INFINITE_MIN_LOOKAHEAD_MS, Math.round(durationMs * 0.4)),
+  );
 }
 
 function readSessionSettingsFromControls() {
@@ -448,6 +501,7 @@ function previewPhrasePayload(payload, kind, message) {
     state.lastCapturedPhrase = payload.events;
     renderCapturedStats(payload.events, payload.notes, true);
   }
+  updateInfiniteActionState();
   setPhraseMessage(message);
   revealPreviewTarget(kind);
 }
@@ -797,6 +851,7 @@ async function ensureSession() {
 }
 
 async function resetSession() {
+  stopInfiniteMode({ stopPlayback: true, silent: true });
   if (!state.sessionId) {
     setPhraseMessage("Create a session before resetting it.", true);
     return;
@@ -812,6 +867,7 @@ async function resetSession() {
 
   state.lastGeneratedPhrase = null;
   renderGeneratedStats(null);
+  updateInfiniteActionState();
   syncSettingsControls(payload.configuration);
   setPhraseMessage("Session memory cleared and the current settings were preserved.");
   await refreshMemory();
@@ -880,31 +936,67 @@ async function refreshSessionActivity() {
   await Promise.all([refreshHistory(), refreshMemory()]);
 }
 
-async function sendCurrentPhrase() {
-  if (!state.lastCapturedPhrase.length) {
-    setPhraseMessage("No completed phrase is ready yet.", true);
-    return;
-  }
-
-  await ensureSession();
-  setPhraseStatus("Sending");
+function buildContinuationRequestBody(phraseEvents, learnInput, signal = null) {
   const continuationNoteCount = normalizedContinuationNoteCount(
     elements.continuationLengthInput.value,
   );
   const requestBody = {
     session_id: state.sessionId,
-    phrase: state.lastCapturedPhrase,
-    learn_input: elements.learnInputToggle.checked,
+    phrase: phraseEvents,
+    learn_input: learnInput,
   };
   if (continuationNoteCount != null) {
     requestBody.continuation_note_count = continuationNoteCount;
   }
+  return {
+    requestBody,
+    continuationNoteCount,
+    fetchOptions: {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+      signal,
+    },
+  };
+}
 
-  const response = await fetch("/api/continue", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(requestBody),
-  });
+function defaultContinuationMessage(payload, continuationNoteCount) {
+  return (
+    payload.status_message ||
+    (continuationNoteCount == null
+      ? `Continuation generated: ${payload.generated_phrase.note_count} notes returned.`
+      : `Continuation generated: ${payload.generated_phrase.note_count} notes returned from a ${continuationNoteCount}-note request.`)
+  );
+}
+
+function applyContinuationPayload(payload) {
+  state.lastCapturedPhrase = payload.input_phrase.events;
+  renderCapturedStats(payload.input_phrase.events, payload.input_phrase.notes, true);
+  state.lastGeneratedPhrase = payload.generated_phrase;
+  renderGeneratedStats(payload.generated_phrase);
+  updateInfiniteActionState();
+}
+
+async function requestContinuationFromEvents(
+  phraseEvents,
+  {
+    learnInput = elements.learnInputToggle.checked,
+    statusLabel = "Sending",
+    signal = null,
+  } = {},
+) {
+  if (!phraseEvents?.length) {
+    throw new Error("No completed phrase is ready yet.");
+  }
+
+  await ensureSession();
+  setPhraseStatus(statusLabel);
+  const { continuationNoteCount, fetchOptions } = buildContinuationRequestBody(
+    phraseEvents,
+    learnInput,
+    signal,
+  );
+  const response = await fetch("/api/continue", fetchOptions);
 
   if (!response.ok) {
     const errorText = await response.text();
@@ -912,19 +1004,22 @@ async function sendCurrentPhrase() {
   }
 
   const payload = await response.json();
-  state.lastGeneratedPhrase = payload.generated_phrase;
-  renderGeneratedStats(payload.generated_phrase);
-  setPhraseStatus(payload.generated_phrase.note_count ? "Generated" : "Primed");
-  setPhraseMessage(
-    payload.status_message ||
-      (continuationNoteCount == null
-        ? `Continuation generated: ${payload.generated_phrase.note_count} notes returned.`
-        : `Continuation generated: ${payload.generated_phrase.note_count} notes returned from a ${continuationNoteCount}-note request.`),
+  return { payload, continuationNoteCount };
+}
+
+async function sendCurrentPhrase() {
+  stopInfiniteMode({ stopPlayback: true, silent: true });
+  const { payload, continuationNoteCount } = await requestContinuationFromEvents(
+    state.lastCapturedPhrase,
+    { learnInput: elements.learnInputToggle.checked },
   );
-  await refreshSessionActivity();
+  applyContinuationPayload(payload);
   if (payload.generated_phrase.event_count > 0) {
     await playPayload(payload.generated_phrase);
   }
+  await refreshSessionActivity();
+  setPhraseStatus(payload.generated_phrase.note_count ? "Generated" : "Primed");
+  setPhraseMessage(defaultContinuationMessage(payload, continuationNoteCount));
 }
 
 async function checkServer() {
@@ -986,6 +1081,7 @@ function stopActivePlayback() {
 
   synth.stop();
   state.activePlayback = null;
+  updateInfiniteActionState();
   return true;
 }
 
@@ -1014,32 +1110,51 @@ function dispatchPlaybackEvent(playback, event) {
   synth.noteOff(event.note, event.channel);
 }
 
-async function playPayload(payload) {
+async function playPayload(
+  payload,
+  {
+    startDelayMs = PLAYBACK_START_DELAY_MS,
+    append = false,
+  } = {},
+) {
   if (!payload?.events?.length) {
     return;
   }
 
-  stopActivePlayback();
+  let playback = state.activePlayback;
+  if (!append || !playback) {
+    stopActivePlayback();
 
-  let output = null;
-  if (elements.midiOutputSelect.value !== BROWSER_SYNTH_ID) {
-    output = selectedMidiOutput();
-    if (output) {
-      await output.open();
+    let output = null;
+    if (elements.midiOutputSelect.value !== BROWSER_SYNTH_ID) {
+      output = selectedMidiOutput();
+      if (output) {
+        await output.open();
+      }
     }
+
+    if (!output) {
+      await synth.ensureContext();
+    }
+
+    playback = {
+      output,
+      timerIds: new Set(),
+      activeOutputNotes: new Set(),
+      cleanupTimerId: null,
+      endsAtMs: performance.now(),
+    };
+    state.activePlayback = playback;
   }
 
-  if (!output) {
-    await synth.ensureContext();
+  if (playback.cleanupTimerId != null) {
+    window.clearTimeout(playback.cleanupTimerId);
+    playback.timerIds.delete(playback.cleanupTimerId);
+    playback.cleanupTimerId = null;
   }
 
-  const playback = {
-    output,
-    timerIds: [],
-    activeOutputNotes: new Set(),
-  };
-  state.activePlayback = playback;
-
+  const scheduleDelayMs = Math.max(0, startDelayMs);
+  const scheduleBaseMs = performance.now();
   let cursorMs = 0;
   for (const event of payload.events) {
     cursorMs += event.delta_seconds * 1000;
@@ -1048,17 +1163,250 @@ async function playPayload(payload) {
         return;
       }
       dispatchPlaybackEvent(playback, event);
-    }, PLAYBACK_START_DELAY_MS + cursorMs);
-    playback.timerIds.push(timerId);
+      playback.timerIds.delete(timerId);
+    }, scheduleDelayMs + cursorMs);
+    playback.timerIds.add(timerId);
   }
 
   const cleanupTimerId = window.setTimeout(() => {
     if (state.activePlayback !== playback) {
       return;
     }
+    playback.timerIds.delete(cleanupTimerId);
     stopActivePlayback();
-  }, PLAYBACK_START_DELAY_MS + cursorMs + 200);
-  playback.timerIds.push(cleanupTimerId);
+  }, scheduleDelayMs + cursorMs + 200);
+  playback.cleanupTimerId = cleanupTimerId;
+  playback.timerIds.add(cleanupTimerId);
+  playback.endsAtMs = Math.max(playback.endsAtMs, scheduleBaseMs + scheduleDelayMs + cursorMs);
+  updateInfiniteActionState();
+}
+
+function stopInfiniteMode(
+  {
+    stopPlayback = true,
+    silent = false,
+    message = "Infinite mode stopped.",
+  } = {},
+) {
+  const hadInfiniteState =
+    state.infiniteModeEnabled ||
+    state.infiniteRequestInFlight ||
+    state.infiniteScheduleTimerId != null;
+
+  clearInfiniteScheduler();
+  if (state.infiniteAbortController) {
+    state.infiniteAbortController.abort();
+    state.infiniteAbortController = null;
+  }
+  state.infiniteModeEnabled = false;
+  state.infiniteRequestInFlight = false;
+  state.infiniteRunId += 1;
+  if (stopPlayback) {
+    stopActivePlayback();
+  }
+  updateInfiniteActionState();
+
+  if (!silent && (hadInfiniteState || stopPlayback)) {
+    setPhraseMessage(message);
+  }
+
+  return hadInfiniteState;
+}
+
+function stopLoopAndPlayback(message) {
+  const hadInfiniteState =
+    state.infiniteModeEnabled ||
+    state.infiniteRequestInFlight ||
+    state.infiniteScheduleTimerId != null;
+
+  if (hadInfiniteState) {
+    stopInfiniteMode({ stopPlayback: true, silent: true });
+    setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
+    setPhraseMessage(message || "Infinite mode stopped.");
+    return true;
+  }
+
+  if (stopActivePlayback()) {
+    setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
+    setPhraseMessage(message || "Playback stopped.");
+    return true;
+  }
+
+  return false;
+}
+
+function scheduleInfiniteStep(prefixPayload, runId) {
+  if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
+    return;
+  }
+
+  clearInfiniteScheduler();
+  const remainingPlaybackMs = state.activePlayback
+    ? Math.max(0, state.activePlayback.endsAtMs - performance.now())
+    : continuationDurationMs(prefixPayload);
+  const delayMs = Math.max(0, remainingPlaybackMs - infiniteLookaheadMs(prefixPayload));
+
+  state.infiniteScheduleTimerId = window.setTimeout(() => {
+    state.infiniteScheduleTimerId = null;
+    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
+      return;
+    }
+    void runInfiniteStep(prefixPayload.events, runId);
+  }, delayMs);
+  updateInfiniteActionState();
+}
+
+async function runInfiniteStep(prefixEvents, runId) {
+  if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
+    return;
+  }
+
+  state.infiniteRequestInFlight = true;
+  const abortController = new AbortController();
+  state.infiniteAbortController = abortController;
+  updateInfiniteActionState();
+
+  try {
+    const { payload } = await requestContinuationFromEvents(prefixEvents, {
+      learnInput: false,
+      statusLabel: state.activePlayback ? "Queueing next" : "Sending",
+      signal: abortController.signal,
+    });
+    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
+      return;
+    }
+
+    applyContinuationPayload(payload);
+    if (!payload.generated_phrase.event_count) {
+      stopInfiniteMode({
+        stopPlayback: false,
+        message: "Infinite mode stopped because the latest continuation was empty.",
+      });
+      setPhraseStatus("Primed");
+      return;
+    }
+
+    const startDelayMs = state.activePlayback
+      ? Math.max(0, state.activePlayback.endsAtMs - performance.now())
+      : PLAYBACK_START_DELAY_MS;
+    await playPayload(payload.generated_phrase, {
+      startDelayMs,
+      append: Boolean(state.activePlayback),
+    });
+    await refreshSessionActivity();
+    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
+      return;
+    }
+
+    setPhraseStatus("Infinite");
+    setPhraseMessage(
+      `Infinite mode running: ${payload.generated_phrase.note_count} notes queued from the latest continuation.`,
+    );
+    scheduleInfiniteStep(payload.generated_phrase, runId);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
+    if (runId === state.infiniteRunId) {
+      stopInfiniteMode({
+        stopPlayback: false,
+        message: `Infinite mode stopped: ${error.message}`,
+      });
+      setPhraseStatus("Error");
+    }
+  } finally {
+    if (runId === state.infiniteRunId) {
+      state.infiniteRequestInFlight = false;
+      state.infiniteAbortController = null;
+      updateInfiniteActionState();
+    }
+  }
+}
+
+async function startInfiniteMode() {
+  if (state.infiniteModeEnabled || state.infiniteRequestInFlight) {
+    return;
+  }
+
+  if (state.activePlayback && state.lastGeneratedPhrase?.events?.length) {
+    state.infiniteModeEnabled = true;
+    state.infiniteRunId += 1;
+    updateInfiniteActionState();
+    setPhraseStatus("Infinite");
+    setPhraseMessage(
+      "Infinite mode armed. The next continuation will be queued before the current one ends.",
+    );
+    scheduleInfiniteStep(state.lastGeneratedPhrase, state.infiniteRunId);
+    return;
+  }
+
+  const seedEvents = state.lastCapturedPhrase.length
+    ? state.lastCapturedPhrase
+    : state.lastGeneratedPhrase?.events || [];
+  if (!seedEvents.length) {
+    setPhraseMessage("Play or preview a phrase before starting infinite mode.", true);
+    return;
+  }
+
+  state.infiniteModeEnabled = true;
+  state.infiniteRunId += 1;
+  updateInfiniteActionState();
+  setPhraseMessage("Infinite mode started. Generating the first continuation...");
+
+  const runId = state.infiniteRunId;
+  state.infiniteRequestInFlight = true;
+  const abortController = new AbortController();
+  state.infiniteAbortController = abortController;
+  updateInfiniteActionState();
+
+  try {
+    const { payload } = await requestContinuationFromEvents(seedEvents, {
+      learnInput: elements.learnInputToggle.checked,
+      signal: abortController.signal,
+    });
+    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
+      return;
+    }
+
+    applyContinuationPayload(payload);
+    if (!payload.generated_phrase.event_count) {
+      stopInfiniteMode({
+        stopPlayback: false,
+        message: "Infinite mode stopped because the first continuation was empty.",
+      });
+      setPhraseStatus("Primed");
+      return;
+    }
+
+    await playPayload(payload.generated_phrase);
+    await refreshSessionActivity();
+    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
+      return;
+    }
+
+    setPhraseStatus("Infinite");
+    setPhraseMessage(
+      `Infinite mode running: ${payload.generated_phrase.note_count} notes in the first continuation.`,
+    );
+    scheduleInfiniteStep(payload.generated_phrase, runId);
+  } catch (error) {
+    if (error.name === "AbortError") {
+      return;
+    }
+    if (runId === state.infiniteRunId) {
+      stopInfiniteMode({
+        stopPlayback: false,
+        message: `Infinite mode stopped: ${error.message}`,
+      });
+      setPhraseStatus("Error");
+    }
+  } finally {
+    if (runId === state.infiniteRunId) {
+      state.infiniteRequestInFlight = false;
+      state.infiniteAbortController = null;
+      updateInfiniteActionState();
+    }
+  }
 }
 
 async function populateMidiSelectors() {
@@ -1143,7 +1491,11 @@ async function attachInput(inputId) {
     const [statusByte, note, velocity = 0] = [...messageEvent.data];
     const status = statusByte & 0xf0;
     const interruptedPlayback =
-      status === 0x90 && velocity > 0 ? stopActivePlayback() : false;
+      status === 0x90 && velocity > 0
+        ? stopLoopAndPlayback(
+            `Stopped the current continuation and switched to live MIDI from ${input.name || input.id}.`,
+          )
+        : false;
 
     recorder.handleMessage(messageEvent);
     const type =
@@ -1155,7 +1507,7 @@ async function attachInput(inputId) {
     setLastMidiEvent(`${type} ${note} v${velocity}`);
     setPhraseMessage(
       interruptedPlayback
-        ? `Stopped playback and switched to live MIDI from ${input.name || input.id}.`
+        ? `Stopped the current continuation and switched to live MIDI from ${input.name || input.id}.`
         : `Receiving MIDI from ${input.name || input.id}. Waiting for phrase end…`,
     );
   };
@@ -1194,7 +1546,7 @@ function updateSelectedOutput() {
 }
 
 function clearPhrases() {
-  stopActivePlayback();
+  stopInfiniteMode({ stopPlayback: true, silent: true });
   state.lastCapturedPhrase = [];
   state.lastGeneratedPhrase = null;
   state.previewedHistoryIndex = null;
@@ -1203,6 +1555,7 @@ function clearPhrases() {
   renderCapturedStats([], [], false);
   renderGeneratedStats(null);
   syncPreviewSelection();
+  updateInfiniteActionState();
   setPhraseStatus("Waiting for MIDI");
   setPhraseMessage("Cleared the local phrase buffers.");
 }
@@ -1267,11 +1620,25 @@ function bindEvents() {
       return;
     }
     try {
+      stopInfiniteMode({ stopPlayback: true, silent: true });
       await playPayload(state.lastGeneratedPhrase);
       setPhraseMessage("Replaying the latest generated phrase.");
     } catch (error) {
       setPhraseMessage(error.message, true);
     }
+  });
+
+  elements.startInfiniteButton.addEventListener("click", async () => {
+    try {
+      await startInfiniteMode();
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+      setPhraseStatus("Error");
+    }
+  });
+
+  elements.stopInfiniteButton.addEventListener("click", () => {
+    stopLoopAndPlayback();
   });
 
   elements.clearPhraseButton.addEventListener("click", () => {
@@ -1363,6 +1730,7 @@ async function initialize() {
   updateKeepLastFieldState();
   renderSessionSettingsSummary();
   updateSessionActionState();
+  updateInfiniteActionState();
   try {
     await checkServer();
   } catch (error) {
