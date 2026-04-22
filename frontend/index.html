@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Continuator Web Pilot</title>
+    <title>Web Continuator</title>
     <link rel="stylesheet" href="/assets/styles.css" />
   </head>
   <body>
@@ -11,13 +11,7 @@
     <div class="page-grid"></div>
     <header class="hero">
       <div class="hero-copy">
-        <p class="eyebrow">Web MIDI + FastAPI + Continuator</p>
-        <h1>Continuator Web Pilot</h1>
-        <p class="lede">
-          Capture a phrase from a MIDI keyboard in the browser, send it to the
-          Python Continuator, and play the continuation back through a MIDI port
-          or a built-in browser synth.
-        </p>
+        <h1>Web Continuator</h1>
       </div>
       <div class="hero-chip">
         <span>Session-isolated</span>
@@ -165,6 +159,22 @@
             <button id="send-phrase-button">Send Phrase</button>
             <button id="replay-generated-button" class="ghost">Replay Output</button>
             <button id="clear-phrase-button" class="ghost">Clear</button>
+          </div>
+          <div class="generation-grid">
+            <div class="field generation-field">
+              <label for="continuation-length-input">Continuation length (notes)</label>
+              <input
+                id="continuation-length-input"
+                type="number"
+                min="1"
+                step="1"
+                inputmode="numeric"
+                placeholder="Same as input"
+              />
+              <p class="field-hint">
+                Leave empty to match the captured phrase note count.
+              </p>
+            </div>
           </div>
           <dl class="info-grid">
             <div>

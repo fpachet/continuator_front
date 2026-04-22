@@ -1,5 +1,6 @@
 const BROWSER_SYNTH_ID = "__browser_synth__";
 const PHRASE_TIMEOUT_MS = 1000;
+const PLAYBACK_START_DELAY_MS = 80;
 
 const elements = {
   serverStatus: document.querySelector("#server-status"),
@@ -36,6 +37,7 @@ const elements = {
   forgetToggle: document.querySelector("#forget-toggle"),
   keepLastInput: document.querySelector("#keep-last-input"),
   decayModeSelect: document.querySelector("#decay-mode-select"),
+  continuationLengthInput: document.querySelector("#continuation-length-input"),
   createSessionButton: document.querySelector("#create-session-button"),
   resetSessionButton: document.querySelector("#reset-session-button"),
   applySettingsButton: document.querySelector("#apply-settings-button"),
@@ -56,6 +58,10 @@ const state = {
   historyItems: [],
   memoryItems: [],
   activeActivityView: "history",
+  previewedHistoryIndex: null,
+  previewedMemoryIndex: null,
+  previewPulseTimeoutId: null,
+  activePlayback: null,
 };
 
 class BrowserSynth {
@@ -84,52 +90,68 @@ class BrowserSynth {
     return 440 * 2 ** ((note - 69) / 12);
   }
 
-  async play(events) {
-    if (!events?.length) {
+  noteOn(note, channel, velocity) {
+    if (!this.context || !this.master) {
       return;
     }
 
-    await this.ensureContext();
-    let cursor = 0;
-    const startAt = this.context.currentTime + 0.05;
+    const at = this.context.currentTime + 0.001;
+    const key = this.key(note, channel);
+    const oscillator = new OscillatorNode(this.context, {
+      type: "triangle",
+      frequency: this.midiToFrequency(note),
+    });
+    const gain = new GainNode(this.context, { gain: 0.0001 });
+    oscillator.connect(gain).connect(this.master);
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(
+      Math.max(0.03, (velocity / 127) * 0.2),
+      at + 0.015,
+    );
+    oscillator.start(at);
 
-    for (const event of events) {
-      cursor += event.delta_seconds;
-      const at = startAt + cursor;
-      const key = this.key(event.note, event.channel);
+    const existing = this.activeVoices.get(key) || [];
+    existing.push({ oscillator, gain });
+    this.activeVoices.set(key, existing);
+  }
 
-      if (event.type === "note_on" && event.velocity > 0) {
-        const oscillator = new OscillatorNode(this.context, {
-          type: "triangle",
-          frequency: this.midiToFrequency(event.note),
-        });
-        const gain = new GainNode(this.context, { gain: 0.0001 });
-        oscillator.connect(gain).connect(this.master);
-        gain.gain.setValueAtTime(0.0001, at);
-        gain.gain.exponentialRampToValueAtTime(
-          Math.max(0.03, (event.velocity / 127) * 0.2),
-          at + 0.015,
-        );
-        oscillator.start(at);
+  noteOff(note, channel) {
+    if (!this.context) {
+      return;
+    }
 
-        const existing = this.activeVoices.get(key) || [];
-        existing.push({ oscillator, gain });
-        this.activeVoices.set(key, existing);
-      } else {
-        const voices = this.activeVoices.get(key);
-        if (!voices?.length) {
-          continue;
-        }
-        const voice = voices.shift();
+    const key = this.key(note, channel);
+    const voices = this.activeVoices.get(key);
+    if (!voices?.length) {
+      return;
+    }
+
+    const at = this.context.currentTime + 0.001;
+    const voice = voices.shift();
+    voice.gain.gain.cancelScheduledValues(at);
+    voice.gain.gain.setValueAtTime(Math.max(0.0001, voice.gain.gain.value), at);
+    voice.gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.08);
+    voice.oscillator.stop(at + 0.1);
+    if (!voices.length) {
+      this.activeVoices.delete(key);
+    }
+  }
+
+  stop() {
+    if (!this.context) {
+      return;
+    }
+
+    const at = this.context.currentTime + 0.001;
+    for (const voices of this.activeVoices.values()) {
+      for (const voice of voices) {
         voice.gain.gain.cancelScheduledValues(at);
-        voice.gain.gain.setValueAtTime(0.06, at);
-        voice.gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.08);
-        voice.oscillator.stop(at + 0.1);
-        if (!voices.length) {
-          this.activeVoices.delete(key);
-        }
+        voice.gain.gain.setValueAtTime(Math.max(0.0001, voice.gain.gain.value), at);
+        voice.gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.04);
+        voice.oscillator.stop(at + 0.06);
       }
     }
+    this.activeVoices.clear();
   }
 }
 
@@ -310,6 +332,17 @@ function normalizedKeepLastInputs(value) {
   return Math.min(500, Math.max(1, Math.round(parsed)));
 }
 
+function normalizedContinuationNoteCount(value) {
+  if (value == null || value === "") {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return Math.max(1, Math.round(parsed));
+}
+
 function readSessionSettingsFromControls() {
   return {
     learn_input: elements.learnInputToggle.checked,
@@ -371,6 +404,42 @@ function setActivityView(view) {
   elements.memoryPanel.hidden = showHistory;
 }
 
+function syncPreviewSelection() {
+  elements.historyList.querySelectorAll("[data-history-index]").forEach((node) => {
+    node.classList.toggle(
+      "is-selected",
+      Number(node.dataset.historyIndex) === state.previewedHistoryIndex,
+    );
+  });
+
+  const isSelectedMemoryIndex = (node) =>
+    Number(node.dataset.memoryIndex) === state.previewedMemoryIndex;
+
+  elements.memoryList.querySelectorAll("[data-memory-index]").forEach((node) => {
+    node.classList.toggle("is-selected", isSelectedMemoryIndex(node));
+  });
+
+  elements.memoryRibbon.querySelectorAll("[data-memory-index]").forEach((node) => {
+    node.classList.toggle("is-selected", isSelectedMemoryIndex(node));
+  });
+}
+
+function revealPreviewTarget(kind) {
+  const target = kind === "generated" ? elements.outputRoll : elements.inputRoll;
+  elements.inputRoll.classList.remove("is-previewing");
+  elements.outputRoll.classList.remove("is-previewing");
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  void target.offsetWidth;
+  target.classList.add("is-previewing");
+  if (state.previewPulseTimeoutId) {
+    window.clearTimeout(state.previewPulseTimeoutId);
+  }
+  state.previewPulseTimeoutId = window.setTimeout(() => {
+    target.classList.remove("is-previewing");
+    state.previewPulseTimeoutId = null;
+  }, 900);
+}
+
 function previewPhrasePayload(payload, kind, message) {
   if (kind === "generated") {
     state.lastGeneratedPhrase = payload;
@@ -380,6 +449,7 @@ function previewPhrasePayload(payload, kind, message) {
     renderCapturedStats(payload.events, payload.notes, true);
   }
   setPhraseMessage(message);
+  revealPreviewTarget(kind);
 }
 
 function renderCapturedStats(events, notes, completed) {
@@ -424,11 +494,15 @@ function createHistoryMarkup(items) {
 function attachHistoryEvents() {
   elements.historyList.querySelectorAll("[data-history-index]").forEach((node) => {
     node.addEventListener("click", () => {
-      const item = state.historyItems[Number(node.dataset.historyIndex)];
+      const historyIndex = Number(node.dataset.historyIndex);
+      const item = state.historyItems[historyIndex];
       if (!item) {
         return;
       }
 
+      state.previewedHistoryIndex = historyIndex;
+      state.previewedMemoryIndex = null;
+      syncPreviewSelection();
       previewPhrasePayload(item.payload, item.kind, `Previewing ${item.kind} phrase from ${item.created_at}.`);
     });
   });
@@ -438,6 +512,7 @@ function renderHistory(items) {
   state.historyItems = items;
   elements.historyList.innerHTML = createHistoryMarkup(items);
   attachHistoryEvents();
+  syncPreviewSelection();
 }
 
 function createMemorySummaryMarkup(memory) {
@@ -474,7 +549,7 @@ function createMemoryHint(memory) {
   }
   return memory.configuration.transposition
     ? "The ribbon reads oldest to newest. The list below starts with the newest active sequence, and transposed variants appear separately when transpose is enabled."
-    : "The ribbon reads oldest to newest. The list below starts with the newest active sequence. Click any item to preview it in the main piano roll.";
+    : "The ribbon reads oldest to newest. The list below starts with the newest active sequence. Click any item to open it in the main piano roll.";
 }
 
 function createMemoryRibbonMarkup(items) {
@@ -515,7 +590,7 @@ function createMemoryMarkup(items) {
             <strong>${item.note_count} notes / ${formatDurationSeconds(item.duration_seconds)}</strong>
             <span>Active slot ${item.slot} in current engine memory</span>
           </span>
-          <span class="history-index">preview</span>
+          <span class="history-index">open</span>
         </button>
       `;
     })
@@ -524,14 +599,18 @@ function createMemoryMarkup(items) {
 
 function attachMemoryEvents() {
   const previewMemoryIndex = (rawIndex) => {
-    const item = state.memoryItems[Number(rawIndex)];
+    const memoryIndex = Number(rawIndex);
+    const item = state.memoryItems[memoryIndex];
     if (!item) {
       return;
     }
+    state.previewedMemoryIndex = memoryIndex;
+    state.previewedHistoryIndex = null;
+    syncPreviewSelection();
     previewPhrasePayload(
       item.payload,
       "input",
-      `Previewing ${item.source} memory slot ${item.slot}.`,
+      `Opened ${item.source} memory slot ${item.slot} in Captured Phrase.`,
     );
   };
 
@@ -555,6 +634,7 @@ function renderMemory(memory) {
   elements.memoryRibbon.innerHTML = createMemoryRibbonMarkup(state.memoryItems);
   elements.memoryList.innerHTML = createMemoryMarkup(state.memoryItems);
   attachMemoryEvents();
+  syncPreviewSelection();
 }
 
 function drawPianoRoll(canvas, notes, accent, emptyLabel) {
@@ -808,15 +888,22 @@ async function sendCurrentPhrase() {
 
   await ensureSession();
   setPhraseStatus("Sending");
+  const continuationNoteCount = normalizedContinuationNoteCount(
+    elements.continuationLengthInput.value,
+  );
+  const requestBody = {
+    session_id: state.sessionId,
+    phrase: state.lastCapturedPhrase,
+    learn_input: elements.learnInputToggle.checked,
+  };
+  if (continuationNoteCount != null) {
+    requestBody.continuation_note_count = continuationNoteCount;
+  }
 
   const response = await fetch("/api/continue", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: state.sessionId,
-      phrase: state.lastCapturedPhrase,
-      learn_input: elements.learnInputToggle.checked,
-    }),
+    body: JSON.stringify(requestBody),
   });
 
   if (!response.ok) {
@@ -830,7 +917,9 @@ async function sendCurrentPhrase() {
   setPhraseStatus(payload.generated_phrase.note_count ? "Generated" : "Primed");
   setPhraseMessage(
     payload.status_message ||
-      `Continuation generated: ${payload.generated_phrase.note_count} notes returned.`,
+      (continuationNoteCount == null
+        ? `Continuation generated: ${payload.generated_phrase.note_count} notes returned.`
+        : `Continuation generated: ${payload.generated_phrase.note_count} notes returned from a ${continuationNoteCount}-note request.`),
   );
   await refreshSessionActivity();
   if (payload.generated_phrase.event_count > 0) {
@@ -858,33 +947,118 @@ function selectedMidiOutput() {
   return state.midiAccess.outputs.get(elements.midiOutputSelect.value) || null;
 }
 
+function outputNoteKey(note, channel) {
+  return `${channel}:${note}`;
+}
+
+function sendOutputMessage(output, message) {
+  try {
+    output.send(message);
+  } catch {
+    // Ignore unavailable outputs while cancelling or switching playback.
+  }
+}
+
+function stopActivePlayback() {
+  const playback = state.activePlayback;
+  if (!playback) {
+    return false;
+  }
+
+  playback.timerIds.forEach((timerId) => {
+    window.clearTimeout(timerId);
+  });
+
+  if (playback.output) {
+    playback.activeOutputNotes.forEach((key) => {
+      const [channelRaw, noteRaw] = key.split(":");
+      const channel = Number(channelRaw);
+      const note = Number(noteRaw);
+      sendOutputMessage(playback.output, [0x80 | (channel & 0x0f), note, 0]);
+    });
+
+    for (let channel = 0; channel < 16; channel += 1) {
+      sendOutputMessage(playback.output, [0xb0 | channel, 64, 0]);
+      sendOutputMessage(playback.output, [0xb0 | channel, 123, 0]);
+      sendOutputMessage(playback.output, [0xb0 | channel, 120, 0]);
+    }
+  }
+
+  synth.stop();
+  state.activePlayback = null;
+  return true;
+}
+
+function dispatchPlaybackEvent(playback, event) {
+  if (playback.output) {
+    const status =
+      event.type === "note_on" && event.velocity > 0
+        ? 0x90 | (event.channel & 0x0f)
+        : 0x80 | (event.channel & 0x0f);
+    sendOutputMessage(playback.output, [status, event.note, event.velocity]);
+
+    const key = outputNoteKey(event.note, event.channel);
+    if (event.type === "note_on" && event.velocity > 0) {
+      playback.activeOutputNotes.add(key);
+    } else {
+      playback.activeOutputNotes.delete(key);
+    }
+    return;
+  }
+
+  if (event.type === "note_on" && event.velocity > 0) {
+    synth.noteOn(event.note, event.channel, event.velocity);
+    return;
+  }
+
+  synth.noteOff(event.note, event.channel);
+}
+
 async function playPayload(payload) {
   if (!payload?.events?.length) {
     return;
   }
 
-  if (elements.midiOutputSelect.value === BROWSER_SYNTH_ID) {
-    await synth.play(payload.events);
-    return;
+  stopActivePlayback();
+
+  let output = null;
+  if (elements.midiOutputSelect.value !== BROWSER_SYNTH_ID) {
+    output = selectedMidiOutput();
+    if (output) {
+      await output.open();
+    }
   }
 
-  const output = selectedMidiOutput();
   if (!output) {
-    await synth.play(payload.events);
-    return;
+    await synth.ensureContext();
   }
 
-  await output.open();
+  const playback = {
+    output,
+    timerIds: [],
+    activeOutputNotes: new Set(),
+  };
+  state.activePlayback = playback;
+
   let cursorMs = 0;
-  const startAt = window.performance.now() + 80;
   for (const event of payload.events) {
     cursorMs += event.delta_seconds * 1000;
-    const status =
-      event.type === "note_on" && event.velocity > 0
-        ? 0x90 | (event.channel & 0x0f)
-        : 0x80 | (event.channel & 0x0f);
-    output.send([status, event.note, event.velocity], startAt + cursorMs);
+    const timerId = window.setTimeout(() => {
+      if (state.activePlayback !== playback) {
+        return;
+      }
+      dispatchPlaybackEvent(playback, event);
+    }, PLAYBACK_START_DELAY_MS + cursorMs);
+    playback.timerIds.push(timerId);
   }
+
+  const cleanupTimerId = window.setTimeout(() => {
+    if (state.activePlayback !== playback) {
+      return;
+    }
+    stopActivePlayback();
+  }, PLAYBACK_START_DELAY_MS + cursorMs + 200);
+  playback.timerIds.push(cleanupTimerId);
 }
 
 async function populateMidiSelectors() {
@@ -966,9 +1140,12 @@ async function attachInput(inputId) {
 
   await input.open();
   input.onmidimessage = (messageEvent) => {
-    recorder.handleMessage(messageEvent);
     const [statusByte, note, velocity = 0] = [...messageEvent.data];
     const status = statusByte & 0xf0;
+    const interruptedPlayback =
+      status === 0x90 && velocity > 0 ? stopActivePlayback() : false;
+
+    recorder.handleMessage(messageEvent);
     const type =
       status === 0x90 && velocity > 0
         ? "note_on"
@@ -977,7 +1154,9 @@ async function attachInput(inputId) {
           : "message";
     setLastMidiEvent(`${type} ${note} v${velocity}`);
     setPhraseMessage(
-      `Receiving MIDI from ${input.name || input.id}. Waiting for phrase end…`,
+      interruptedPlayback
+        ? `Stopped playback and switched to live MIDI from ${input.name || input.id}.`
+        : `Receiving MIDI from ${input.name || input.id}. Waiting for phrase end…`,
     );
   };
 
@@ -1015,11 +1194,15 @@ function updateSelectedOutput() {
 }
 
 function clearPhrases() {
+  stopActivePlayback();
   state.lastCapturedPhrase = [];
   state.lastGeneratedPhrase = null;
+  state.previewedHistoryIndex = null;
+  state.previewedMemoryIndex = null;
   recorder.reset();
   renderCapturedStats([], [], false);
   renderGeneratedStats(null);
+  syncPreviewSelection();
   setPhraseStatus("Waiting for MIDI");
   setPhraseMessage("Cleared the local phrase buffers.");
 }
@@ -1148,6 +1331,14 @@ function bindEvents() {
 
   elements.decayModeSelect.addEventListener("change", () => {
     renderSessionSettingsSummary();
+  });
+
+  elements.continuationLengthInput.addEventListener("change", () => {
+    const noteCount = normalizedContinuationNoteCount(
+      elements.continuationLengthInput.value,
+    );
+    elements.continuationLengthInput.value =
+      noteCount == null ? "" : String(noteCount);
   });
 
   window.addEventListener("resize", () => {
