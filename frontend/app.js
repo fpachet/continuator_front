@@ -1,0 +1,1183 @@
+const BROWSER_SYNTH_ID = "__browser_synth__";
+const PHRASE_TIMEOUT_MS = 1000;
+
+const elements = {
+  serverStatus: document.querySelector("#server-status"),
+  sessionStatus: document.querySelector("#session-status"),
+  sessionId: document.querySelector("#session-id"),
+  midiStatus: document.querySelector("#midi-status"),
+  phraseStatus: document.querySelector("#phrase-status"),
+  selectedInputName: document.querySelector("#selected-input-name"),
+  selectedOutputName: document.querySelector("#selected-output-name"),
+  lastMidiEvent: document.querySelector("#last-midi-event"),
+  capturedEventCount: document.querySelector("#captured-event-count"),
+  capturedNoteCount: document.querySelector("#captured-note-count"),
+  generatedEventCount: document.querySelector("#generated-event-count"),
+  generatedNoteCount: document.querySelector("#generated-note-count"),
+  messageBox: document.querySelector("#message-box"),
+  historyList: document.querySelector("#history-list"),
+  memoryList: document.querySelector("#memory-list"),
+  memorySummary: document.querySelector("#memory-summary"),
+  memoryHint: document.querySelector("#memory-hint"),
+  memoryRibbon: document.querySelector("#memory-ribbon"),
+  inputRoll: document.querySelector("#input-roll"),
+  outputRoll: document.querySelector("#output-roll"),
+  settingsSummary: document.querySelector("#settings-summary"),
+  historyTab: document.querySelector("#history-tab"),
+  memoryTab: document.querySelector("#memory-tab"),
+  historyPanel: document.querySelector("#history-panel"),
+  memoryPanel: document.querySelector("#memory-panel"),
+  viewTabs: document.querySelectorAll("[data-view-tab]"),
+  midiInputSelect: document.querySelector("#midi-input-select"),
+  midiOutputSelect: document.querySelector("#midi-output-select"),
+  learnInputToggle: document.querySelector("#learn-input-toggle"),
+  autoSendToggle: document.querySelector("#auto-send-toggle"),
+  transposeToggle: document.querySelector("#transpose-toggle"),
+  forgetToggle: document.querySelector("#forget-toggle"),
+  keepLastInput: document.querySelector("#keep-last-input"),
+  decayModeSelect: document.querySelector("#decay-mode-select"),
+  createSessionButton: document.querySelector("#create-session-button"),
+  resetSessionButton: document.querySelector("#reset-session-button"),
+  applySettingsButton: document.querySelector("#apply-settings-button"),
+  connectMidiButton: document.querySelector("#connect-midi-button"),
+  refreshMidiButton: document.querySelector("#refresh-midi-button"),
+  sendPhraseButton: document.querySelector("#send-phrase-button"),
+  replayGeneratedButton: document.querySelector("#replay-generated-button"),
+  clearPhraseButton: document.querySelector("#clear-phrase-button"),
+};
+
+const state = {
+  midiAccess: null,
+  activeInputId: null,
+  sessionId: null,
+  sessionConfiguration: null,
+  lastCapturedPhrase: [],
+  lastGeneratedPhrase: null,
+  historyItems: [],
+  memoryItems: [],
+  activeActivityView: "history",
+};
+
+class BrowserSynth {
+  constructor() {
+    this.context = null;
+    this.master = null;
+    this.activeVoices = new Map();
+  }
+
+  async ensureContext() {
+    if (!this.context) {
+      this.context = new window.AudioContext();
+      this.master = new window.GainNode(this.context, { gain: 0.18 });
+      this.master.connect(this.context.destination);
+    }
+    if (this.context.state === "suspended") {
+      await this.context.resume();
+    }
+  }
+
+  key(note, channel) {
+    return `${channel}:${note}`;
+  }
+
+  midiToFrequency(note) {
+    return 440 * 2 ** ((note - 69) / 12);
+  }
+
+  async play(events) {
+    if (!events?.length) {
+      return;
+    }
+
+    await this.ensureContext();
+    let cursor = 0;
+    const startAt = this.context.currentTime + 0.05;
+
+    for (const event of events) {
+      cursor += event.delta_seconds;
+      const at = startAt + cursor;
+      const key = this.key(event.note, event.channel);
+
+      if (event.type === "note_on" && event.velocity > 0) {
+        const oscillator = new OscillatorNode(this.context, {
+          type: "triangle",
+          frequency: this.midiToFrequency(event.note),
+        });
+        const gain = new GainNode(this.context, { gain: 0.0001 });
+        oscillator.connect(gain).connect(this.master);
+        gain.gain.setValueAtTime(0.0001, at);
+        gain.gain.exponentialRampToValueAtTime(
+          Math.max(0.03, (event.velocity / 127) * 0.2),
+          at + 0.015,
+        );
+        oscillator.start(at);
+
+        const existing = this.activeVoices.get(key) || [];
+        existing.push({ oscillator, gain });
+        this.activeVoices.set(key, existing);
+      } else {
+        const voices = this.activeVoices.get(key);
+        if (!voices?.length) {
+          continue;
+        }
+        const voice = voices.shift();
+        voice.gain.gain.cancelScheduledValues(at);
+        voice.gain.gain.setValueAtTime(0.06, at);
+        voice.gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.08);
+        voice.oscillator.stop(at + 0.1);
+        if (!voices.length) {
+          this.activeVoices.delete(key);
+        }
+      }
+    }
+  }
+}
+
+class PhraseRecorder {
+  constructor(timeoutMs, onUpdate, onComplete) {
+    this.timeoutMs = timeoutMs;
+    this.onUpdate = onUpdate;
+    this.onComplete = onComplete;
+    this.reset();
+  }
+
+  reset() {
+    this.events = [];
+    this.pendingNotes = new Set();
+    this.lastTimestamp = null;
+    if (this.timer) {
+      window.clearTimeout(this.timer);
+    }
+    this.timer = null;
+  }
+
+  snapshot() {
+    return this.events.map((event) => ({ ...event }));
+  }
+
+  handleMessage(messageEvent) {
+    const [statusByte, note, rawVelocity = 0] = [...messageEvent.data];
+    const status = statusByte & 0xf0;
+    const channel = statusByte & 0x0f;
+    let type = null;
+    let velocity = rawVelocity;
+
+    if (status === 0x90 && velocity > 0) {
+      type = "note_on";
+    } else if (status === 0x80 || (status === 0x90 && velocity === 0)) {
+      type = "note_off";
+      velocity = 0;
+    } else {
+      return;
+    }
+
+    const timestamp =
+      typeof messageEvent.receivedTime === "number"
+        ? messageEvent.receivedTime
+        : window.performance.now();
+    const deltaSeconds =
+      this.lastTimestamp == null
+        ? 0
+        : Math.max(0, (timestamp - this.lastTimestamp) / 1000);
+    this.lastTimestamp = timestamp;
+
+    const event = {
+      type,
+      note,
+      velocity,
+      channel,
+      delta_seconds: roundNumber(deltaSeconds),
+    };
+
+    const key = `${channel}:${note}`;
+    if (type === "note_on") {
+      this.pendingNotes.add(key);
+    } else {
+      this.pendingNotes.delete(key);
+    }
+
+    this.events.push(event);
+    this.onUpdate?.(this.snapshot(), false);
+    this.scheduleCompletionCheck(timestamp);
+  }
+
+  scheduleCompletionCheck(nowTimestamp) {
+    if (this.timer) {
+      window.clearTimeout(this.timer);
+    }
+
+    if (!this.events.length || this.lastTimestamp == null) {
+      return;
+    }
+
+    if (this.pendingNotes.size) {
+      return;
+    }
+
+    const elapsed = nowTimestamp - this.lastTimestamp;
+    if (elapsed >= this.timeoutMs) {
+      this.completePhrase();
+      return;
+    }
+
+    this.timer = window.setTimeout(() => {
+      this.completePhrase();
+    }, this.timeoutMs - elapsed);
+  }
+
+  completePhrase() {
+    if (!this.events.length || this.pendingNotes.size || this.lastTimestamp == null) {
+      return;
+    }
+
+    const nowTimestamp = window.performance.now();
+    const elapsed = nowTimestamp - this.lastTimestamp;
+    if (elapsed < this.timeoutMs) {
+      this.scheduleCompletionCheck(nowTimestamp);
+      return;
+    }
+
+    const phrase = this.snapshot();
+    this.reset();
+    this.onComplete?.(phrase);
+    this.onUpdate?.(phrase, true);
+  }
+}
+
+const synth = new BrowserSynth();
+const recorder = new PhraseRecorder(
+  PHRASE_TIMEOUT_MS,
+  (events, completed) => {
+    const notes = eventsToNotes(events);
+    renderCapturedStats(events, notes, completed);
+  },
+  async (phrase) => {
+    state.lastCapturedPhrase = phrase;
+    const notes = eventsToNotes(phrase);
+    renderCapturedStats(phrase, notes, true);
+    setPhraseMessage(
+      `Phrase complete: ${phrase.length} events / ${notes.length} notes captured.`,
+    );
+    if (elements.autoSendToggle.checked) {
+      await sendCurrentPhrase();
+    }
+  },
+);
+
+function roundNumber(value) {
+  return Math.round(value * 1_000_000) / 1_000_000;
+}
+
+function formatDurationSeconds(value) {
+  const duration = Number(value) || 0;
+  return duration >= 10 ? `${duration.toFixed(0)}s` : `${duration.toFixed(1)}s`;
+}
+
+function setPhraseMessage(message, danger = false) {
+  elements.messageBox.textContent = message;
+  elements.messageBox.style.color = danger ? "var(--danger)" : "var(--muted)";
+}
+
+function setSessionStatus(label) {
+  elements.sessionStatus.textContent = label;
+}
+
+function setMidiStatus(label) {
+  elements.midiStatus.textContent = label;
+}
+
+function setPhraseStatus(label) {
+  elements.phraseStatus.textContent = label;
+}
+
+function setSelectedInputName(label) {
+  elements.selectedInputName.textContent = label;
+}
+
+function setSelectedOutputName(label) {
+  elements.selectedOutputName.textContent = label;
+}
+
+function setLastMidiEvent(label) {
+  elements.lastMidiEvent.textContent = label;
+}
+
+function normalizedKeepLastInputs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 20;
+  }
+  return Math.min(500, Math.max(1, Math.round(parsed)));
+}
+
+function readSessionSettingsFromControls() {
+  return {
+    learn_input: elements.learnInputToggle.checked,
+    transposition: elements.transposeToggle.checked,
+    forget_past: elements.forgetToggle.checked,
+    keep_last_inputs: normalizedKeepLastInputs(elements.keepLastInput.value),
+    decay_mode: elements.decayModeSelect.value,
+  };
+}
+
+function describeSessionSettings(settings) {
+  const transposeLabel = settings.transposition ? "Transpose on" : "Transpose off";
+  const memoryLabel = settings.forget_past
+    ? `Keep last ${settings.keep_last_inputs} phrases`
+    : "Keep full memory";
+  const decayLabel = `Decay ${settings.decay_mode}`;
+  return [transposeLabel, memoryLabel, decayLabel];
+}
+
+function renderSessionSettingsSummary() {
+  const labels = describeSessionSettings(readSessionSettingsFromControls());
+  elements.settingsSummary.innerHTML = labels
+    .map((label) => `<span class="settings-chip">${label}</span>`)
+    .join("");
+}
+
+function updateKeepLastFieldState() {
+  const enabled = elements.forgetToggle.checked;
+  elements.keepLastInput.disabled = !enabled;
+}
+
+function syncSettingsControls(configuration) {
+  if (!configuration) {
+    return;
+  }
+
+  state.sessionConfiguration = configuration;
+  elements.learnInputToggle.checked = configuration.learn_input;
+  elements.transposeToggle.checked = configuration.transposition;
+  elements.forgetToggle.checked = configuration.forget_past;
+  elements.keepLastInput.value = String(configuration.keep_last_inputs);
+  elements.decayModeSelect.value = configuration.decay_mode;
+  updateKeepLastFieldState();
+  renderSessionSettingsSummary();
+}
+
+function updateSessionActionState() {
+  elements.applySettingsButton.disabled = !state.sessionId;
+}
+
+function setActivityView(view) {
+  state.activeActivityView = view;
+  const showHistory = view === "history";
+  elements.historyTab.classList.toggle("is-active", showHistory);
+  elements.historyTab.setAttribute("aria-selected", String(showHistory));
+  elements.historyPanel.hidden = !showHistory;
+  elements.memoryTab.classList.toggle("is-active", !showHistory);
+  elements.memoryTab.setAttribute("aria-selected", String(!showHistory));
+  elements.memoryPanel.hidden = showHistory;
+}
+
+function previewPhrasePayload(payload, kind, message) {
+  if (kind === "generated") {
+    state.lastGeneratedPhrase = payload;
+    renderGeneratedStats(payload);
+  } else {
+    state.lastCapturedPhrase = payload.events;
+    renderCapturedStats(payload.events, payload.notes, true);
+  }
+  setPhraseMessage(message);
+}
+
+function renderCapturedStats(events, notes, completed) {
+  elements.capturedEventCount.textContent = String(events.length);
+  elements.capturedNoteCount.textContent = String(notes.length);
+  setPhraseStatus(completed ? "Phrase ready" : "Listening");
+  drawPianoRoll(elements.inputRoll, notes, "#6dd3ce", "Input phrase");
+}
+
+function renderGeneratedStats(payload) {
+  elements.generatedEventCount.textContent = String(payload?.event_count || 0);
+  elements.generatedNoteCount.textContent = String(payload?.note_count || 0);
+  drawPianoRoll(
+    elements.outputRoll,
+    payload?.notes || [],
+    "#f4a261",
+    "Generated continuation",
+  );
+}
+
+function createHistoryMarkup(items) {
+  if (!items.length) {
+    return `<p class="muted">No phrases logged yet for this session.</p>`;
+  }
+
+  return items
+    .map(
+      (item, index) => `
+        <button class="history-item" data-history-index="${index}" type="button">
+          <span class="history-kind">${item.kind}</span>
+          <span class="history-meta">
+            <strong>${item.note_count} notes / ${item.event_count} events</strong>
+            <span>${item.created_at}</span>
+          </span>
+          <span class="history-index">open</span>
+        </button>
+      `,
+    )
+    .join("");
+}
+
+function attachHistoryEvents() {
+  elements.historyList.querySelectorAll("[data-history-index]").forEach((node) => {
+    node.addEventListener("click", () => {
+      const item = state.historyItems[Number(node.dataset.historyIndex)];
+      if (!item) {
+        return;
+      }
+
+      previewPhrasePayload(item.payload, item.kind, `Previewing ${item.kind} phrase from ${item.created_at}.`);
+    });
+  });
+}
+
+function renderHistory(items) {
+  state.historyItems = items;
+  elements.historyList.innerHTML = createHistoryMarkup(items);
+  attachHistoryEvents();
+}
+
+function createMemorySummaryMarkup(memory) {
+  if (!memory) {
+    return `<span class="settings-chip">No active memory yet</span>`;
+  }
+
+  const chips = [
+    `${memory.summary.active_phrase_count} active sequences`,
+    `${memory.summary.live_phrase_count} live`,
+  ];
+  if (memory.summary.seeded_phrase_count) {
+    chips.push(`${memory.summary.seeded_phrase_count} seed`);
+  }
+  chips.push(memory.configuration.transposition ? "Transpose on" : "Transpose off");
+  chips.push(
+    memory.configuration.forget_past
+      ? `Keep last ${memory.configuration.keep_last_inputs}`
+      : "Keep full memory",
+  );
+  chips.push(`Decay ${memory.configuration.decay_mode}`);
+
+  return chips.map((label) => `<span class="settings-chip">${label}</span>`).join("");
+}
+
+function createMemoryHint(memory) {
+  if (!memory) {
+    return "Create a session and play a phrase to inspect the active Continuator memory.";
+  }
+  if (!memory.summary.active_phrase_count) {
+    return memory.configuration.transposition
+      ? "No active sequences yet. When transpose is on, each learned phrase can appear as several active transposed variants."
+      : "No active sequences yet. Play a phrase to start filling the Continuator memory.";
+  }
+  return memory.configuration.transposition
+    ? "The ribbon reads oldest to newest. The list below starts with the newest active sequence, and transposed variants appear separately when transpose is enabled."
+    : "The ribbon reads oldest to newest. The list below starts with the newest active sequence. Click any item to preview it in the main piano roll.";
+}
+
+function createMemoryRibbonMarkup(items) {
+  if (!items.length) {
+    return "";
+  }
+
+  return items
+    .map((item, index) => {
+      const opacity = roundNumber(0.3 + ((index + 1) / items.length) * 0.6);
+      return `
+        <button
+          class="memory-ribbon-cell ${item.source}"
+          data-memory-index="${index}"
+          type="button"
+          title="Slot ${item.slot}: ${item.note_count} notes"
+          style="opacity: ${opacity};"
+        ></button>
+      `;
+    })
+    .join("");
+}
+
+function createMemoryMarkup(items) {
+  if (!items.length) {
+    return `<p class="muted">No active memory to show yet.</p>`;
+  }
+
+  return items
+    .slice()
+    .reverse()
+    .map((item) => {
+      const itemLabel = item.source === "seed" ? "Seed" : "Live";
+      return `
+        <button class="history-item memory-item" data-memory-index="${item.slot - 1}" type="button">
+          <span class="history-kind">${itemLabel} #${item.slot}</span>
+          <span class="history-meta">
+            <strong>${item.note_count} notes / ${formatDurationSeconds(item.duration_seconds)}</strong>
+            <span>Active slot ${item.slot} in current engine memory</span>
+          </span>
+          <span class="history-index">preview</span>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+function attachMemoryEvents() {
+  const previewMemoryIndex = (rawIndex) => {
+    const item = state.memoryItems[Number(rawIndex)];
+    if (!item) {
+      return;
+    }
+    previewPhrasePayload(
+      item.payload,
+      "input",
+      `Previewing ${item.source} memory slot ${item.slot}.`,
+    );
+  };
+
+  elements.memoryList.querySelectorAll("[data-memory-index]").forEach((node) => {
+    node.addEventListener("click", () => {
+      previewMemoryIndex(node.dataset.memoryIndex);
+    });
+  });
+
+  elements.memoryRibbon.querySelectorAll("[data-memory-index]").forEach((node) => {
+    node.addEventListener("click", () => {
+      previewMemoryIndex(node.dataset.memoryIndex);
+    });
+  });
+}
+
+function renderMemory(memory) {
+  state.memoryItems = memory?.items || [];
+  elements.memorySummary.innerHTML = createMemorySummaryMarkup(memory);
+  elements.memoryHint.textContent = createMemoryHint(memory);
+  elements.memoryRibbon.innerHTML = createMemoryRibbonMarkup(state.memoryItems);
+  elements.memoryList.innerHTML = createMemoryMarkup(state.memoryItems);
+  attachMemoryEvents();
+}
+
+function drawPianoRoll(canvas, notes, accent, emptyLabel) {
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(320, Math.floor(rect.width || 640));
+  const height = Math.max(180, Math.floor(rect.height || 244));
+  canvas.width = width * dpr;
+  canvas.height = height * dpr;
+
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, width, height);
+
+  const background = ctx.createLinearGradient(0, 0, 0, height);
+  background.addColorStop(0, "rgba(255, 255, 255, 0.06)");
+  background.addColorStop(1, "rgba(255, 255, 255, 0.015)");
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
+  ctx.lineWidth = 1;
+  for (let index = 1; index < 8; index += 1) {
+    const x = (index / 8) * width;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+  for (let index = 1; index < 6; index += 1) {
+    const y = (index / 6) * height;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+
+  if (!notes?.length) {
+    ctx.fillStyle = "rgba(236, 244, 239, 0.45)";
+    ctx.font = '600 14px "Avenir Next", "Segoe UI Variable", sans-serif';
+    ctx.fillText(emptyLabel, 20, height / 2);
+    return;
+  }
+
+  const minPitch = Math.max(24, Math.min(...notes.map((note) => note.pitch)) - 2);
+  const maxPitch = Math.min(108, Math.max(...notes.map((note) => note.pitch)) + 2);
+  const totalDuration = Math.max(
+    2,
+    ...notes.map((note) => note.end_seconds || note.start_seconds + note.duration_seconds),
+  );
+  const pitchRange = Math.max(1, maxPitch - minPitch + 1);
+
+  ctx.fillStyle = accent;
+  ctx.shadowBlur = 18;
+  ctx.shadowColor = accent;
+
+  for (const note of notes) {
+    const x = (note.start_seconds / totalDuration) * width;
+    const noteWidth = Math.max(
+      8,
+      (Math.max(0.05, note.duration_seconds) / totalDuration) * width,
+    );
+    const y =
+      height - ((note.pitch - minPitch + 1) / pitchRange) * (height - 24) - 10;
+    const noteHeight = Math.max(10, (height - 34) / pitchRange + 4);
+    roundRect(ctx, x + 2, y, noteWidth, noteHeight, 8, true);
+  }
+
+  ctx.shadowBlur = 0;
+}
+
+function roundRect(ctx, x, y, width, height, radius, fill) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+  if (fill) {
+    ctx.fill();
+  }
+}
+
+function eventsToNotes(events) {
+  const notes = [];
+  const pending = new Map();
+  let currentTime = 0;
+
+  for (const event of events) {
+    currentTime += event.delta_seconds;
+    const key = `${event.channel}:${event.note}`;
+
+    if (event.type === "note_on" && event.velocity > 0) {
+      const stack = pending.get(key) || [];
+      stack.push({
+        note: event.note,
+        velocity: event.velocity,
+        start_seconds: currentTime,
+      });
+      pending.set(key, stack);
+      continue;
+    }
+
+    const stack = pending.get(key);
+    if (!stack?.length) {
+      continue;
+    }
+
+    const noteOn = stack.shift();
+    notes.push({
+      pitch: noteOn.note,
+      velocity: noteOn.velocity,
+      start_seconds: roundNumber(noteOn.start_seconds),
+      duration_seconds: roundNumber(Math.max(0, currentTime - noteOn.start_seconds)),
+      end_seconds: roundNumber(currentTime),
+    });
+    if (!stack.length) {
+      pending.delete(key);
+    }
+  }
+
+  notes.sort(
+    (left, right) =>
+      left.start_seconds - right.start_seconds || left.pitch - right.pitch,
+  );
+  return notes;
+}
+
+async function createSession() {
+  const settings = readSessionSettingsFromControls();
+  const response = await fetch("/api/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  const payload = await response.json();
+  state.sessionId = payload.session_id;
+  state.sessionConfiguration = payload.configuration;
+  elements.sessionId.textContent = payload.session_id;
+  syncSettingsControls(payload.configuration);
+  updateSessionActionState();
+  setSessionStatus("Ready");
+  setPhraseMessage(
+    `Session created. ${describeSessionSettings(payload.configuration).join(" · ")}.`,
+  );
+  await refreshSessionActivity();
+}
+
+async function ensureSession() {
+  if (!state.sessionId) {
+    await createSession();
+  }
+}
+
+async function resetSession() {
+  if (!state.sessionId) {
+    setPhraseMessage("Create a session before resetting it.", true);
+    return;
+  }
+
+  const response = await fetch(`/api/sessions/${state.sessionId}/reset`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+  const payload = await response.json();
+
+  state.lastGeneratedPhrase = null;
+  renderGeneratedStats(null);
+  syncSettingsControls(payload.configuration);
+  setPhraseMessage("Session memory cleared and the current settings were preserved.");
+  await refreshMemory();
+}
+
+async function applyCurrentSessionSettings() {
+  if (!state.sessionId) {
+    setPhraseMessage("Create a session before applying settings.", true);
+    return;
+  }
+
+  const settings = readSessionSettingsFromControls();
+  const response = await fetch(`/api/sessions/${state.sessionId}/settings`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  const payload = await response.json();
+  syncSettingsControls(payload.configuration);
+  setPhraseMessage(
+    `Session settings updated. ${describeSessionSettings(payload.configuration).join(" · ")}.`,
+  );
+  await refreshMemory();
+}
+
+async function refreshHistory() {
+  if (!state.sessionId) {
+    return;
+  }
+
+  const response = await fetch(
+    `/api/sessions/${state.sessionId}/history?limit=10`,
+  );
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  const payload = await response.json();
+  renderHistory(payload.items);
+}
+
+async function refreshMemory() {
+  if (!state.sessionId) {
+    return;
+  }
+
+  const response = await fetch(`/api/sessions/${state.sessionId}/memory`);
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  const payload = await response.json();
+  renderMemory(payload);
+}
+
+async function refreshSessionActivity() {
+  if (!state.sessionId) {
+    return;
+  }
+
+  await Promise.all([refreshHistory(), refreshMemory()]);
+}
+
+async function sendCurrentPhrase() {
+  if (!state.lastCapturedPhrase.length) {
+    setPhraseMessage("No completed phrase is ready yet.", true);
+    return;
+  }
+
+  await ensureSession();
+  setPhraseStatus("Sending");
+
+  const response = await fetch("/api/continue", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: state.sessionId,
+      phrase: state.lastCapturedPhrase,
+      learn_input: elements.learnInputToggle.checked,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(errorText);
+  }
+
+  const payload = await response.json();
+  state.lastGeneratedPhrase = payload.generated_phrase;
+  renderGeneratedStats(payload.generated_phrase);
+  setPhraseStatus(payload.generated_phrase.note_count ? "Generated" : "Primed");
+  setPhraseMessage(
+    payload.status_message ||
+      `Continuation generated: ${payload.generated_phrase.note_count} notes returned.`,
+  );
+  await refreshSessionActivity();
+  if (payload.generated_phrase.event_count > 0) {
+    await playPayload(payload.generated_phrase);
+  }
+}
+
+async function checkServer() {
+  const response = await fetch("/health");
+  if (!response.ok) {
+    throw new Error("Server health check failed.");
+  }
+  const payload = await response.json();
+  elements.serverStatus.textContent = payload.ok
+    ? payload.seeded
+      ? "Healthy / seeded"
+      : "Healthy / empty memory"
+    : "Unavailable";
+}
+
+function selectedMidiOutput() {
+  if (!state.midiAccess) {
+    return null;
+  }
+  return state.midiAccess.outputs.get(elements.midiOutputSelect.value) || null;
+}
+
+async function playPayload(payload) {
+  if (!payload?.events?.length) {
+    return;
+  }
+
+  if (elements.midiOutputSelect.value === BROWSER_SYNTH_ID) {
+    await synth.play(payload.events);
+    return;
+  }
+
+  const output = selectedMidiOutput();
+  if (!output) {
+    await synth.play(payload.events);
+    return;
+  }
+
+  await output.open();
+  let cursorMs = 0;
+  const startAt = window.performance.now() + 80;
+  for (const event of payload.events) {
+    cursorMs += event.delta_seconds * 1000;
+    const status =
+      event.type === "note_on" && event.velocity > 0
+        ? 0x90 | (event.channel & 0x0f)
+        : 0x80 | (event.channel & 0x0f);
+    output.send([status, event.note, event.velocity], startAt + cursorMs);
+  }
+}
+
+async function populateMidiSelectors() {
+  if (!state.midiAccess) {
+    return;
+  }
+
+  const inputs = [...state.midiAccess.inputs.values()];
+  const outputs = [...state.midiAccess.outputs.values()];
+  const previousInputId = elements.midiInputSelect.value;
+  const previousOutputId = elements.midiOutputSelect.value;
+
+  elements.midiInputSelect.disabled = false;
+  elements.midiInputSelect.innerHTML = inputs.length
+    ? inputs
+        .map(
+          (input) =>
+            `<option value="${input.id}">${input.name || input.id}</option>`,
+        )
+        .join("")
+    : `<option value="">No MIDI inputs found</option>`;
+
+  elements.midiOutputSelect.disabled = false;
+  const outputOptions = [
+    `<option value="${BROWSER_SYNTH_ID}">Browser Synth</option>`,
+    ...outputs.map(
+      (output) =>
+        `<option value="${output.id}">${output.name || output.id}</option>`,
+    ),
+  ];
+  elements.midiOutputSelect.innerHTML = outputOptions.join("");
+  elements.midiOutputSelect.value =
+    previousOutputId &&
+    (previousOutputId === BROWSER_SYNTH_ID ||
+      state.midiAccess.outputs.has(previousOutputId))
+      ? previousOutputId
+      : BROWSER_SYNTH_ID;
+  updateSelectedOutput();
+
+  if (inputs.length) {
+    const inputId = state.midiAccess.inputs.has(previousInputId)
+      ? previousInputId
+      : inputs[0].id;
+    await attachInput(inputId);
+  } else {
+    detachCurrentInput();
+    setSelectedInputName("No MIDI input found");
+    setMidiStatus("No inputs");
+    setLastMidiEvent("None yet");
+  }
+}
+
+function detachCurrentInput() {
+  if (!state.midiAccess || !state.activeInputId) {
+    return;
+  }
+  const current = state.midiAccess.inputs.get(state.activeInputId);
+  if (current) {
+    current.onmidimessage = null;
+    void current.close().catch(() => {});
+  }
+  state.activeInputId = null;
+}
+
+async function attachInput(inputId) {
+  detachCurrentInput();
+
+  if (!state.midiAccess || !inputId) {
+    state.activeInputId = null;
+    setSelectedInputName("No MIDI input selected");
+    return;
+  }
+
+  const input = state.midiAccess.inputs.get(inputId);
+  if (!input) {
+    setSelectedInputName("Selected input is unavailable");
+    return;
+  }
+
+  await input.open();
+  input.onmidimessage = (messageEvent) => {
+    recorder.handleMessage(messageEvent);
+    const [statusByte, note, velocity = 0] = [...messageEvent.data];
+    const status = statusByte & 0xf0;
+    const type =
+      status === 0x90 && velocity > 0
+        ? "note_on"
+        : status === 0x80 || (status === 0x90 && velocity === 0)
+          ? "note_off"
+          : "message";
+    setLastMidiEvent(`${type} ${note} v${velocity}`);
+    setPhraseMessage(
+      `Receiving MIDI from ${input.name || input.id}. Waiting for phrase end…`,
+    );
+  };
+
+  state.activeInputId = inputId;
+  elements.midiInputSelect.value = inputId;
+  setSelectedInputName(input.name || input.id);
+  setMidiStatus(`Listening on ${input.name || input.id}`);
+}
+
+async function connectMidi() {
+  if (!navigator.requestMIDIAccess) {
+    throw new Error("This browser does not support the Web MIDI API.");
+  }
+
+  state.midiAccess = await navigator.requestMIDIAccess({ sysex: false });
+  state.midiAccess.onstatechange = () => {
+    void populateMidiSelectors();
+  };
+  await populateMidiSelectors();
+  if (!state.activeInputId) {
+    setMidiStatus("Connected / choose input");
+  }
+  setPhraseStatus("Listening");
+}
+
+function updateSelectedOutput() {
+  const outputId = elements.midiOutputSelect.value;
+  if (outputId === BROWSER_SYNTH_ID) {
+    setSelectedOutputName("Browser Synth");
+    return;
+  }
+
+  const output = selectedMidiOutput();
+  setSelectedOutputName(output ? output.name || output.id : "Unavailable output");
+}
+
+function clearPhrases() {
+  state.lastCapturedPhrase = [];
+  state.lastGeneratedPhrase = null;
+  recorder.reset();
+  renderCapturedStats([], [], false);
+  renderGeneratedStats(null);
+  setPhraseStatus("Waiting for MIDI");
+  setPhraseMessage("Cleared the local phrase buffers.");
+}
+
+function bindEvents() {
+  elements.viewTabs.forEach((node) => {
+    node.addEventListener("click", () => {
+      setActivityView(node.dataset.viewTab);
+    });
+  });
+
+  elements.createSessionButton.addEventListener("click", async () => {
+    try {
+      await createSession();
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
+  });
+
+  elements.resetSessionButton.addEventListener("click", async () => {
+    try {
+      await resetSession();
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
+  });
+
+  elements.connectMidiButton.addEventListener("click", async () => {
+    try {
+      await connectMidi();
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+      setMidiStatus("Unavailable");
+    }
+  });
+
+  elements.refreshMidiButton.addEventListener("click", async () => {
+    try {
+      if (!state.midiAccess) {
+        await connectMidi();
+        return;
+      }
+      await populateMidiSelectors();
+      setPhraseMessage("MIDI ports refreshed.");
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
+  });
+
+  elements.sendPhraseButton.addEventListener("click", async () => {
+    try {
+      await sendCurrentPhrase();
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+      setPhraseStatus("Error");
+    }
+  });
+
+  elements.replayGeneratedButton.addEventListener("click", async () => {
+    if (!state.lastGeneratedPhrase) {
+      setPhraseMessage("No generated phrase is available yet.", true);
+      return;
+    }
+    try {
+      await playPayload(state.lastGeneratedPhrase);
+      setPhraseMessage("Replaying the latest generated phrase.");
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
+  });
+
+  elements.clearPhraseButton.addEventListener("click", () => {
+    clearPhrases();
+  });
+
+  elements.applySettingsButton.addEventListener("click", async () => {
+    try {
+      await applyCurrentSessionSettings();
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
+  });
+
+  elements.midiInputSelect.addEventListener("change", async (event) => {
+    try {
+      await attachInput(event.target.value);
+      setPhraseMessage(`MIDI input changed to ${elements.selectedInputName.textContent}.`);
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
+  });
+
+  elements.midiOutputSelect.addEventListener("change", async () => {
+    updateSelectedOutput();
+    const output = selectedMidiOutput();
+    if (output) {
+      try {
+        await output.open();
+      } catch (error) {
+        setPhraseMessage(error.message, true);
+        return;
+      }
+    }
+    setPhraseMessage(`Playback output set to ${elements.selectedOutputName.textContent}.`);
+  });
+
+  elements.learnInputToggle.addEventListener("change", () => {
+    renderSessionSettingsSummary();
+  });
+
+  elements.transposeToggle.addEventListener("change", () => {
+    renderSessionSettingsSummary();
+  });
+
+  elements.forgetToggle.addEventListener("change", () => {
+    updateKeepLastFieldState();
+    renderSessionSettingsSummary();
+  });
+
+  elements.keepLastInput.addEventListener("change", () => {
+    elements.keepLastInput.value = String(
+      normalizedKeepLastInputs(elements.keepLastInput.value),
+    );
+    renderSessionSettingsSummary();
+  });
+
+  elements.decayModeSelect.addEventListener("change", () => {
+    renderSessionSettingsSummary();
+  });
+
+  window.addEventListener("resize", () => {
+    drawPianoRoll(
+      elements.inputRoll,
+      eventsToNotes(state.lastCapturedPhrase),
+      "#6dd3ce",
+      "Input phrase",
+    );
+    renderGeneratedStats(state.lastGeneratedPhrase);
+  });
+}
+
+async function initialize() {
+  bindEvents();
+  clearPhrases();
+  renderMemory(null);
+  setActivityView("history");
+  setSelectedInputName("No MIDI input selected");
+  setSelectedOutputName("Browser Synth");
+  setLastMidiEvent("None yet");
+  updateKeepLastFieldState();
+  renderSessionSettingsSummary();
+  updateSessionActionState();
+  try {
+    await checkServer();
+  } catch (error) {
+    elements.serverStatus.textContent = "Offline";
+    setPhraseMessage(error.message, true);
+  }
+}
+
+initialize();

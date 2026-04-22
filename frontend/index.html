@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Continuator Web Pilot</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+  </head>
+  <body>
+    <div class="page-aura"></div>
+    <div class="page-grid"></div>
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Web MIDI + FastAPI + Continuator</p>
+        <h1>Continuator Web Pilot</h1>
+        <p class="lede">
+          Capture a phrase from a MIDI keyboard in the browser, send it to the
+          Python Continuator, and play the continuation back through a MIDI port
+          or a built-in browser synth.
+        </p>
+      </div>
+      <div class="hero-chip">
+        <span>Session-isolated</span>
+        <span>SQLite logged</span>
+        <span>Docker ready</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="column">
+        <article class="card">
+          <div class="card-head">
+            <h2>Session</h2>
+            <span class="status-pill" id="session-status">No session</span>
+          </div>
+          <p class="muted">
+            Each session owns its own in-memory Continuator engine so users do
+            not share style memory.
+          </p>
+          <div class="button-row">
+            <button id="create-session-button">Create Session</button>
+            <button id="reset-session-button" class="ghost">Reset Memory</button>
+          </div>
+          <div class="settings-compact">
+            <div class="settings-label-row">
+              <span class="small-copy">Continuator settings</span>
+              <span class="small-copy">Compact summary</span>
+            </div>
+            <div id="settings-summary" class="settings-summary"></div>
+          </div>
+          <details class="settings-panel">
+            <summary>Advanced Continuator Settings</summary>
+            <p class="muted settings-copy">
+              Keep the performance controls on the surface, and put the
+              lower-frequency model and memory settings here.
+            </p>
+            <div class="settings-grid">
+              <label class="toggle settings-toggle">
+                <input id="transpose-toggle" type="checkbox" />
+                <span>Transpose incoming phrases before learning</span>
+              </label>
+              <div class="field">
+                <label for="decay-mode-select">Decay mode</label>
+                <select id="decay-mode-select">
+                  <option value="full">Full</option>
+                  <option value="late">Late</option>
+                  <option value="middle">Middle</option>
+                  <option value="early">Early</option>
+                </select>
+              </div>
+              <label class="toggle settings-toggle">
+                <input id="forget-toggle" type="checkbox" />
+                <span>Forget old phrases and keep a rolling memory</span>
+              </label>
+              <div class="field">
+                <label for="keep-last-input">Keep only N last inputs</label>
+                <input id="keep-last-input" type="number" min="1" max="500" step="1" value="20" />
+                <p class="field-hint">
+                  This cap is used when forgetting is enabled.
+                </p>
+              </div>
+            </div>
+            <div class="button-row">
+              <button id="apply-settings-button" class="ghost">
+                Apply to Current Session
+              </button>
+            </div>
+            <p class="small-copy settings-copy">
+              New sessions use these settings automatically. Use Apply to update
+              the current running session without clearing its memory.
+            </p>
+          </details>
+          <dl class="info-grid">
+            <div>
+              <dt>Session ID</dt>
+              <dd id="session-id">Not created yet</dd>
+            </div>
+            <div>
+              <dt>Server</dt>
+              <dd id="server-status">Checking…</dd>
+            </div>
+          </dl>
+        </article>
+
+        <article class="card accent-card">
+          <div class="card-head">
+            <h2>MIDI I/O</h2>
+            <span class="status-pill" id="midi-status">Disconnected</span>
+          </div>
+          <p class="muted">
+            Connect browser MIDI, choose an input and output port explicitly,
+            then play. A phrase is considered finished 1 second after the final
+            note release.
+          </p>
+          <div class="button-row">
+            <button id="connect-midi-button">Connect MIDI</button>
+            <button id="refresh-midi-button" class="ghost">Refresh Ports</button>
+            <label class="toggle">
+              <input id="auto-send-toggle" type="checkbox" checked />
+              <span>Auto-send phrase</span>
+            </label>
+          </div>
+          <div class="field">
+            <label for="midi-input-select">MIDI Input</label>
+            <select id="midi-input-select" disabled>
+              <option>Connect MIDI first</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="midi-output-select">Playback Output</label>
+            <select id="midi-output-select" disabled>
+              <option>Browser Synth</option>
+            </select>
+          </div>
+          <label class="toggle">
+            <input id="learn-input-toggle" type="checkbox" checked />
+            <span>Learn the played phrase before generating</span>
+          </label>
+          <dl class="info-grid">
+            <div>
+              <dt>Selected Input</dt>
+              <dd id="selected-input-name">None</dd>
+            </div>
+            <div>
+              <dt>Selected Output</dt>
+              <dd id="selected-output-name">Browser Synth</dd>
+            </div>
+            <div>
+              <dt>Last MIDI Event</dt>
+              <dd id="last-midi-event">None yet</dd>
+            </div>
+            <div>
+              <dt>Capture Rule</dt>
+              <dd>1 second after final note-off</dd>
+            </div>
+          </dl>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>Phrase Flow</h2>
+            <span class="status-pill" id="phrase-status">Waiting for MIDI</span>
+          </div>
+          <div class="button-row">
+            <button id="send-phrase-button">Send Phrase</button>
+            <button id="replay-generated-button" class="ghost">Replay Output</button>
+            <button id="clear-phrase-button" class="ghost">Clear</button>
+          </div>
+          <dl class="info-grid">
+            <div>
+              <dt>Captured Events</dt>
+              <dd id="captured-event-count">0</dd>
+            </div>
+            <div>
+              <dt>Captured Notes</dt>
+              <dd id="captured-note-count">0</dd>
+            </div>
+            <div>
+              <dt>Generated Events</dt>
+              <dd id="generated-event-count">0</dd>
+            </div>
+            <div>
+              <dt>Generated Notes</dt>
+              <dd id="generated-note-count">0</dd>
+            </div>
+          </dl>
+          <div class="message-box" id="message-box">
+            Play a short phrase on the selected MIDI input to capture it.
+          </div>
+        </article>
+      </section>
+
+      <section class="column wide-column">
+        <article class="card roll-card">
+          <div class="card-head">
+            <h2>Captured Phrase</h2>
+            <span class="small-copy">Detected from browser MIDI events</span>
+          </div>
+          <canvas id="input-roll" class="piano-roll"></canvas>
+        </article>
+
+        <article class="card roll-card output-card">
+          <div class="card-head">
+            <h2>Generated Continuation</h2>
+            <span class="small-copy">Returned by the Python Continuator engine</span>
+          </div>
+          <canvas id="output-roll" class="piano-roll"></canvas>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <h2>Session Activity</h2>
+            <span class="small-copy">History log and active Continuator memory</span>
+          </div>
+          <div class="view-tabs" role="tablist" aria-label="Session activity views">
+            <button
+              id="history-tab"
+              class="view-tab is-active"
+              data-view-tab="history"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="history-panel"
+            >
+              History
+            </button>
+            <button
+              id="memory-tab"
+              class="view-tab"
+              data-view-tab="memory"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="memory-panel"
+            >
+              Memory
+            </button>
+          </div>
+          <section id="history-panel" class="view-panel" role="tabpanel">
+            <div id="history-list" class="history-list">
+              <p class="muted">Create a session to start building history.</p>
+            </div>
+          </section>
+          <section id="memory-panel" class="view-panel" role="tabpanel" hidden>
+            <div id="memory-summary" class="settings-summary">
+              <span class="settings-chip">No active memory yet</span>
+            </div>
+            <p id="memory-hint" class="small-copy memory-hint">
+              Create a session and play a phrase to inspect the active Continuator memory.
+            </p>
+            <div id="memory-ribbon" class="memory-ribbon"></div>
+            <div id="memory-list" class="history-list">
+              <p class="muted">No active memory to show yet.</p>
+            </div>
+          </section>
+        </article>
+      </section>
+    </main>
+
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>
