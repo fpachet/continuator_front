@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Web Continuator</title>
-    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260423-header-account" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -13,210 +13,405 @@
       <div class="hero-copy">
         <h1>Web Continuator</h1>
       </div>
-      <div class="hero-chip">
-        <span>Session-isolated</span>
-        <span>SQLite logged</span>
-        <span>Docker ready</span>
+      <div class="hero-side">
+        <button
+          class="account-trigger"
+          id="auth-status"
+          type="button"
+          aria-expanded="false"
+          aria-controls="account-panel"
+        >
+          <span id="auth-avatar" class="account-avatar" aria-hidden="true">G</span>
+          <span class="account-trigger-copy">
+            <span id="auth-status-label" class="account-trigger-label">Guest mode</span>
+            <span id="auth-status-copy" class="account-trigger-meta">Click to sign in</span>
+          </span>
+        </button>
+        <section id="account-panel" class="account-panel hero-account-panel" hidden>
+          <div class="section-head">
+            <div>
+              <h3>Account</h3>
+              <p id="account-panel-copy" class="section-copy">
+                Guest mode works immediately. Sign in only if you want your
+                sessions saved and reopenable.
+              </p>
+            </div>
+          </div>
+          <dl class="info-grid">
+            <div>
+              <dt>Current User</dt>
+              <dd id="auth-user-name">Not signed in</dd>
+            </div>
+            <div>
+              <dt>Saved Sessions</dt>
+              <dd id="saved-session-count">Guest mode</dd>
+            </div>
+          </dl>
+          <div id="auth-signed-out-panel">
+            <div class="auth-grid">
+              <div class="field">
+                <label for="auth-username-input">Username</label>
+                <input
+                  id="auth-username-input"
+                  type="text"
+                  minlength="2"
+                  maxlength="32"
+                  autocomplete="username"
+                  placeholder="continuator_user"
+                />
+                <p class="field-hint">
+                  Use 2 to 32 letters, digits, underscores, dots, or dashes.
+                </p>
+              </div>
+              <div class="field">
+                <label for="auth-password-input">Password</label>
+                <input
+                  id="auth-password-input"
+                  type="password"
+                  minlength="8"
+                  maxlength="128"
+                  autocomplete="current-password"
+                  placeholder="At least 8 characters"
+                />
+                <p class="field-hint">Passwords need at least 8 characters.</p>
+              </div>
+            </div>
+            <div class="button-row">
+              <button id="login-button" type="button">Sign In</button>
+              <button id="register-button" type="button" class="ghost">
+                Create Account
+              </button>
+            </div>
+          </div>
+          <div id="auth-signed-in-panel" class="button-row" hidden>
+            <button
+              id="account-open-sessions-button"
+              type="button"
+              class="ghost"
+            >
+              Open Saved Sessions
+            </button>
+            <button id="logout-button" type="button" class="ghost">Sign Out</button>
+          </div>
+          <div id="auth-message-box" class="message-box auth-message-box">
+            Guest mode is ready. Sign in only if you want saved sessions.
+          </div>
+        </section>
       </div>
     </header>
 
     <main class="layout">
       <section class="column">
-        <article class="card">
-          <div class="card-head">
-            <h2>Session</h2>
-            <span class="status-pill" id="session-status">No session</span>
-          </div>
-          <p class="muted">
-            Each session owns its own in-memory Continuator engine so users do
-            not share style memory.
-          </p>
-          <div class="button-row">
-            <button id="create-session-button">Create Session</button>
-            <button id="reset-session-button" class="ghost">Reset Memory</button>
-          </div>
-          <div class="settings-compact">
-            <div class="settings-label-row">
-              <span class="small-copy">Continuator settings</span>
-              <span class="small-copy">Compact summary</span>
-            </div>
-            <div id="settings-summary" class="settings-summary"></div>
-          </div>
-          <details class="settings-panel">
-            <summary>Advanced Continuator Settings</summary>
-            <p class="muted settings-copy">
-              Keep the performance controls on the surface, and put the
-              lower-frequency model and memory settings here.
-            </p>
-            <div class="settings-grid">
-              <label class="toggle settings-toggle">
-                <input id="transpose-toggle" type="checkbox" />
-                <span>Transpose incoming phrases before learning</span>
-              </label>
-              <div class="field">
-                <label for="decay-mode-select">Decay mode</label>
-                <select id="decay-mode-select">
-                  <option value="full">Full</option>
-                  <option value="late">Late</option>
-                  <option value="middle">Middle</option>
-                  <option value="early">Early</option>
-                </select>
-              </div>
-              <label class="toggle settings-toggle">
-                <input id="forget-toggle" type="checkbox" />
-                <span>Forget old phrases and keep a rolling memory</span>
-              </label>
-              <div class="field">
-                <label for="keep-last-input">Keep only N last inputs</label>
-                <input id="keep-last-input" type="number" min="1" max="500" step="1" value="20" />
-                <p class="field-hint">
-                  This cap is used when forgetting is enabled.
-                </p>
-              </div>
-            </div>
-            <div class="button-row">
-              <button id="apply-settings-button" class="ghost">
-                Apply to Current Session
-              </button>
-            </div>
-            <p class="small-copy settings-copy">
-              New sessions use these settings automatically. Use Apply to update
-              the current running session without clearing its memory.
-            </p>
-          </details>
-          <dl class="info-grid">
+        <article class="card control-workspace">
+          <div class="card-head control-head">
             <div>
-              <dt>Session ID</dt>
-              <dd id="session-id">Not created yet</dd>
-            </div>
-            <div>
-              <dt>Server</dt>
-              <dd id="server-status">Checking…</dd>
-            </div>
-          </dl>
-        </article>
-
-        <article class="card accent-card">
-          <div class="card-head">
-            <h2>MIDI I/O</h2>
-            <span class="status-pill" id="midi-status">Disconnected</span>
-          </div>
-          <p class="muted">
-            Connect browser MIDI, choose an input and output port explicitly,
-            then play. A phrase is considered finished 1 second after the final
-            note release.
-          </p>
-          <div class="button-row">
-            <button id="connect-midi-button">Connect MIDI</button>
-            <button id="refresh-midi-button" class="ghost">Refresh Ports</button>
-            <label class="toggle">
-              <input id="auto-send-toggle" type="checkbox" checked />
-              <span>Auto-send phrase</span>
-            </label>
-          </div>
-          <div class="field">
-            <label for="midi-input-select">MIDI Input</label>
-            <select id="midi-input-select" disabled>
-              <option>Connect MIDI first</option>
-            </select>
-          </div>
-          <div class="field">
-            <label for="midi-output-select">Playback Output</label>
-            <select id="midi-output-select" disabled>
-              <option>Browser Synth</option>
-            </select>
-          </div>
-          <label class="toggle">
-            <input id="learn-input-toggle" type="checkbox" checked />
-            <span>Learn the played phrase before generating</span>
-          </label>
-          <dl class="info-grid">
-            <div>
-              <dt>Selected Input</dt>
-              <dd id="selected-input-name">None</dd>
-            </div>
-            <div>
-              <dt>Selected Output</dt>
-              <dd id="selected-output-name">Browser Synth</dd>
-            </div>
-            <div>
-              <dt>Last MIDI Event</dt>
-              <dd id="last-midi-event">None yet</dd>
-            </div>
-            <div>
-              <dt>Capture Rule</dt>
-              <dd>1 second after final note-off</dd>
-            </div>
-          </dl>
-        </article>
-
-        <article class="card">
-          <div class="card-head">
-            <h2>Phrase Flow</h2>
-            <span class="status-pill" id="phrase-status">Waiting for MIDI</span>
-          </div>
-          <div class="button-row">
-            <button id="send-phrase-button">Send Phrase</button>
-            <button id="replay-generated-button" class="ghost">Replay Output</button>
-            <button id="clear-phrase-button" class="ghost">Clear</button>
-          </div>
-          <div class="generation-grid">
-            <div class="field generation-field">
-              <label for="continuation-length-input">Continuation length (notes)</label>
-              <input
-                id="continuation-length-input"
-                type="number"
-                min="1"
-                step="1"
-                inputmode="numeric"
-                placeholder="Same as input"
-              />
-              <p class="field-hint">
-                Leave empty to match the captured phrase note count.
+              <h2>Studio Controls</h2>
+              <p class="small-copy control-copy">
+                Keep performance tools in front and tuck setup into calmer
+                spaces.
               </p>
             </div>
-            <div class="field generation-field">
-              <label>Infinite mode</label>
-              <div class="button-row generation-actions">
-                <button id="start-infinite-button" class="ghost" type="button">
-                  Start Infinite
-                </button>
-                <button
-                  id="stop-infinite-button"
-                  class="ghost danger-button"
-                  type="button"
-                  disabled
-                >
-                  Stop
-                </button>
-              </div>
-              <p class="field-hint">
-                Queues the next continuation before the current one ends, using
-                the latest continuation as the next prefix.
-              </p>
+            <div class="status-cluster">
+              <span class="status-pill" id="session-status">No session</span>
+              <span class="status-pill" id="midi-status">Disconnected</span>
+              <span class="status-pill" id="phrase-status">Waiting for MIDI</span>
             </div>
           </div>
-          <dl class="info-grid">
-            <div>
-              <dt>Captured Events</dt>
-              <dd id="captured-event-count">0</dd>
-            </div>
-            <div>
-              <dt>Captured Notes</dt>
-              <dd id="captured-note-count">0</dd>
-            </div>
-            <div>
-              <dt>Generated Events</dt>
-              <dd id="generated-event-count">0</dd>
-            </div>
-            <div>
-              <dt>Generated Notes</dt>
-              <dd id="generated-note-count">0</dd>
-            </div>
-          </dl>
-          <div class="message-box" id="message-box">
-            Play a short phrase on the selected MIDI input to capture it.
+
+          <div class="workspace-tabs" role="tablist" aria-label="Studio control views">
+            <button
+              class="workspace-tab is-active"
+              data-control-tab="perform"
+              type="button"
+              role="tab"
+              aria-selected="true"
+              aria-controls="control-perform-panel"
+            >
+              Perform
+            </button>
+            <button
+              class="workspace-tab"
+              data-control-tab="continuator"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="control-continuator-panel"
+            >
+              Continuator
+            </button>
+            <button
+              class="workspace-tab"
+              data-control-tab="sessions"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="control-sessions-panel"
+            >
+              Sessions
+            </button>
           </div>
+
+          <section
+            id="control-perform-panel"
+            class="workspace-panel"
+            data-control-panel="perform"
+            role="tabpanel"
+          >
+            <div class="panel-stack">
+              <section class="panel-section accent-section">
+                <div class="section-head">
+                  <div>
+                    <h3>MIDI I/O</h3>
+                    <p class="section-copy">
+                      Connect browser MIDI, choose ports, and capture phrases
+                      from your keyboard.
+                    </p>
+                  </div>
+                </div>
+                <div class="button-row">
+                  <button id="connect-midi-button">Connect MIDI</button>
+                  <button id="refresh-midi-button" class="ghost">Refresh Ports</button>
+                  <label class="toggle">
+                    <input id="auto-send-toggle" type="checkbox" checked />
+                    <span>Auto-send phrase</span>
+                  </label>
+                </div>
+                <div class="field">
+                  <label for="midi-input-select">MIDI Input</label>
+                  <select id="midi-input-select" disabled>
+                    <option>Connect MIDI first</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="midi-output-select">Playback Output</label>
+                  <select id="midi-output-select" disabled>
+                    <option>Browser Synth</option>
+                  </select>
+                </div>
+                <label class="toggle">
+                  <input id="learn-input-toggle" type="checkbox" checked />
+                  <span>Learn the played phrase before generating</span>
+                </label>
+                <dl class="info-grid">
+                  <div>
+                    <dt>Selected Input</dt>
+                    <dd id="selected-input-name">None</dd>
+                  </div>
+                  <div>
+                    <dt>Selected Output</dt>
+                    <dd id="selected-output-name">Browser Synth</dd>
+                  </div>
+                  <div>
+                    <dt>Last MIDI Event</dt>
+                    <dd id="last-midi-event">None yet</dd>
+                  </div>
+                  <div>
+                    <dt>Capture Rule</dt>
+                    <dd>1 second after final note-off</dd>
+                  </div>
+                </dl>
+              </section>
+
+              <section class="panel-section">
+                <div class="section-head">
+                  <div>
+                    <h3>Phrase Flow</h3>
+                    <p class="section-copy">
+                      Send, replay, or keep chaining continuations from the
+                      current phrase.
+                    </p>
+                  </div>
+                </div>
+                <div class="button-row">
+                  <button id="send-phrase-button">Send Phrase</button>
+                  <button id="replay-generated-button" class="ghost">Replay Output</button>
+                  <button id="clear-phrase-button" class="ghost">Clear</button>
+                </div>
+                <div class="generation-grid">
+                  <div class="field generation-field">
+                    <label for="continuation-length-input">Continuation length (notes)</label>
+                    <input
+                      id="continuation-length-input"
+                      type="number"
+                      min="1"
+                      step="1"
+                      inputmode="numeric"
+                      placeholder="Same as input"
+                    />
+                    <p class="field-hint">
+                      Leave empty to match the captured phrase note count.
+                    </p>
+                  </div>
+                  <div class="field generation-field">
+                    <label>Infinite mode</label>
+                    <div class="button-row generation-actions">
+                      <button id="start-infinite-button" class="ghost" type="button">
+                        Start Infinite
+                      </button>
+                      <button
+                        id="stop-infinite-button"
+                        class="ghost danger-button"
+                        type="button"
+                        disabled
+                      >
+                        Stop
+                      </button>
+                    </div>
+                    <p class="field-hint">
+                      Queues the next continuation before the current one ends,
+                      using the latest continuation as the next prefix.
+                    </p>
+                  </div>
+                </div>
+                <dl class="info-grid">
+                  <div>
+                    <dt>Captured Events</dt>
+                    <dd id="captured-event-count">0</dd>
+                  </div>
+                  <div>
+                    <dt>Captured Notes</dt>
+                    <dd id="captured-note-count">0</dd>
+                  </div>
+                  <div>
+                    <dt>Generated Events</dt>
+                    <dd id="generated-event-count">0</dd>
+                  </div>
+                  <div>
+                    <dt>Generated Notes</dt>
+                    <dd id="generated-note-count">0</dd>
+                  </div>
+                </dl>
+                <div class="message-box" id="message-box">
+                  Play a short phrase on the selected MIDI input to capture it.
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section
+            id="control-continuator-panel"
+            class="workspace-panel"
+            data-control-panel="continuator"
+            role="tabpanel"
+            hidden
+          >
+            <div class="panel-stack">
+              <section class="panel-section">
+                <div class="section-head">
+                  <div>
+                    <h3>Continuator Session</h3>
+                    <p class="section-copy">
+                      Create, reset, and tune the active engine without losing
+                      sight of its current state.
+                    </p>
+                  </div>
+                </div>
+                <div class="button-row">
+                  <button id="create-session-button">Create Session</button>
+                  <button id="reset-session-button" class="ghost">Reset Memory</button>
+                </div>
+                <div class="settings-compact">
+                  <div class="settings-label-row">
+                    <span class="small-copy">Continuator settings</span>
+                    <span class="small-copy">Compact summary</span>
+                  </div>
+                  <div id="settings-summary" class="settings-summary"></div>
+                </div>
+                <details class="settings-panel">
+                  <summary>Advanced Continuator Settings</summary>
+                  <p class="muted settings-copy">
+                    Keep the performance controls on the surface, and put the
+                    lower-frequency model and memory settings here.
+                  </p>
+                  <div class="settings-grid">
+                    <label class="toggle settings-toggle">
+                      <input id="transpose-toggle" type="checkbox" />
+                      <span>Transpose incoming phrases before learning</span>
+                    </label>
+                    <div class="field">
+                      <label for="decay-mode-select">Decay mode</label>
+                      <select id="decay-mode-select">
+                        <option value="full">Full</option>
+                        <option value="late">Late</option>
+                        <option value="middle">Middle</option>
+                        <option value="early">Early</option>
+                      </select>
+                    </div>
+                    <label class="toggle settings-toggle">
+                      <input id="forget-toggle" type="checkbox" />
+                      <span>Forget old phrases and keep a rolling memory</span>
+                    </label>
+                    <div class="field">
+                      <label for="keep-last-input">Keep only N last inputs</label>
+                      <input
+                        id="keep-last-input"
+                        type="number"
+                        min="1"
+                        max="500"
+                        step="1"
+                        value="20"
+                      />
+                      <p class="field-hint">
+                        This cap is used when forgetting is enabled.
+                      </p>
+                    </div>
+                  </div>
+                  <div class="button-row">
+                    <button id="apply-settings-button" class="ghost">
+                      Apply to Current Session
+                    </button>
+                  </div>
+                  <p class="small-copy settings-copy">
+                    New sessions use these settings automatically. Use Apply to
+                    update the current running session without clearing its
+                    memory.
+                  </p>
+                </details>
+                <dl class="info-grid">
+                  <div>
+                    <dt>Session ID</dt>
+                    <dd id="session-id">Not created yet</dd>
+                  </div>
+                  <div>
+                    <dt>Server</dt>
+                    <dd id="server-status">Checking…</dd>
+                  </div>
+                </dl>
+              </section>
+            </div>
+          </section>
+
+          <section
+            id="control-sessions-panel"
+            class="workspace-panel"
+            data-control-panel="sessions"
+            role="tabpanel"
+            hidden
+          >
+            <div class="panel-stack">
+              <section class="panel-section">
+                <div class="section-head">
+                  <div>
+                    <h3>Saved Sessions</h3>
+                    <p id="saved-sessions-copy" class="section-copy">
+                      Use the account control above to sign in, then reopen
+                      saved sessions here.
+                    </p>
+                  </div>
+                  <button
+                    id="refresh-sessions-button"
+                    class="ghost head-action"
+                    type="button"
+                  >
+                    Refresh
+                  </button>
+                </div>
+                <div id="my-sessions-list" class="history-list">
+                  <p class="muted">Sign in to see your saved sessions.</p>
+                </div>
+              </section>
+            </div>
+          </section>
         </article>
       </section>
 
@@ -287,6 +482,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js"></script>
+    <script type="module" src="/assets/app.js?v=20260423-header-account"></script>
   </body>
 </html>

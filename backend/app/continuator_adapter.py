@@ -223,6 +223,17 @@ class ContinuatorSessionEngine:
             seed_count = min(self._seed_sequence_count, len(payloads))
             return payloads, seed_count
 
+    def learn_phrase_events(self, phrase_events: list[MidiEvent]) -> PhrasePayload:
+        with self._lock:
+            messages = [_event_to_mido_message(event) for event in phrase_events]
+            input_phrase = self._continuator.get_phrase_from_mido(messages)
+            if not input_phrase:
+                raise NoContinuationAvailable(
+                    "The stored phrase did not contain any complete notes to rebuild."
+                )
+            self._continuator.learn_phrase(input_phrase, self._continuator.transpose)
+            return _build_phrase_payload(input_phrase)
+
     def continue_phrase(
         self,
         phrase_events: list[MidiEvent],

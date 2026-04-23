@@ -6,6 +6,27 @@ const INFINITE_MAX_LOOKAHEAD_MS = 2200;
 
 const elements = {
   serverStatus: document.querySelector("#server-status"),
+  controlWorkspace: document.querySelector(".control-workspace"),
+  accountPanel: document.querySelector("#account-panel"),
+  accountPanelCopy: document.querySelector("#account-panel-copy"),
+  authStatus: document.querySelector("#auth-status"),
+  authAvatar: document.querySelector("#auth-avatar"),
+  authStatusLabel: document.querySelector("#auth-status-label"),
+  authStatusCopy: document.querySelector("#auth-status-copy"),
+  authUsernameInput: document.querySelector("#auth-username-input"),
+  authPasswordInput: document.querySelector("#auth-password-input"),
+  loginButton: document.querySelector("#login-button"),
+  registerButton: document.querySelector("#register-button"),
+  logoutButton: document.querySelector("#logout-button"),
+  authSignedOutPanel: document.querySelector("#auth-signed-out-panel"),
+  authSignedInPanel: document.querySelector("#auth-signed-in-panel"),
+  accountOpenSessionsButton: document.querySelector("#account-open-sessions-button"),
+  authMessageBox: document.querySelector("#auth-message-box"),
+  authUserName: document.querySelector("#auth-user-name"),
+  savedSessionCount: document.querySelector("#saved-session-count"),
+  savedSessionsCopy: document.querySelector("#saved-sessions-copy"),
+  mySessionsList: document.querySelector("#my-sessions-list"),
+  refreshSessionsButton: document.querySelector("#refresh-sessions-button"),
   sessionStatus: document.querySelector("#session-status"),
   sessionId: document.querySelector("#session-id"),
   midiStatus: document.querySelector("#midi-status"),
@@ -26,6 +47,8 @@ const elements = {
   inputRoll: document.querySelector("#input-roll"),
   outputRoll: document.querySelector("#output-roll"),
   settingsSummary: document.querySelector("#settings-summary"),
+  controlTabs: document.querySelectorAll("[data-control-tab]"),
+  controlPanels: document.querySelectorAll("[data-control-panel]"),
   historyTab: document.querySelector("#history-tab"),
   memoryTab: document.querySelector("#memory-tab"),
   historyPanel: document.querySelector("#history-panel"),
@@ -55,12 +78,17 @@ const elements = {
 const state = {
   midiAccess: null,
   activeInputId: null,
+  authUser: null,
   sessionId: null,
+  sessionIsOwned: false,
+  accountPanelOpen: false,
   sessionConfiguration: null,
   lastCapturedPhrase: [],
   lastGeneratedPhrase: null,
   historyItems: [],
   memoryItems: [],
+  savedSessions: [],
+  activeControlView: "perform",
   activeActivityView: "history",
   previewedHistoryIndex: null,
   previewedMemoryIndex: null,
@@ -310,6 +338,51 @@ function setPhraseMessage(message, danger = false) {
   elements.messageBox.style.color = danger ? "var(--danger)" : "var(--muted)";
 }
 
+function setAuthMessage(message, danger = false) {
+  elements.authMessageBox.textContent = message;
+  elements.authMessageBox.style.color = danger ? "var(--danger)" : "var(--muted)";
+}
+
+function pluralize(value, singular, plural = `${singular}s`) {
+  return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function renderAccountTrigger() {
+  if (state.authUser) {
+    const username = state.authUser.username;
+    elements.authStatus.dataset.authState = "signed-in";
+    elements.authStatus.title = `Signed in as ${username}. Click to manage account or sign out.`;
+    elements.authAvatar.textContent = username.slice(0, 1).toUpperCase();
+    elements.authStatusLabel.textContent = username;
+    elements.authStatusCopy.textContent =
+      state.savedSessions.length > 0
+        ? `${pluralize(state.savedSessions.length, "saved session")} available`
+        : "Manage account and sign out";
+    return;
+  }
+
+  elements.authStatus.dataset.authState = "guest";
+  elements.authStatus.title = "Guest mode. Click to sign in or create an account.";
+  elements.authAvatar.textContent = "G";
+  elements.authStatusLabel.textContent = "Guest mode";
+  elements.authStatusCopy.textContent = "Click to sign in";
+}
+
+function setAccountPanelOpen(open) {
+  state.accountPanelOpen = open;
+  elements.accountPanel.hidden = !open;
+  elements.authStatus.setAttribute("aria-expanded", String(open));
+  elements.authStatus.classList.toggle("is-open", open);
+  if (open) {
+    const focusTarget = state.authUser
+      ? elements.accountOpenSessionsButton
+      : elements.authUsernameInput;
+    window.requestAnimationFrame(() => {
+      focusTarget?.focus();
+    });
+  }
+}
+
 function setSessionStatus(label) {
   elements.sessionStatus.textContent = label;
 }
@@ -334,6 +407,46 @@ function setLastMidiEvent(label) {
   elements.lastMidiEvent.textContent = label;
 }
 
+async function requestJson(url, options = {}) {
+  const response = await fetch(url, options);
+  const rawText = await response.text();
+  let payload = null;
+
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText);
+    } catch {
+      payload = rawText;
+    }
+  }
+
+  if (!response.ok) {
+    if (response.status === 401 && !String(url).includes("/api/auth/")) {
+      state.authUser = null;
+      syncAuthUI();
+      renderSavedSessions([]);
+      clearCurrentSessionState("Your sign-in expired. Sign in again to reopen sessions.");
+    }
+    const detailList =
+      payload && typeof payload === "object" && Array.isArray(payload.detail)
+        ? payload.detail
+            .map((item) => (typeof item?.msg === "string" ? item.msg : null))
+            .filter(Boolean)
+        : [];
+    const detail =
+      payload && typeof payload === "object" && typeof payload.detail === "string"
+        ? payload.detail
+        : detailList.length
+          ? detailList.join(" ")
+        : typeof payload === "string"
+          ? payload
+          : `Request failed (${response.status}).`;
+    throw new Error(detail);
+  }
+
+  return payload;
+}
+
 function normalizedKeepLastInputs(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -351,6 +464,26 @@ function normalizedContinuationNoteCount(value) {
     return null;
   }
   return Math.max(1, Math.round(parsed));
+}
+
+function validateAuthCredentials() {
+  const username = elements.authUsernameInput.value.trim();
+  const password = elements.authPasswordInput.value;
+
+  if (!username || !password) {
+    throw new Error("Enter both a username and password.");
+  }
+  if (username.length < 2 || username.length > 32) {
+    throw new Error("Username must be between 2 and 32 characters.");
+  }
+  if (!/^[A-Za-z0-9_.-]+$/.test(username)) {
+    throw new Error("Username can only use letters, digits, underscores, dots, or dashes.");
+  }
+  if (password.length < 8) {
+    throw new Error("Password must be at least 8 characters.");
+  }
+
+  return { username, password };
 }
 
 function hasLoopSeedPhrase() {
@@ -443,7 +576,155 @@ function syncSettingsControls(configuration) {
 }
 
 function updateSessionActionState() {
+  elements.createSessionButton.disabled = false;
+  elements.resetSessionButton.disabled = !state.sessionId;
   elements.applySettingsButton.disabled = !state.sessionId;
+}
+
+function updateAuthActionState() {
+  const signedIn = Boolean(state.authUser);
+  elements.authUsernameInput.disabled = signedIn;
+  elements.authPasswordInput.disabled = signedIn;
+  elements.loginButton.disabled = signedIn;
+  elements.registerButton.disabled = signedIn;
+  elements.logoutButton.disabled = !signedIn;
+  elements.refreshSessionsButton.disabled = !signedIn;
+  elements.accountOpenSessionsButton.disabled = !signedIn;
+}
+
+function formatTimestamp(value) {
+  if (!value) {
+    return "Never";
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
+}
+
+function clearPhraseBuffers() {
+  stopInfiniteMode({ stopPlayback: true, silent: true });
+  state.lastCapturedPhrase = [];
+  state.lastGeneratedPhrase = null;
+  state.previewedHistoryIndex = null;
+  state.previewedMemoryIndex = null;
+  recorder.reset();
+  renderCapturedStats([], [], false);
+  renderGeneratedStats(null);
+  syncPreviewSelection();
+  updateInfiniteActionState();
+  setPhraseStatus("Waiting for MIDI");
+}
+
+function clearCurrentSessionState(message = null) {
+  state.sessionId = null;
+  state.sessionIsOwned = false;
+  state.sessionConfiguration = null;
+  state.historyItems = [];
+  state.memoryItems = [];
+  elements.sessionId.textContent = "Open or create a session";
+  clearPhraseBuffers();
+  renderHistory([]);
+  renderMemory(null);
+  setSessionStatus("No session");
+  updateSessionActionState();
+  if (message) {
+    setPhraseMessage(message);
+  }
+}
+
+function createSavedSessionsMarkup(items) {
+  if (!state.authUser) {
+    return `<p class="muted">Use the account control above to sign in and load your saved sessions.</p>`;
+  }
+  if (!items.length) {
+    return `<p class="muted">No saved sessions yet. Create one, play a phrase, and it will appear here.</p>`;
+  }
+
+  return items
+    .map((item) => {
+      const current = item.session_id === state.sessionId;
+      const stateLabel = current ? "current" : item.loaded ? "live" : "saved";
+      const activityLabel = `${item.active_learned_phrase_count} learned active · ${item.phrase_count} logged`;
+      const resetLabel = item.last_reset_at
+        ? ` · Reset ${formatTimestamp(item.last_reset_at)}`
+        : "";
+      const settingsLabel = describeSessionSettings(item.configuration).join(" · ");
+      return `
+        <button
+          class="history-item session-item ${current ? "is-selected" : ""}"
+          data-owned-session-id="${item.session_id}"
+          type="button"
+        >
+          <span class="history-kind">${stateLabel}</span>
+          <span class="history-meta">
+            <strong>${activityLabel}</strong>
+            <span>Seen ${formatTimestamp(item.last_seen_at)}${resetLabel}</span>
+            <span>${settingsLabel}</span>
+          </span>
+          <span class="history-index">${current ? "current" : "open"}</span>
+        </button>
+      `;
+    })
+    .join("");
+}
+
+function attachSavedSessionEvents() {
+  elements.mySessionsList.querySelectorAll("[data-owned-session-id]").forEach((node) => {
+    node.addEventListener("click", async () => {
+      try {
+        await openSavedSession(node.dataset.ownedSessionId);
+      } catch (error) {
+        setAuthMessage(error.message, true);
+      }
+    });
+  });
+}
+
+function renderSavedSessions(items) {
+  state.savedSessions = items;
+  elements.mySessionsList.innerHTML = createSavedSessionsMarkup(items);
+  elements.savedSessionCount.textContent = state.authUser
+    ? `${items.length} saved`
+    : "Guest mode";
+  elements.savedSessionsCopy.textContent = state.authUser
+    ? "Open any session to rebuild its live memory from learned input phrases."
+    : "Use the account control above to sign in, then reopen saved sessions here.";
+  renderAccountTrigger();
+  attachSavedSessionEvents();
+}
+
+function syncAuthUI() {
+  const user = state.authUser;
+  renderAccountTrigger();
+  elements.accountPanelCopy.textContent = user
+    ? "Manage your signed-in account here, then jump to your saved sessions when you want to reopen a prior memory."
+    : "Guest mode works immediately. Sign in only if you want your sessions saved and reopenable.";
+  elements.authUserName.textContent = user ? user.username : "Not signed in";
+  elements.authSignedOutPanel.hidden = Boolean(user);
+  elements.authSignedInPanel.hidden = !user;
+  elements.authPasswordInput.value = "";
+  setAuthMessage(
+    user
+      ? `Signed in as ${user.username}. New sessions will be saved under this account.`
+      : "Guest mode is ready. Sign in only if you want saved sessions.",
+  );
+  updateAuthActionState();
+  updateSessionActionState();
+}
+
+function setControlView(view) {
+  state.activeControlView = view;
+  elements.controlTabs.forEach((node) => {
+    const active = node.dataset.controlTab === view;
+    node.classList.toggle("is-active", active);
+    node.setAttribute("aria-selected", String(active));
+  });
+  elements.controlPanels.forEach((node) => {
+    node.hidden = node.dataset.controlPanel !== view;
+  });
 }
 
 function setActivityView(view) {
@@ -526,6 +807,9 @@ function renderGeneratedStats(payload) {
 
 function createHistoryMarkup(items) {
   if (!items.length) {
+    if (!state.sessionId) {
+      return `<p class="muted">Create a session to start building history. Sign in if you want it saved under your account.</p>`;
+    }
     return `<p class="muted">No phrases logged yet for this session.</p>`;
   }
 
@@ -594,7 +878,7 @@ function createMemorySummaryMarkup(memory) {
 
 function createMemoryHint(memory) {
   if (!memory) {
-    return "Create a session and play a phrase to inspect the active Continuator memory.";
+    return "Create or open a session and play a phrase to inspect the active Continuator memory.";
   }
   if (!memory.summary.active_phrase_count) {
     return memory.configuration.transposition
@@ -819,25 +1103,134 @@ function eventsToNotes(events) {
   return notes;
 }
 
-async function createSession() {
-  const settings = readSessionSettingsFromControls();
-  const response = await fetch("/api/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(settings),
-  });
-
-  if (!response.ok) {
-    throw new Error(await response.text());
+async function refreshAuthState() {
+  const payload = await requestJson("/api/auth/me");
+  state.authUser = payload?.user || null;
+  syncAuthUI();
+  if (state.authUser) {
+    await refreshSavedSessions();
+    if (!state.sessionId) {
+      clearCurrentSessionState("Create or open a session to start playing.");
+    }
+    return;
   }
 
-  const payload = await response.json();
+  renderSavedSessions([]);
+  if (!state.sessionId) {
+    clearCurrentSessionState(
+      "Guest mode is ready. Sign in if you want to save sessions and reopen them later.",
+    );
+  }
+}
+
+async function submitAuth(mode) {
+  const { username, password } = validateAuthCredentials();
+
+  const endpoint = mode === "register" ? "/api/auth/register" : "/api/auth/login";
+  const payload = await requestJson(endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
+
+  state.authUser = payload.user;
+  elements.authUsernameInput.value = payload.user.username;
+  syncAuthUI();
+  await refreshSavedSessions();
+  setAccountPanelOpen(false);
+  if (state.sessionId) {
+    setAuthMessage(
+      mode === "register"
+        ? `Account created for ${payload.user.username}. Your current guest session stays open; new sessions will be saved.`
+        : `Signed in as ${payload.user.username}. Your current session stays open; new sessions will be saved.`,
+    );
+    setPhraseMessage(
+      mode === "register"
+        ? `Account created for ${payload.user.username}. Your current guest session stays open; new sessions will be saved.`
+        : `Signed in as ${payload.user.username}. Your current session stays open; new sessions will be saved.`,
+    );
+    return;
+  }
+  setAuthMessage(
+    mode === "register"
+      ? `Account created for ${payload.user.username}. You can create a saved session now.`
+      : `Signed in as ${payload.user.username}. You can create or open a saved session now.`,
+  );
+  setPhraseMessage(
+    mode === "register"
+      ? `Account created for ${payload.user.username}. Create or open a session to continue.`
+      : `Signed in as ${payload.user.username}. Create or open a session to continue.`,
+  );
+}
+
+async function logoutUser() {
+  await requestJson("/api/auth/logout", { method: "POST" });
+  state.authUser = null;
+  syncAuthUI();
+  renderSavedSessions([]);
+  setAccountPanelOpen(false);
+  if (state.sessionIsOwned) {
+    clearCurrentSessionState("Signed out. Reopen a saved session after signing back in, or create a new guest session.");
+    return;
+  }
+  setAuthMessage("Signed out. Guest mode remains available.");
+  setPhraseMessage("Signed out. Your current guest session remains open.");
+}
+
+async function refreshSavedSessions() {
+  if (!state.authUser) {
+    renderSavedSessions([]);
+    return;
+  }
+
+  const payload = await requestJson("/api/my/sessions?limit=24");
+  renderSavedSessions(payload.items || []);
+}
+
+function useSessionPayload(payload, { owned = Boolean(state.authUser) } = {}) {
   state.sessionId = payload.session_id;
+  state.sessionIsOwned = owned;
   state.sessionConfiguration = payload.configuration;
   elements.sessionId.textContent = payload.session_id;
   syncSettingsControls(payload.configuration);
   updateSessionActionState();
   setSessionStatus("Ready");
+}
+
+async function openSavedSession(sessionId) {
+  if (!sessionId) {
+    return;
+  }
+
+  const payload = await requestJson(`/api/my/sessions/${sessionId}/open`, {
+    method: "POST",
+  });
+  useSessionPayload(payload, { owned: true });
+  setControlView("perform");
+  clearPhraseBuffers();
+  await refreshSessionActivity();
+  await refreshSavedSessions();
+  setPhraseMessage(
+    payload.restored_from_history
+      ? `Opened session and rebuilt live memory from ${payload.restored_phrase_count} learned phrases.`
+      : "Opened the selected session.",
+  );
+}
+
+async function createSession({ preservePhraseBuffers = false } = {}) {
+  const settings = readSessionSettingsFromControls();
+  const payload = await requestJson("/api/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
+
+  useSessionPayload(payload, { owned: Boolean(state.authUser) });
+  setControlView("perform");
+  if (!preservePhraseBuffers) {
+    clearPhraseBuffers();
+  }
+  await refreshSavedSessions();
   setPhraseMessage(
     `Session created. ${describeSessionSettings(payload.configuration).join(" · ")}.`,
   );
@@ -846,7 +1239,7 @@ async function createSession() {
 
 async function ensureSession() {
   if (!state.sessionId) {
-    await createSession();
+    await createSession({ preservePhraseBuffers: true });
   }
 }
 
@@ -857,13 +1250,9 @@ async function resetSession() {
     return;
   }
 
-  const response = await fetch(`/api/sessions/${state.sessionId}/reset`, {
+  const payload = await requestJson(`/api/sessions/${state.sessionId}/reset`, {
     method: "POST",
   });
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-  const payload = await response.json();
 
   state.lastGeneratedPhrase = null;
   renderGeneratedStats(null);
@@ -871,6 +1260,7 @@ async function resetSession() {
   syncSettingsControls(payload.configuration);
   setPhraseMessage("Session memory cleared and the current settings were preserved.");
   await refreshMemory();
+  await refreshSavedSessions();
 }
 
 async function applyCurrentSessionSettings() {
@@ -880,22 +1270,17 @@ async function applyCurrentSessionSettings() {
   }
 
   const settings = readSessionSettingsFromControls();
-  const response = await fetch(`/api/sessions/${state.sessionId}/settings`, {
+  const payload = await requestJson(`/api/sessions/${state.sessionId}/settings`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(settings),
   });
-
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-
-  const payload = await response.json();
   syncSettingsControls(payload.configuration);
   setPhraseMessage(
     `Session settings updated. ${describeSessionSettings(payload.configuration).join(" · ")}.`,
   );
   await refreshMemory();
+  await refreshSavedSessions();
 }
 
 async function refreshHistory() {
@@ -903,14 +1288,7 @@ async function refreshHistory() {
     return;
   }
 
-  const response = await fetch(
-    `/api/sessions/${state.sessionId}/history?limit=10`,
-  );
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-
-  const payload = await response.json();
+  const payload = await requestJson(`/api/sessions/${state.sessionId}/history?limit=10`);
   renderHistory(payload.items);
 }
 
@@ -919,12 +1297,7 @@ async function refreshMemory() {
     return;
   }
 
-  const response = await fetch(`/api/sessions/${state.sessionId}/memory`);
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-
-  const payload = await response.json();
+  const payload = await requestJson(`/api/sessions/${state.sessionId}/memory`);
   renderMemory(payload);
 }
 
@@ -996,14 +1369,7 @@ async function requestContinuationFromEvents(
     learnInput,
     signal,
   );
-  const response = await fetch("/api/continue", fetchOptions);
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(errorText);
-  }
-
-  const payload = await response.json();
+  const payload = await requestJson("/api/continue", fetchOptions);
   return { payload, continuationNoteCount };
 }
 
@@ -1018,16 +1384,13 @@ async function sendCurrentPhrase() {
     await playPayload(payload.generated_phrase);
   }
   await refreshSessionActivity();
+  await refreshSavedSessions();
   setPhraseStatus(payload.generated_phrase.note_count ? "Generated" : "Primed");
   setPhraseMessage(defaultContinuationMessage(payload, continuationNoteCount));
 }
 
 async function checkServer() {
-  const response = await fetch("/health");
-  if (!response.ok) {
-    throw new Error("Server health check failed.");
-  }
-  const payload = await response.json();
+  const payload = await requestJson("/health");
   elements.serverStatus.textContent = payload.ok
     ? payload.seeded
       ? "Healthy / seeded"
@@ -1294,6 +1657,7 @@ async function runInfiniteStep(prefixEvents, runId) {
       append: Boolean(state.activePlayback),
     });
     await refreshSessionActivity();
+    await refreshSavedSessions();
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
       return;
     }
@@ -1380,6 +1744,7 @@ async function startInfiniteMode() {
 
     await playPayload(payload.generated_phrase);
     await refreshSessionActivity();
+    await refreshSavedSessions();
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
       return;
     }
@@ -1546,25 +1911,110 @@ function updateSelectedOutput() {
 }
 
 function clearPhrases() {
-  stopInfiniteMode({ stopPlayback: true, silent: true });
-  state.lastCapturedPhrase = [];
-  state.lastGeneratedPhrase = null;
-  state.previewedHistoryIndex = null;
-  state.previewedMemoryIndex = null;
-  recorder.reset();
-  renderCapturedStats([], [], false);
-  renderGeneratedStats(null);
-  syncPreviewSelection();
-  updateInfiniteActionState();
-  setPhraseStatus("Waiting for MIDI");
+  clearPhraseBuffers();
   setPhraseMessage("Cleared the local phrase buffers.");
 }
 
 function bindEvents() {
+  elements.controlTabs.forEach((node) => {
+    node.addEventListener("click", () => {
+      setAccountPanelOpen(false);
+      setControlView(node.dataset.controlTab);
+    });
+  });
+
   elements.viewTabs.forEach((node) => {
     node.addEventListener("click", () => {
       setActivityView(node.dataset.viewTab);
     });
+  });
+
+  elements.loginButton.addEventListener("click", async () => {
+    try {
+      await submitAuth("login");
+    } catch (error) {
+      setAuthMessage(error.message, true);
+    }
+  });
+
+  elements.registerButton.addEventListener("click", async () => {
+    try {
+      await submitAuth("register");
+    } catch (error) {
+      setAuthMessage(error.message, true);
+    }
+  });
+
+  elements.logoutButton.addEventListener("click", async () => {
+    try {
+      await logoutUser();
+    } catch (error) {
+      setAuthMessage(error.message, true);
+    }
+  });
+
+  elements.refreshSessionsButton.addEventListener("click", async () => {
+    try {
+      await refreshSavedSessions();
+      setAuthMessage("Saved sessions refreshed.");
+    } catch (error) {
+      setAuthMessage(error.message, true);
+    }
+  });
+
+  [elements.authUsernameInput, elements.authPasswordInput].forEach((input) => {
+    input.addEventListener("keydown", async (event) => {
+      if (event.key !== "Enter") {
+        return;
+      }
+      event.preventDefault();
+      try {
+        await submitAuth("login");
+      } catch (error) {
+        setAuthMessage(error.message, true);
+      }
+    });
+  });
+
+  [elements.authUsernameInput, elements.authPasswordInput].forEach((input) => {
+    input.addEventListener("input", () => {
+      if (state.authUser) {
+        return;
+      }
+      setAuthMessage("Guest mode is ready. Sign in only if you want saved sessions.");
+    });
+  });
+
+  elements.authStatus.addEventListener("click", () => {
+    setAccountPanelOpen(!state.accountPanelOpen);
+  });
+
+  elements.accountOpenSessionsButton.addEventListener("click", () => {
+    setControlView("sessions");
+    setAccountPanelOpen(false);
+    elements.controlWorkspace?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!state.accountPanelOpen) {
+      return;
+    }
+    if (!(event.target instanceof Node)) {
+      return;
+    }
+    if (
+      elements.accountPanel.contains(event.target) ||
+      elements.authStatus.contains(event.target)
+    ) {
+      return;
+    }
+    setAccountPanelOpen(false);
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.accountPanelOpen) {
+      setAccountPanelOpen(false);
+    }
   });
 
   elements.createSessionButton.addEventListener("click", async () => {
@@ -1721,8 +2171,10 @@ function bindEvents() {
 
 async function initialize() {
   bindEvents();
-  clearPhrases();
-  renderMemory(null);
+  syncAuthUI();
+  renderSavedSessions([]);
+  clearCurrentSessionState();
+  setControlView("perform");
   setActivityView("history");
   setSelectedInputName("No MIDI input selected");
   setSelectedOutputName("Browser Synth");
@@ -1735,6 +2187,11 @@ async function initialize() {
     await checkServer();
   } catch (error) {
     elements.serverStatus.textContent = "Offline";
+    setPhraseMessage(error.message, true);
+  }
+  try {
+    await refreshAuthState();
+  } catch (error) {
     setPhraseMessage(error.message, true);
   }
 }

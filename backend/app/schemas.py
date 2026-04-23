@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 DecayMode = Literal["full", "late", "middle", "early"]
 MemoryPhraseSource = Literal["seed", "live"]
+USERNAME_PATTERN = r"^[A-Za-z0-9_.-]{2,32}$"
 
 
 class MidiEvent(BaseModel):
@@ -139,3 +140,52 @@ class UpdateSessionSettingsResponse(BaseModel):
 class PublicConfigResponse(BaseModel):
     app_name: str
     seeded: bool
+
+
+class AuthUser(BaseModel):
+    id: str
+    username: str
+    created_at: str
+
+
+class AuthStatusResponse(BaseModel):
+    user: AuthUser | None = None
+
+
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=2, max_length=32, pattern=USERNAME_PATTERN)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=2, max_length=32, pattern=USERNAME_PATTERN)
+    password: str = Field(min_length=8, max_length=128)
+
+
+class LogoutResponse(BaseModel):
+    ok: bool = True
+
+
+class UserSessionListItem(BaseModel):
+    session_id: str
+    created_at: str
+    last_seen_at: str
+    last_reset_at: str | None = None
+    configuration: SessionConfiguration
+    phrase_count: int = Field(ge=0)
+    input_phrase_count: int = Field(ge=0)
+    active_learned_phrase_count: int = Field(ge=0)
+    loaded: bool = False
+
+
+class UserSessionsResponse(BaseModel):
+    items: list[UserSessionListItem]
+
+
+class OpenSessionResponse(BaseModel):
+    session_id: str
+    created_at: str
+    last_seen_at: str
+    configuration: SessionConfiguration
+    restored_phrase_count: int = Field(ge=0)
+    restored_from_history: bool
