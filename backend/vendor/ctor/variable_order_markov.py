@@ -275,6 +275,9 @@ class Variable_order_Markov:
     def index_of_vp(self, vp):
         return self.vp2index[vp]
 
+    def has_viewpoint(self, vp):
+        return vp in self.vp2index
+
     def build_vo_markov_model(self, real_sequence):
         """Build/accumulate a VO-Markov model up to order kmax using one unified dict."""
         vp_seq = [self.start_padding] + [self.get_viewpoint(obj) for obj in real_sequence] + [self.end_padding]
@@ -555,6 +558,7 @@ class Variable_order_Markov:
             length: int,
             prefix=None,
             constraints: Optional[Dict[int, object]] = None,
+            start_vp=None,
             *,
             relax_prefix_on_fail: bool = True,
             relax_pos0_on_fail: bool = True,
@@ -567,6 +571,8 @@ class Variable_order_Markov:
         ----------
         prefix : sequence of notes/viewpoints forming the *last played* phrase.
                  Used only to derive a soft start bias (start_vp = viewpoint of prefix[-1]).
+        start_vp : explicit viewpoint used as the hidden handoff state before the
+                   generated sequence. When provided, it takes precedence over `prefix`.
         constraints : dict[int -> viewpoint]
             Hard constraints at positions (0-based). Values are viewpoint objects (NOT indices).
 
@@ -581,41 +587,61 @@ class Variable_order_Markov:
         def _build_graph(graph_length, active_constraints: Dict[int, object]):
             pgm = self.build_bp_graph(graph_length)
             for pos, vp in active_constraints.items():
+                if not self.has_viewpoint(vp):
+                    raise NoSolutionErrorInBP(
+                        f"Constraint viewpoint at position {pos} is not in the learned vocabulary: {vp!r}"
+                    )
                 var_name = f"x{pos + 1}"
                 pgm.set_value(var_name, self.index_of_vp(vp))  # vp -> index
             return pgm
 
         # Soft start bias from the prefix (viewpoint object), unless overridden by a hard constraint at pos 0
-        start_vp = None
-        if prefix  is None:
+        requested_start_vp = start_vp
+        if requested_start_vp is None and prefix is None:
             pgm = _build_graph(length, constraints)
             seq = self.sample_vp_sequence_with_bp(length, None, pgm)
             return seq
 
         # Attempt 1: all constraints + start bias and translate constraints by 1 and length + 1
         translated_constraints = {k + 1: v for k, v in constraints.items()}
-        start_vp = self.get_viewpoint(prefix[-1])
+        if requested_start_vp is None:
+            requested_start_vp = self.get_viewpoint(prefix[-1])
         last_error = None
-        try:
-            pgm = _build_graph(length + 1, translated_constraints)
-            seq = self.sample_vp_sequence_with_bp(length + 1, start_vp, pgm)
-            if seq is not None:
-                return seq[1:]
-            # returns the sequence except the prefix
-        except NoSolutionErrorInBP as e:
-            last_error = e
+        prefix_bias_available = self.has_viewpoint(requested_start_vp)
+        if prefix_bias_available:
+            try:
+                pgm = _build_graph(length + 1, translated_constraints)
+                seq = self.sample_vp_sequence_with_bp(length + 1, requested_start_vp, pgm)
+                if seq is not None:
+                    return seq[1:]
+                # returns the sequence except the prefix
+            except NoSolutionErrorInBP as e:
+                last_error = e
+        else:
+            last_error = NoSolutionErrorInBP(
+                f"Prefix endpoint viewpoint is not in the learned vocabulary: {requested_start_vp!r}"
+            )
 
-        print('give up prefix constraint (continuation)')
+        if prefix_bias_available:
+            print('give up prefix constraint (continuation)')
+        else:
+            print(
+                f'give up prefix constraint (continuation): unknown viewpoint {requested_start_vp!r}'
+            )
         # Attempt 2: relax the prefix bias only
         if relax_prefix_on_fail:
             try:
                 translated_constraints = {k + 1: v for k, v in constraints.items()}
                 pgm = _build_graph(length + 1, translated_constraints)
-                if 1 in constraints:
-                    start_vp = constraints[1]
+                if 0 in constraints:
+                    relaxed_start_vp = constraints[0]
                 else:
-                    start_vp = self.start_padding
-                seq = self.sample_vp_sequence_with_bp(length + 1, start_vp, pgm)
+                    relaxed_start_vp = self.start_padding
+                if not self.has_viewpoint(relaxed_start_vp):
+                    raise NoSolutionErrorInBP(
+                        f"Relaxed start viewpoint is not in the learned vocabulary: {relaxed_start_vp!r}"
+                    )
+                seq = self.sample_vp_sequence_with_bp(length + 1, relaxed_start_vp, pgm)
                 if seq is not None:
                     return seq[1:] # returns the sequence except the startvp
             except NoSolutionErrorInBP as e:
@@ -684,7 +710,7 @@ class Variable_order_Markov:
                 return None
         try:
             pgm.set_value('x1', self.index_of_vp(current_seq[0]))
-        except NoSolutionErrorInBP:
+        except (NoSolutionErrorInBP, KeyError):
             return None
         # generate the rest of the sequence
         first_order_matrix = self.get_first_order_matrix()

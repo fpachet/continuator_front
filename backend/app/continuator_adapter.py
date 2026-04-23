@@ -9,7 +9,7 @@ import threading
 
 import mido
 
-from .schemas import MidiEvent, PhraseNote, PhrasePayload, PlaybackMidiEvent
+from .schemas import MidiEvent, PhraseNote, PhrasePayload, PlaybackMidiEvent, ViewpointSeed
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -92,6 +92,39 @@ def _note_to_schema(note: object) -> PhraseNote:
     )
 
 
+def _note_to_viewpoint(note: object) -> tuple[int, int, bool, bool]:
+    return (
+        int(note.pitch),
+        int(float(note.duration)),
+        bool(note.overlaps_left()),
+        bool(note.overlaps_right()),
+    )
+
+
+def _viewpoint_to_schema(viewpoint: tuple[int, int, bool, bool] | None) -> ViewpointSeed | None:
+    if viewpoint is None:
+        return None
+
+    pitch, duration_bin, overlaps_left, overlaps_right = viewpoint
+    return ViewpointSeed(
+        pitch=int(pitch),
+        duration_bin=max(0, int(duration_bin)),
+        overlaps_left=bool(overlaps_left),
+        overlaps_right=bool(overlaps_right),
+    )
+
+
+def _schema_to_viewpoint(seed: ViewpointSeed | None) -> tuple[int, int, bool, bool] | None:
+    if seed is None:
+        return None
+    return (
+        int(seed.pitch),
+        max(0, int(seed.duration_bin)),
+        bool(seed.overlaps_left),
+        bool(seed.overlaps_right),
+    )
+
+
 def _notes_to_events(notes: list[object]) -> list[PlaybackMidiEvent]:
     timed_events: list[dict[str, float | int | str]] = []
     for note in notes:
@@ -151,6 +184,7 @@ def _build_phrase_payload(notes: list[object]) -> PhrasePayload:
     events = _notes_to_events(normalized_notes)
     duration_seconds = max((note.end_seconds for note in note_payload), default=0.0)
     handoff_seconds = None
+    handoff_viewpoint = None
     if raw_notes:
         last_note = raw_notes[-1]
         next_onset_beats = max(
@@ -159,12 +193,14 @@ def _build_phrase_payload(notes: list[object]) -> PhrasePayload:
             + max(0.0, float(last_note.duration) + float(getattr(last_note, "next_start_delta", 0.0))),
         )
         handoff_seconds = _round_float(next_onset_beats / 2.0)
+        handoff_viewpoint = _viewpoint_to_schema(_note_to_viewpoint(last_note))
 
     return PhrasePayload(
         event_count=len(events),
         note_count=len(note_payload),
         duration_seconds=_round_float(duration_seconds),
         handoff_seconds=handoff_seconds,
+        handoff_viewpoint=handoff_viewpoint,
         events=events,
         notes=note_payload,
     )
@@ -416,6 +452,7 @@ class ContinuatorSessionEngine:
         learn_input: bool | None = None,
         continuation_note_count: int | None = None,
         enforce_end_constraint: bool = True,
+        handoff_viewpoint: ViewpointSeed | None = None,
     ) -> tuple[PhrasePayload, PhrasePayload, str | None]:
         with self._lock:
             messages = [_event_to_mido_message(event) for event in phrase_events]
@@ -430,27 +467,52 @@ class ContinuatorSessionEngine:
             if should_learn:
                 self._continuator.learn_phrase(input_phrase, self._continuator.transpose)
 
-            status_message = None
+            status_messages: list[str] = []
+            prefix_for_generation = input_phrase
+            start_viewpoint = None
+            requested_handoff_viewpoint = _schema_to_viewpoint(handoff_viewpoint)
+            if requested_handoff_viewpoint is not None:
+                if self._continuator.vom.has_viewpoint(requested_handoff_viewpoint):
+                    prefix_for_generation = None
+                    start_viewpoint = requested_handoff_viewpoint
+                else:
+                    status_messages.append(
+                        "Ignored the preserved handoff viewpoint because it was outside "
+                        "the learned vocabulary."
+                    )
+
+            if start_viewpoint is None:
+                prefix_viewpoint = self._continuator.get_viewpoint(input_phrase[-1])
+                if not self._continuator.vom.has_viewpoint(prefix_viewpoint):
+                    prefix_for_generation = None
+                    status_messages.append(
+                        "Relaxed the continuation handoff because the final input state "
+                        "was outside the learned vocabulary."
+                    )
+
             if enforce_end_constraint:
                 constraints = {target_note_count: self._continuator.get_end_vp()}
                 generated_sequence = self._continuator.sample_sequence(
-                    prefix=input_phrase,
+                    prefix=prefix_for_generation,
+                    start_vp=start_viewpoint,
                     length=target_note_count + 1,
                     constraints=constraints,
                 )
                 if generated_sequence is None:
                     generated_sequence = self._continuator.sample_sequence(
-                        prefix=input_phrase,
+                        prefix=prefix_for_generation,
+                        start_vp=start_viewpoint,
                         length=target_note_count,
                         constraints={},
                     )
-                    status_message = (
+                    status_messages.append(
                         "Used a same-length continuation without the hard end constraint "
                         "because the exact-ending version had no solution."
                     )
             else:
                 generated_sequence = self._continuator.sample_sequence(
-                    prefix=input_phrase,
+                    prefix=prefix_for_generation,
+                    start_vp=start_viewpoint,
                     length=target_note_count,
                     constraints={},
                 )
@@ -463,4 +525,5 @@ class ContinuatorSessionEngine:
                 rendered_vp_sequence = rendered_vp_sequence[:-1]
 
             rendered_sequence = self._continuator.realize_vp_sequence(rendered_vp_sequence)
+            status_message = " ".join(status_messages) or None
             return input_payload, _build_phrase_payload(rendered_sequence), status_message

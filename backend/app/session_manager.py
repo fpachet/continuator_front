@@ -268,6 +268,7 @@ class SessionManager:
             learn_input=should_learn,
             continuation_note_count=request.continuation_note_count,
             enforce_end_constraint=request.enforce_end_constraint,
+            handoff_viewpoint=request.handoff_viewpoint,
         )
 
         state.last_seen_at = created_at

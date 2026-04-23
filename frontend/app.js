@@ -80,11 +80,6 @@ const elements = {
   settingsSummary: document.querySelector("#settings-summary"),
   controlTabs: document.querySelectorAll("[data-control-tab]"),
   controlPanels: document.querySelectorAll("[data-control-panel]"),
-  historyTab: document.querySelector("#history-tab"),
-  memoryTab: document.querySelector("#memory-tab"),
-  historyPanel: document.querySelector("#history-panel"),
-  memoryPanel: document.querySelector("#memory-panel"),
-  viewTabs: document.querySelectorAll("[data-view-tab]"),
   midiInputSelect: document.querySelector("#midi-input-select"),
   midiOutputSelect: document.querySelector("#midi-output-select"),
   faustRendererPanel: document.querySelector("#faust-renderer-panel"),
@@ -152,7 +147,6 @@ const state = {
   memoryItems: [],
   savedSessions: [],
   activeControlView: "perform",
-  activeActivityView: "history",
   previewedHistoryIndex: null,
   previewedMemoryIndex: null,
   previewPulseTimeoutId: null,
@@ -1000,15 +994,19 @@ function clearRememberedPhrases() {
   updateInfiniteActionState();
 }
 
-function latestLoopSeedEvents() {
-  const generatedEvents = state.lastGeneratedPhrase?.events || [];
+function latestLoopSeedPayload() {
+  const generatedPayload = state.lastGeneratedPhrase;
+  const generatedEvents = generatedPayload?.events || [];
   if (generatedEvents.length && state.lastGeneratedAt >= state.lastCapturedAt) {
-    return generatedEvents;
+    return generatedPayload;
   }
   if (state.lastCapturedPhrase.length) {
-    return state.lastCapturedPhrase;
+    return {
+      events: state.lastCapturedPhrase,
+      handoff_viewpoint: null,
+    };
   }
-  return generatedEvents;
+  return generatedEvents.length ? generatedPayload : null;
 }
 
 function preferredGenerationNoteCount(referenceEvents = null) {
@@ -1448,17 +1446,6 @@ function setControlView(view) {
   elements.controlPanels.forEach((node) => {
     node.hidden = node.dataset.controlPanel !== view;
   });
-}
-
-function setActivityView(view) {
-  state.activeActivityView = view;
-  const showHistory = view === "history";
-  elements.historyTab.classList.toggle("is-active", showHistory);
-  elements.historyTab.setAttribute("aria-selected", String(showHistory));
-  elements.historyPanel.hidden = !showHistory;
-  elements.memoryTab.classList.toggle("is-active", !showHistory);
-  elements.memoryTab.setAttribute("aria-selected", String(!showHistory));
-  elements.memoryPanel.hidden = showHistory;
 }
 
 function syncPreviewSelection() {
@@ -2037,6 +2024,7 @@ function buildContinuationRequestBody(
   learnInput,
   signal = null,
   enforceEndConstraint = true,
+  handoffViewpoint = null,
 ) {
   const continuationNoteCount = normalizedContinuationNoteCount(
     elements.continuationLengthInput.value,
@@ -2049,6 +2037,9 @@ function buildContinuationRequestBody(
   };
   if (continuationNoteCount != null) {
     requestBody.continuation_note_count = continuationNoteCount;
+  }
+  if (handoffViewpoint) {
+    requestBody.handoff_viewpoint = handoffViewpoint;
   }
   return {
     requestBody,
@@ -2118,6 +2109,7 @@ async function requestContinuationFromEvents(
     statusLabel = "Sending",
     signal = null,
     enforceEndConstraint = true,
+    handoffViewpoint = null,
   } = {},
 ) {
   if (!phraseEvents?.length) {
@@ -2131,6 +2123,7 @@ async function requestContinuationFromEvents(
     learnInput,
     signal,
     enforceEndConstraint,
+    handoffViewpoint,
   );
   const payload = await requestJson("/api/continue", fetchOptions);
   return { payload, continuationNoteCount };
@@ -2224,8 +2217,7 @@ async function importSelectedMidiFiles(fileList, selectionLabel = "selection") {
 
   await refreshSessionActivity();
   await refreshSavedSessions();
-  setControlView("continuator");
-  setActivityView("memory");
+  setControlView("memory");
   setSessionStatus("Ready");
   setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
   setPhraseMessage(defaultMidiImportMessage(payload));
@@ -2881,15 +2873,22 @@ function scheduleInfiniteStep(prefixPayload, runId) {
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
       return;
     }
-    void runInfiniteStep(prefixPayload.events, runId);
+    void runInfiniteStep(prefixPayload, runId);
   }, delayMs);
   updateInfiniteActionState();
 }
 
-async function runInfiniteStep(prefixEvents, runId) {
+async function runInfiniteStep(prefixPayload, runId) {
   if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
     return;
   }
+
+  const prefixEvents = Array.isArray(prefixPayload)
+    ? prefixPayload
+    : prefixPayload?.events || [];
+  const handoffViewpoint = Array.isArray(prefixPayload)
+    ? null
+    : prefixPayload?.handoff_viewpoint || null;
 
   state.infiniteRequestInFlight = true;
   const abortController = new AbortController();
@@ -2941,6 +2940,7 @@ async function runInfiniteStep(prefixEvents, runId) {
       statusLabel: state.activePlayback ? "Queueing next" : "Sending",
       signal: abortController.signal,
       enforceEndConstraint: false,
+      handoffViewpoint,
     });
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
       return;
@@ -3023,7 +3023,8 @@ async function startInfiniteMode() {
     return;
   }
 
-  const seedEvents = latestLoopSeedEvents();
+  const seedPayload = latestLoopSeedPayload();
+  const seedEvents = seedPayload?.events || [];
   if (!seedEvents.length) {
     setPhraseMessage("Play or preview a phrase before starting infinite mode.", true);
     return;
@@ -3045,6 +3046,7 @@ async function startInfiniteMode() {
       learnInput: elements.learnInputToggle.checked,
       signal: abortController.signal,
       enforceEndConstraint: false,
+      handoffViewpoint: seedPayload?.handoff_viewpoint || null,
     });
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
       return;
@@ -3278,12 +3280,6 @@ function bindEvents() {
     });
   });
 
-  elements.viewTabs.forEach((node) => {
-    node.addEventListener("click", () => {
-      setActivityView(node.dataset.viewTab);
-    });
-  });
-
   elements.loginButton.addEventListener("click", async () => {
     try {
       await submitAuth("login");
@@ -3360,7 +3356,7 @@ function bindEvents() {
   });
 
   elements.accountOpenSessionsButton.addEventListener("click", () => {
-    setControlView("sessions");
+    setControlView("session");
     setAccountPanelOpen(false);
     elements.controlWorkspace?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
@@ -3644,7 +3640,6 @@ async function initialize() {
   renderSavedSessions([]);
   clearCurrentSessionState();
   setControlView("perform");
-  setActivityView("history");
   setSelectedInputName("No MIDI input selected");
   updateSelectedOutput();
   syncFaustRendererPanel();

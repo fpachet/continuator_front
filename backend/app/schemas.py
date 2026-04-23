@@ -32,11 +32,19 @@ class PhraseNote(BaseModel):
     duration_beats: float = Field(ge=0.0)
 
 
+class ViewpointSeed(BaseModel):
+    pitch: int = Field(ge=0, le=127)
+    duration_bin: int = Field(ge=0)
+    overlaps_left: bool
+    overlaps_right: bool
+
+
 class PhrasePayload(BaseModel):
     event_count: int = Field(ge=0)
     note_count: int = Field(ge=0)
     duration_seconds: float = Field(ge=0.0)
     handoff_seconds: float | None = Field(default=None, ge=0.0)
+    handoff_viewpoint: ViewpointSeed | None = None
     events: list[PlaybackMidiEvent]
     notes: list[PhraseNote]
 
@@ -72,6 +80,7 @@ class ContinueRequest(BaseModel):
     learn_input: bool | None = None
     continuation_note_count: int | None = Field(default=None, ge=1)
     enforce_end_constraint: bool = True
+    handoff_viewpoint: ViewpointSeed | None = None
 
 
 class ContinueResponse(BaseModel):

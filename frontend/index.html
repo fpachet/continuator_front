@@ -159,9 +159,10 @@
         <section class="readme-block">
           <h3>Studio Layout</h3>
           <ul class="readme-list">
-            <li><strong>Perform</strong>: MIDI ports, phrase capture, generation, replay, and infinite mode.</li>
-            <li><strong>Continuator</strong>: session lifecycle and advanced engine settings.</li>
-            <li><strong>Sessions</strong>: reopen saved sessions and rebuild their live memory.</li>
+            <li><strong>Perform</strong>: live MIDI capture, phrase generation, replay, and infinite mode.</li>
+            <li><strong>Sound</strong>: playback routing plus built-in and custom Faust renderers.</li>
+            <li><strong>Memory</strong>: corpus import, active engine memory, and phrase history.</li>
+            <li><strong>Session</strong>: session lifecycle, advanced Continuator settings, and saved sessions.</li>
           </ul>
         </section>
 
@@ -289,23 +290,33 @@
             </button>
             <button
               class="workspace-tab"
-              data-control-tab="continuator"
+              data-control-tab="sound"
               type="button"
               role="tab"
               aria-selected="false"
-              aria-controls="control-continuator-panel"
+              aria-controls="control-sound-panel"
             >
-              Continuator
+              Sound
             </button>
             <button
               class="workspace-tab"
-              data-control-tab="sessions"
+              data-control-tab="memory"
               type="button"
               role="tab"
               aria-selected="false"
-              aria-controls="control-sessions-panel"
+              aria-controls="control-memory-panel"
             >
-              Sessions
+              Memory
+            </button>
+            <button
+              class="workspace-tab"
+              data-control-tab="session"
+              type="button"
+              role="tab"
+              aria-selected="false"
+              aria-controls="control-session-panel"
+            >
+              Session
             </button>
           </div>
 
@@ -319,10 +330,10 @@
               <section class="panel-section accent-section">
                 <div class="section-head">
                   <div>
-                    <h3>MIDI I/O</h3>
+                    <h3>Live Input</h3>
                     <p class="section-copy">
-                      Connect browser MIDI, choose an input, and route playback
-                      to browser renderers or external synths.
+                      Connect browser MIDI, choose the live keyboard or controller,
+                      and decide how phrases should flow into generation.
                     </p>
                   </div>
                 </div>
@@ -340,12 +351,6 @@
                     <option>Connect MIDI first</option>
                   </select>
                 </div>
-                <div class="field">
-                  <label for="midi-output-select">Playback Renderer</label>
-                  <select id="midi-output-select" disabled>
-                    <option>Browser Triangle</option>
-                  </select>
-                </div>
                 <label class="toggle">
                   <input id="learn-input-toggle" type="checkbox" checked />
                   <span>Learn the played phrase before generating</span>
@@ -356,10 +361,6 @@
                     <dd id="selected-input-name">None</dd>
                   </div>
                   <div>
-                    <dt>Selected Renderer</dt>
-                    <dd id="selected-output-name">Browser Triangle</dd>
-                  </div>
-                  <div>
                     <dt>Last MIDI Event</dt>
                     <dd id="last-midi-event">None yet</dd>
                   </div>
@@ -368,6 +369,103 @@
                     <dd>1 second after final note-off</dd>
                   </div>
                 </dl>
+              </section>
+
+              <section class="panel-section">
+                <div class="section-head">
+                  <div>
+                    <h3>Phrase Flow</h3>
+                    <p class="section-copy">
+                      Send, replay, or keep chaining continuations from the
+                      current phrase.
+                    </p>
+                  </div>
+                </div>
+                <div class="button-row">
+                  <button id="send-phrase-button">Send Phrase</button>
+                  <button id="generate-memory-button" class="ghost">
+                    Generate From Memory
+                  </button>
+                  <button id="replay-generated-button" class="ghost">Replay Output</button>
+                  <button id="clear-phrase-button" class="ghost">Clear</button>
+                </div>
+                <div class="generation-grid">
+                  <div class="field generation-field">
+                    <label for="continuation-length-input">Continuation length (notes)</label>
+                    <input
+                      id="continuation-length-input"
+                      type="number"
+                      min="1"
+                      step="1"
+                      inputmode="numeric"
+                      placeholder="Same as input"
+                    />
+                    <p class="field-hint">
+                      Leave empty to match the captured phrase note count.
+                    </p>
+                  </div>
+                  <div class="field generation-field">
+                    <label>Infinite mode</label>
+                    <div class="button-row generation-actions">
+                      <button id="start-infinite-button" class="ghost" type="button">
+                        Start Infinite
+                      </button>
+                      <button
+                        id="stop-infinite-button"
+                        class="ghost danger-button"
+                        type="button"
+                        disabled
+                      >
+                        Stop
+                      </button>
+                    </div>
+                    <p class="field-hint">
+                      Queues the next continuation before the current one ends,
+                      using the latest continuation as the next prefix.
+                    </p>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+
+          <section
+            id="control-sound-panel"
+            class="workspace-panel"
+            data-control-panel="sound"
+            role="tabpanel"
+            hidden
+          >
+            <div class="panel-stack">
+              <section class="panel-section accent-section">
+                <div class="section-head">
+                  <div>
+                    <h3>Playback Route</h3>
+                    <p class="section-copy">
+                      Choose where continuations should sound, from the browser
+                      synths to external MIDI and Faust-based instruments.
+                    </p>
+                  </div>
+                </div>
+                <div class="field">
+                  <label for="midi-output-select">Playback Renderer</label>
+                  <select id="midi-output-select" disabled>
+                    <option>Browser Triangle</option>
+                  </select>
+                </div>
+                <dl class="info-grid">
+                  <div>
+                    <dt>Selected Renderer</dt>
+                    <dd id="selected-output-name">Browser Triangle</dd>
+                  </div>
+                  <div>
+                    <dt>Routing Note</dt>
+                    <dd>Use browser synths instantly or send output to external MIDI.</dd>
+                  </div>
+                </dl>
+                <p class="field-hint">
+                  External MIDI outputs appear here once browser MIDI access is connected in Perform.
+                </p>
               </section>
 
               <section id="faust-renderer-panel" class="panel-section accent-section" hidden>
@@ -526,90 +624,110 @@
                   first time you use them.
                 </p>
               </section>
-
-              <section class="panel-section">
-                <div class="section-head">
-                  <div>
-                    <h3>Phrase Flow</h3>
-                    <p class="section-copy">
-                      Send, replay, or keep chaining continuations from the
-                      current phrase.
-                    </p>
-                  </div>
-                </div>
-                <div class="button-row">
-                  <button id="send-phrase-button">Send Phrase</button>
-                  <button id="generate-memory-button" class="ghost">
-                    Generate From Memory
-                  </button>
-                  <button id="replay-generated-button" class="ghost">Replay Output</button>
-                  <button id="clear-phrase-button" class="ghost">Clear</button>
-                </div>
-                <div class="generation-grid">
-                  <div class="field generation-field">
-                    <label for="continuation-length-input">Continuation length (notes)</label>
-                    <input
-                      id="continuation-length-input"
-                      type="number"
-                      min="1"
-                      step="1"
-                      inputmode="numeric"
-                      placeholder="Same as input"
-                    />
-                    <p class="field-hint">
-                      Leave empty to match the captured phrase note count.
-                    </p>
-                  </div>
-                  <div class="field generation-field">
-                    <label>Infinite mode</label>
-                    <div class="button-row generation-actions">
-                      <button id="start-infinite-button" class="ghost" type="button">
-                        Start Infinite
-                      </button>
-                      <button
-                        id="stop-infinite-button"
-                        class="ghost danger-button"
-                        type="button"
-                        disabled
-                      >
-                        Stop
-                      </button>
-                    </div>
-                    <p class="field-hint">
-                      Queues the next continuation before the current one ends,
-                      using the latest continuation as the next prefix.
-                    </p>
-                  </div>
-                </div>
-                <dl class="info-grid">
-                  <div>
-                    <dt>Captured Events</dt>
-                    <dd id="captured-event-count">0</dd>
-                  </div>
-                  <div>
-                    <dt>Captured Notes</dt>
-                    <dd id="captured-note-count">0</dd>
-                  </div>
-                  <div>
-                    <dt>Generated Events</dt>
-                    <dd id="generated-event-count">0</dd>
-                  </div>
-                  <div>
-                    <dt>Generated Notes</dt>
-                    <dd id="generated-note-count">0</dd>
-                  </div>
-                </dl>
-                <div class="message-box" id="message-box">
-                  Play a short phrase on the selected MIDI input to capture it.
-                </div>
-              </section>
             </div>
           </section>
 
           <section
-            id="control-continuator-panel"
+            id="control-memory-panel"
             class="workspace-panel"
-            data-control-panel="continuator"
+            data-control-panel="memory"
+            role="tabpanel"
+            hidden
+          >
+            <div class="panel-stack">
+              <section class="panel-section accent-section">
+                <div class="section-head">
+                  <div>
+                    <h3>Corpus Import</h3>
+                    <p class="section-copy">
+                      Load existing MIDI material into the current session so it
+                      becomes part of the live Continuator memory.
+                    </p>
+                  </div>
+                </div>
+                <div class="button-row">
+                  <button
+                    id="import-midi-files-button"
+                    class="ghost"
+                    type="button"
+                  >
+                    Import MIDI Files
+                  </button>
+                  <button
+                    id="import-midi-folder-button"
+                    class="ghost"
+                    type="button"
+                  >
+                    Import MIDI Folder
+                  </button>
+                </div>
+                <p class="field-hint">
+                  Imported phrases are learned into the active session memory
+                  and logged like other learned inputs. Folder import works
+                  best in Chromium-based browsers.
+                </p>
+                <input
+                  id="midi-import-input"
+                  type="file"
+                  accept=".mid,.midi,audio/midi"
+                  multiple
+                  hidden
+                />
+                <input
+                  id="midi-folder-import-input"
+                  type="file"
+                  accept=".mid,.midi,audio/midi"
+                  multiple
+                  webkitdirectory
+                  directory
+                  hidden
+                />
+              </section>
+
+              <div class="panel-grid">
+                <section class="panel-section">
+                  <div class="section-head">
+                    <div>
+                      <h3>Active Engine Memory</h3>
+                      <p class="section-copy">
+                        Inspect what is currently active inside the Continuator
+                        engine, not just what happened earlier in the session.
+                      </p>
+                    </div>
+                  </div>
+                  <div id="memory-summary" class="settings-summary">
+                    <span class="settings-chip">No active memory yet</span>
+                  </div>
+                  <p id="memory-hint" class="small-copy memory-hint">
+                    Create a session and play a phrase to inspect the active Continuator memory.
+                  </p>
+                  <div id="memory-ribbon" class="memory-ribbon"></div>
+                  <div id="memory-list" class="history-list">
+                    <p class="muted">No active memory to show yet.</p>
+                  </div>
+                </section>
+
+                <section class="panel-section">
+                  <div class="section-head">
+                    <div>
+                      <h3>Phrase History</h3>
+                      <p class="section-copy">
+                        Follow the phrases that were played, learned, and generated in this session.
+                      </p>
+                    </div>
+                  </div>
+                  <div id="history-list" class="history-list">
+                    <p class="muted">Create a session to start building history.</p>
+                  </div>
+                </section>
+              </div>
+            </div>
+          </section>
+
+          <section
+            id="control-session-panel"
+            class="workspace-panel"
+            data-control-panel="session"
             role="tabpanel"
             hidden
           >
@@ -617,10 +735,10 @@
               <section class="panel-section">
                 <div class="section-head">
                   <div>
-                    <h3>Continuator Session</h3>
+                    <h3>Current Session</h3>
                     <p class="section-copy">
-                      Create, reset, and tune the active engine without losing
-                      sight of its current state.
+                      Create, reset, and tune the active Continuator engine
+                      without losing track of its current state.
                     </p>
                   </div>
                 </div>
@@ -712,65 +830,6 @@
                 </dl>
               </section>
 
-              <section class="panel-section accent-section">
-                <div class="section-head">
-                  <div>
-                    <h3>MIDI Import</h3>
-                    <p class="section-copy">
-                      Load existing MIDI files into the current Continuator
-                      session and use them as live memory.
-                    </p>
-                  </div>
-                </div>
-                <div class="button-row">
-                  <button
-                    id="import-midi-files-button"
-                    class="ghost"
-                    type="button"
-                  >
-                    Import MIDI Files
-                  </button>
-                  <button
-                    id="import-midi-folder-button"
-                    class="ghost"
-                    type="button"
-                  >
-                    Import MIDI Folder
-                  </button>
-                </div>
-                <p class="field-hint">
-                  Imported phrases are learned into the active session memory
-                  and logged like other learned inputs. Folder import works
-                  best in Chromium-based browsers.
-                </p>
-                <input
-                  id="midi-import-input"
-                  type="file"
-                  accept=".mid,.midi,audio/midi"
-                  multiple
-                  hidden
-                />
-                <input
-                  id="midi-folder-import-input"
-                  type="file"
-                  accept=".mid,.midi,audio/midi"
-                  multiple
-                  webkitdirectory
-                  directory
-                  hidden
-                />
-              </section>
-            </div>
-          </section>
-
-          <section
-            id="control-sessions-panel"
-            class="workspace-panel"
-            data-control-panel="sessions"
-            role="tabpanel"
-            hidden
-          >
-            <div class="panel-stack">
               <section class="panel-section">
                 <div class="section-head">
                   <div>
@@ -816,54 +875,34 @@
 
         <article class="card">
           <div class="card-head">
-            <h2>Session Activity</h2>
-            <span class="small-copy">History log and active Continuator memory</span>
+            <h2>Live Snapshot</h2>
+            <span class="small-copy">Always-visible capture and generation feedback</span>
           </div>
-          <div class="view-tabs" role="tablist" aria-label="Session activity views">
-            <button
-              id="history-tab"
-              class="view-tab is-active"
-              data-view-tab="history"
-              type="button"
-              role="tab"
-              aria-selected="true"
-              aria-controls="history-panel"
-            >
-              History
-            </button>
-            <button
-              id="memory-tab"
-              class="view-tab"
-              data-view-tab="memory"
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="memory-panel"
-            >
-              Memory
-            </button>
+          <dl class="info-grid">
+            <div>
+              <dt>Captured Events</dt>
+              <dd id="captured-event-count">0</dd>
+            </div>
+            <div>
+              <dt>Captured Notes</dt>
+              <dd id="captured-note-count">0</dd>
+            </div>
+            <div>
+              <dt>Generated Events</dt>
+              <dd id="generated-event-count">0</dd>
+            </div>
+            <div>
+              <dt>Generated Notes</dt>
+              <dd id="generated-note-count">0</dd>
+            </div>
+          </dl>
+          <div class="message-box" id="message-box">
+            Play a short phrase on the selected MIDI input to capture it.
           </div>
-          <section id="history-panel" class="view-panel" role="tabpanel">
-            <div id="history-list" class="history-list">
-              <p class="muted">Create a session to start building history.</p>
-            </div>
-          </section>
-          <section id="memory-panel" class="view-panel" role="tabpanel" hidden>
-            <div id="memory-summary" class="settings-summary">
-              <span class="settings-chip">No active memory yet</span>
-            </div>
-            <p id="memory-hint" class="small-copy memory-hint">
-              Create a session and play a phrase to inspect the active Continuator memory.
-            </p>
-            <div id="memory-ribbon" class="memory-ribbon"></div>
-            <div id="memory-list" class="history-list">
-              <p class="muted">No active memory to show yet.</p>
-            </div>
-          </section>
         </article>
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20260423-faust-custom"></script>
+    <script type="module" src="/assets/app.js?v=20260423-handoff-viewpoint"></script>
   </body>
 </html>
