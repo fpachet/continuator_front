@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Cookie, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -20,6 +20,9 @@ from .schemas import (
     ContinueResponse,
     CreateSessionRequest,
     CreateSessionResponse,
+    GeneratePhraseRequest,
+    GeneratePhraseResponse,
+    ImportMidiResponse,
     LoginRequest,
     LogoutResponse,
     OpenSessionResponse,
@@ -32,7 +35,7 @@ from .schemas import (
     UpdateSessionSettingsResponse,
     UserSessionsResponse,
 )
-from .session_manager import NoContinuationAvailable, SessionManager, UnknownSessionError
+from .session_manager import MidiImportError, NoContinuationAvailable, SessionManager, UnknownSessionError
 from .storage import PhraseStorage
 
 
@@ -236,6 +239,29 @@ def continue_phrase(
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
+@app.post(
+    "/api/sessions/{session_id}/generate",
+    response_model=GeneratePhraseResponse,
+    tags=["continuator"],
+)
+def generate_phrase(
+    session_id: str,
+    payload: GeneratePhraseRequest,
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+) -> GeneratePhraseResponse:
+    try:
+        return session_manager.generate_phrase(
+            session_id,
+            None if current_user is None else current_user.id,
+            note_count=payload.note_count,
+            enforce_end_constraint=payload.enforce_end_constraint,
+        )
+    except UnknownSessionError as error:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+    except NoContinuationAvailable as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @app.get(
     "/api/sessions/{session_id}/history",
     response_model=SessionHistoryResponse,
@@ -272,6 +298,35 @@ def session_memory(
         )
     except UnknownSessionError as error:
         raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+
+
+@app.post(
+    "/api/sessions/{session_id}/import-midi",
+    response_model=ImportMidiResponse,
+    tags=["session"],
+)
+async def import_session_midi(
+    session_id: str,
+    files: list[UploadFile] = File(...),
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+) -> ImportMidiResponse:
+    uploaded_files: list[tuple[str, bytes]] = []
+    try:
+        for index, upload in enumerate(files):
+            file_name = upload.filename or f"imported_{index + 1}.mid"
+            uploaded_files.append((file_name, await upload.read()))
+        return session_manager.import_midi_files(
+            session_id,
+            None if current_user is None else current_user.id,
+            uploaded_files,
+        )
+    except UnknownSessionError as error:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+    except MidiImportError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    finally:
+        for upload in files:
+            await upload.close()
 
 
 @app.post(

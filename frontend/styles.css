@@ -621,6 +621,11 @@ input[type="number"] {
   padding: 12px 14px;
 }
 
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 input[type="number"]:disabled {
   opacity: 0.55;
 }
@@ -738,6 +743,68 @@ input[type="password"]:disabled {
   color: var(--muted);
   font-size: 0.84rem;
   line-height: 1.45;
+}
+
+.faust-control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.faust-field {
+  margin-bottom: 0;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.faust-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.faust-label-row output {
+  color: var(--secondary);
+  font-size: 0.82rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.faust-section-head {
+  margin-top: 18px;
+}
+
+.faust-editor-actions {
+  margin-bottom: 0;
+  flex-wrap: wrap;
+}
+
+.faust-editor-field {
+  margin-bottom: 16px;
+}
+
+.faust-code-input {
+  width: 100%;
+  min-height: 260px;
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 14, 20, 0.72);
+  color: var(--text);
+  font: 0.88rem/1.6 "SFMono-Regular", "Fira Code", "IBM Plex Mono", monospace;
+  resize: vertical;
+}
+
+.faust-code-input:focus {
+  outline: 1px solid rgba(109, 211, 206, 0.4);
+  border-color: rgba(109, 211, 206, 0.42);
+}
+
+.faust-code-input::selection {
+  background: rgba(244, 162, 97, 0.28);
 }
 
 .info-grid {
@@ -1031,6 +1098,10 @@ input[type="password"]:disabled {
   }
 
   .generation-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .faust-control-grid {
     grid-template-columns: 1fr;
   }
 

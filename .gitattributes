@@ -1,0 +1,2 @@
+frontend/vendor/faustwasm/libfaust-wasm/*.data filter=lfs diff=lfs merge=lfs -text
+frontend/vendor/faustwasm/libfaust-wasm/*.wasm filter=lfs diff=lfs merge=lfs -text

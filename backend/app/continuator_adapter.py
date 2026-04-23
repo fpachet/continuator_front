@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import os
 import sys
+from tempfile import TemporaryDirectory
 import threading
 
 import mido
@@ -40,8 +42,25 @@ class NoContinuationAvailable(RuntimeError):
     """Raised when the engine cannot generate a continuation."""
 
 
+class MidiImportError(RuntimeError):
+    """Raised when uploaded MIDI files cannot be imported."""
+
+
+@dataclass(frozen=True)
+class ImportedMidiPhrase:
+    file_name: str
+    payload: PhrasePayload
+
+
 def _round_float(value: float) -> float:
     return round(float(value), 6)
+
+
+def _normalize_uploaded_file_name(raw_name: str | None, fallback: str) -> str:
+    candidate = (raw_name or fallback).replace("\\", "/")
+    parts = [part for part in candidate.split("/") if part and part not in {".", ".."}]
+    normalized = "/".join(parts)
+    return normalized or fallback
 
 
 def _normalize_notes(notes: list[object]) -> list[object]:
@@ -126,15 +145,26 @@ def _notes_to_events(notes: list[object]) -> list[PlaybackMidiEvent]:
 
 
 def _build_phrase_payload(notes: list[object]) -> PhrasePayload:
+    raw_notes = list(notes)
     normalized_notes = _normalize_notes(notes)
     note_payload = [_note_to_schema(note) for note in normalized_notes]
     events = _notes_to_events(normalized_notes)
     duration_seconds = max((note.end_seconds for note in note_payload), default=0.0)
+    handoff_seconds = None
+    if raw_notes:
+        last_note = raw_notes[-1]
+        next_onset_beats = max(
+            0.0,
+            float(last_note.start_time)
+            + max(0.0, float(last_note.duration) + float(getattr(last_note, "next_start_delta", 0.0))),
+        )
+        handoff_seconds = _round_float(next_onset_beats / 2.0)
 
     return PhrasePayload(
         event_count=len(events),
         note_count=len(note_payload),
         duration_seconds=_round_float(duration_seconds),
+        handoff_seconds=handoff_seconds,
         events=events,
         notes=note_payload,
     )
@@ -159,6 +189,7 @@ class ContinuatorSessionEngine:
         forget_past: bool = False,
         keep_last_inputs: int = 20,
         decay_mode: str = "full",
+        markov_order: int = 4,
         seed_midi_file: Path | None = None,
         seed_midi_folder: Path | None = None,
     ) -> None:
@@ -167,23 +198,33 @@ class ContinuatorSessionEngine:
         self._forget_past = forget_past
         self._keep_last_inputs = keep_last_inputs
         self._decay_mode = decay_mode
+        self._markov_order = markov_order
         self._seed_midi_file = seed_midi_file
         self._seed_midi_folder = seed_midi_folder
         self._seed_sequence_count = 0
         self._lock = threading.RLock()
         self._continuator = self._create_engine()
 
-    def _create_engine(self) -> Continuator2:
-        midi_file = str(self._seed_midi_file) if self._seed_midi_file else None
-        engine = Continuator2(midi_file=midi_file, transposition=self._transposition)
-        if self._seed_midi_folder:
+    def _create_engine(self, *, load_seed_material: bool = True) -> Continuator2:
+        midi_file = None
+        if load_seed_material and self._seed_midi_file:
+            midi_file = str(self._seed_midi_file)
+
+        engine = Continuator2(
+            midi_file=midi_file,
+            kmax=self._markov_order,
+            transposition=self._transposition,
+        )
+        if load_seed_material and self._seed_midi_folder:
             engine.learn_folder(str(self._seed_midi_folder), transpose=self._transposition)
         engine.set_learn_input(self._default_learn_input)
         engine.set_transpose(self._transposition)
         engine.set_forget(self._forget_past)
         engine.set_keep_last(self._keep_last_inputs)
         engine.set_decay_mode(self._decay_mode)
-        self._seed_sequence_count = len(getattr(engine.vom, "input_sequences", []))
+        self._seed_sequence_count = (
+            len(getattr(engine.vom, "input_sequences", [])) if load_seed_material else 0
+        )
         return engine
 
     def apply_settings(
@@ -194,22 +235,48 @@ class ContinuatorSessionEngine:
         forget_past: bool | None = None,
         keep_last_inputs: int | None = None,
         decay_mode: str | None = None,
+        markov_order: int | None = None,
     ) -> None:
         with self._lock:
+            rebuild_required = markov_order is not None and markov_order != self._markov_order
+            preserved_payloads: list[PhrasePayload] = []
+            preserved_seed_count = self._seed_sequence_count
+            if rebuild_required:
+                preserved_payloads, preserved_seed_count = self.get_memory_snapshot()
+
             if learn_input is not None:
                 self._default_learn_input = learn_input
-                self._continuator.set_learn_input(learn_input)
             if transposition is not None:
                 self._transposition = transposition
-                self._continuator.set_transpose(transposition)
             if forget_past is not None:
                 self._forget_past = forget_past
-                self._continuator.set_forget(forget_past)
             if keep_last_inputs is not None:
                 self._keep_last_inputs = keep_last_inputs
-                self._continuator.set_keep_last(keep_last_inputs)
             if decay_mode is not None:
                 self._decay_mode = decay_mode
+            if markov_order is not None:
+                self._markov_order = markov_order
+
+            if rebuild_required:
+                self._continuator = self._create_engine(load_seed_material=False)
+                for payload in preserved_payloads:
+                    phrase_events = [MidiEvent.model_validate(event) for event in payload.events]
+                    try:
+                        self._learn_phrase_events_locked(phrase_events, transpose=False)
+                    except NoContinuationAvailable:
+                        continue
+                self._seed_sequence_count = min(preserved_seed_count, len(preserved_payloads))
+                return
+
+            if learn_input is not None:
+                self._continuator.set_learn_input(learn_input)
+            if transposition is not None:
+                self._continuator.set_transpose(transposition)
+            if forget_past is not None:
+                self._continuator.set_forget(forget_past)
+            if keep_last_inputs is not None:
+                self._continuator.set_keep_last(keep_last_inputs)
+            if decay_mode is not None:
                 self._continuator.set_decay_mode(decay_mode)
 
     def reset(self) -> None:
@@ -223,22 +290,132 @@ class ContinuatorSessionEngine:
             seed_count = min(self._seed_sequence_count, len(payloads))
             return payloads, seed_count
 
+    def _learn_phrase_events_locked(
+        self,
+        phrase_events: list[MidiEvent],
+        *,
+        transpose: bool,
+    ) -> PhrasePayload:
+        messages = [_event_to_mido_message(event) for event in phrase_events]
+        input_phrase = self._continuator.get_phrase_from_mido(messages)
+        if not input_phrase:
+            raise NoContinuationAvailable(
+                "The stored phrase did not contain any complete notes to rebuild."
+            )
+        self._continuator.learn_phrase(input_phrase, transpose)
+        return _build_phrase_payload(input_phrase)
+
     def learn_phrase_events(self, phrase_events: list[MidiEvent]) -> PhrasePayload:
         with self._lock:
-            messages = [_event_to_mido_message(event) for event in phrase_events]
-            input_phrase = self._continuator.get_phrase_from_mido(messages)
-            if not input_phrase:
+            return self._learn_phrase_events_locked(
+                phrase_events,
+                transpose=self._continuator.transpose,
+            )
+
+    def import_midi_files(
+        self,
+        midi_files: list[tuple[str, bytes]],
+    ) -> tuple[list[ImportedMidiPhrase], list[str]]:
+        with self._lock:
+            imported: list[ImportedMidiPhrase] = []
+            skipped: list[str] = []
+            with TemporaryDirectory(prefix="continuator-midi-import-") as temp_dir:
+                temp_root = Path(temp_dir)
+                for index, (raw_name, raw_bytes) in enumerate(midi_files):
+                    file_name = _normalize_uploaded_file_name(
+                        raw_name,
+                        f"imported_{index + 1}.mid",
+                    )
+                    suffix = Path(file_name).suffix.lower()
+                    if suffix not in {".mid", ".midi"} or not raw_bytes:
+                        skipped.append(file_name)
+                        continue
+
+                    temp_path = temp_root / f"upload_{index:04d}{suffix}"
+                    temp_path.write_bytes(raw_bytes)
+                    try:
+                        notes = list(self._continuator.extract_notes(str(temp_path)))
+                    except Exception:
+                        skipped.append(file_name)
+                        continue
+
+                    if not notes:
+                        skipped.append(file_name)
+                        continue
+
+                    self._continuator.learn_phrase(notes, self._continuator.transpose)
+                    imported.append(
+                        ImportedMidiPhrase(
+                            file_name=file_name,
+                            payload=_build_phrase_payload(notes),
+                        )
+                    )
+
+            if not imported:
+                raise MidiImportError("No importable MIDI files were found in the selection.")
+
+            return imported, skipped
+
+    def generate_phrase(
+        self,
+        note_count: int | None = None,
+        enforce_end_constraint: bool = True,
+    ) -> tuple[PhrasePayload, str | None]:
+        with self._lock:
+            if not getattr(self._continuator.vom, "input_sequences", []):
                 raise NoContinuationAvailable(
-                    "The stored phrase did not contain any complete notes to rebuild."
+                    "The Continuator memory is empty. Load MIDI or learn a phrase first."
                 )
-            self._continuator.learn_phrase(input_phrase, self._continuator.transpose)
-            return _build_phrase_payload(input_phrase)
+
+            target_note_count = note_count or 12
+            status_message = None
+            if enforce_end_constraint:
+                constraints = {target_note_count: self._continuator.get_end_vp()}
+                generated_sequence = self._continuator.sample_sequence(
+                    prefix=None,
+                    length=target_note_count + 1,
+                    constraints=constraints,
+                )
+                if generated_sequence is None:
+                    generated_sequence = self._continuator.sample_sequence(
+                        prefix=None,
+                        length=target_note_count,
+                        constraints={},
+                    )
+                    status_message = (
+                        "Generated from memory without the hard end constraint "
+                        "because the exact-ending version had no solution."
+                    )
+            else:
+                generated_sequence = self._continuator.sample_sequence(
+                    prefix=None,
+                    length=target_note_count,
+                    constraints={},
+                )
+
+            if generated_sequence is None:
+                raise NoContinuationAvailable(
+                    "The Continuator could not generate a fresh phrase from the current memory."
+                )
+
+            rendered_vp_sequence = generated_sequence
+            if rendered_vp_sequence and rendered_vp_sequence[-1] == self._continuator.get_end_vp():
+                rendered_vp_sequence = rendered_vp_sequence[:-1]
+
+            if not rendered_vp_sequence:
+                raise NoContinuationAvailable(
+                    "The Continuator returned an empty phrase from the current memory."
+                )
+
+            rendered_sequence = self._continuator.realize_vp_sequence(rendered_vp_sequence)
+            return _build_phrase_payload(rendered_sequence), status_message
 
     def continue_phrase(
         self,
         phrase_events: list[MidiEvent],
         learn_input: bool | None = None,
         continuation_note_count: int | None = None,
+        enforce_end_constraint: bool = True,
     ) -> tuple[PhrasePayload, PhrasePayload, str | None]:
         with self._lock:
             messages = [_event_to_mido_message(event) for event in phrase_events]
@@ -254,21 +431,28 @@ class ContinuatorSessionEngine:
                 self._continuator.learn_phrase(input_phrase, self._continuator.transpose)
 
             status_message = None
-            constraints = {target_note_count: self._continuator.get_end_vp()}
-            generated_sequence = self._continuator.sample_sequence(
-                prefix=input_phrase,
-                length=target_note_count + 1,
-                constraints=constraints,
-            )
-            if generated_sequence is None:
+            if enforce_end_constraint:
+                constraints = {target_note_count: self._continuator.get_end_vp()}
+                generated_sequence = self._continuator.sample_sequence(
+                    prefix=input_phrase,
+                    length=target_note_count + 1,
+                    constraints=constraints,
+                )
+                if generated_sequence is None:
+                    generated_sequence = self._continuator.sample_sequence(
+                        prefix=input_phrase,
+                        length=target_note_count,
+                        constraints={},
+                    )
+                    status_message = (
+                        "Used a same-length continuation without the hard end constraint "
+                        "because the exact-ending version had no solution."
+                    )
+            else:
                 generated_sequence = self._continuator.sample_sequence(
                     prefix=input_phrase,
                     length=target_note_count,
                     constraints={},
-                )
-                status_message = (
-                    "Used a same-length continuation without the hard end constraint "
-                    "because the exact-ending version had no solution."
                 )
 
             if generated_sequence is None:

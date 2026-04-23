@@ -164,25 +164,28 @@ class Realized_Chord:
         pending_notes = np.empty(128, dtype=object)
         pending_start_times = np.zeros(128)
         current_time = 0
-        for track in mid.tracks:
-            for msg in track:
-                current_time += 2 * mido.tick2second(msg.time, ticks_per_beat=resolution, tempo=500000)  # in beats
-                if msg.type == "note_on" and msg.velocity > 0:
-                    new_note = Note(msg.note, msg.velocity, 0)
-                    notes.append(new_note)  # Store MIDI note number
-                    pending_notes[msg.note] = new_note
-                    pending_start_times[msg.note] = current_time
-                    new_note.set_start_time(current_time)
-                    new_note.set_duration(1)  # beat
-                if msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
-                    if pending_notes[msg.note] is None:
-                        print("found 0 velocity note, skipping it")
-                        continue
-                    pending_note = pending_notes[msg.note]
-                    duration = current_time - pending_start_times[msg.note]
-                    pending_note.set_duration(duration)
-                    pending_notes[msg.note] = None
-                    pending_start_times[msg.note] = 0
+        for msg in mido.merge_tracks(mid.tracks):
+            current_time += 2 * mido.tick2second(
+                msg.time,
+                ticks_per_beat=resolution,
+                tempo=500000,
+            )  # in beats
+            if msg.type == "note_on" and msg.velocity > 0:
+                new_note = Note(msg.note, msg.velocity, 0)
+                notes.append(new_note)  # Store MIDI note number
+                pending_notes[msg.note] = new_note
+                pending_start_times[msg.note] = current_time
+                new_note.set_start_time(current_time)
+                new_note.set_duration(1)  # beat
+            if msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
+                if pending_notes[msg.note] is None:
+                    print("found 0 velocity note, skipping it")
+                    continue
+                pending_note = pending_notes[msg.note]
+                duration = current_time - pending_start_times[msg.note]
+                pending_note.set_duration(duration)
+                pending_notes[msg.note] = None
+                pending_start_times[msg.note] = 0
         return np.array(notes)
 
     @classmethod

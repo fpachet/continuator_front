@@ -6,13 +6,16 @@ from pathlib import Path
 import threading
 import uuid
 
-from .continuator_adapter import ContinuatorSessionEngine, NoContinuationAvailable
+from .continuator_adapter import ContinuatorSessionEngine, MidiImportError, NoContinuationAvailable
 from .schemas import (
     ContinueRequest,
     ContinueResponse,
     CreateSessionRequest,
     CreateSessionResponse,
+    GeneratePhraseResponse,
     HistoryItem,
+    ImportedMidiFileSummary,
+    ImportMidiResponse,
     MemoryPhraseItem,
     MidiEvent,
     OpenSessionResponse,
@@ -72,6 +75,7 @@ class SessionManager:
             forget_past=request.forget_past,
             keep_last_inputs=request.keep_last_inputs,
             decay_mode=request.decay_mode,
+            markov_order=request.markov_order,
             seeded=self.seeded,
         )
 
@@ -82,6 +86,7 @@ class SessionManager:
             forget_past=configuration.forget_past,
             keep_last_inputs=configuration.keep_last_inputs,
             decay_mode=configuration.decay_mode,
+            markov_order=configuration.markov_order,
             seed_midi_file=self.seed_midi_file,
             seed_midi_folder=self.seed_midi_folder,
         )
@@ -262,6 +267,7 @@ class SessionManager:
             request.phrase,
             learn_input=should_learn,
             continuation_note_count=request.continuation_note_count,
+            enforce_end_constraint=request.enforce_end_constraint,
         )
 
         state.last_seen_at = created_at
@@ -292,6 +298,85 @@ class SessionManager:
             input_phrase=input_phrase,
             generated_phrase=generated_phrase,
             status_message=status_message,
+        )
+
+    def generate_phrase(
+        self,
+        session_id: str,
+        owner_user_id: str | None,
+        note_count: int | None = None,
+        enforce_end_constraint: bool = True,
+    ) -> GeneratePhraseResponse:
+        state = self._require_session(session_id, owner_user_id)
+        created_at = utc_now_iso()
+        request_id = uuid.uuid4().hex
+        generated_phrase, status_message = state.engine.generate_phrase(
+            note_count=note_count,
+            enforce_end_constraint=enforce_end_constraint,
+        )
+
+        state.last_seen_at = created_at
+        self.storage.touch_session(state.session_id, created_at)
+        self.storage.log_phrase(
+            phrase_id=uuid.uuid4().hex,
+            request_id=request_id,
+            session_id=state.session_id,
+            kind="generated",
+            created_at=created_at,
+            learned=False,
+            payload=generated_phrase.model_dump(mode="json"),
+        )
+
+        return GeneratePhraseResponse(
+            session_id=state.session_id,
+            request_id=request_id,
+            created_at=created_at,
+            generated_phrase=generated_phrase,
+            status_message=status_message,
+        )
+
+    def import_midi_files(
+        self,
+        session_id: str,
+        owner_user_id: str | None,
+        midi_files: list[tuple[str, bytes]],
+    ) -> ImportMidiResponse:
+        state = self._require_session(session_id, owner_user_id)
+        if not midi_files:
+            raise MidiImportError("Select at least one MIDI file to import.")
+
+        created_at = utc_now_iso()
+        request_id = uuid.uuid4().hex
+        imported_files, skipped_files = state.engine.import_midi_files(midi_files)
+
+        state.last_seen_at = created_at
+        self.storage.touch_session(state.session_id, created_at)
+        for index, imported_file in enumerate(imported_files):
+            self.storage.log_phrase(
+                phrase_id=f"{request_id}-import-{index:04d}",
+                request_id=request_id,
+                session_id=state.session_id,
+                kind="input",
+                created_at=created_at,
+                learned=True,
+                payload=imported_file.payload.model_dump(mode="json"),
+            )
+
+        return ImportMidiResponse(
+            session_id=state.session_id,
+            created_at=created_at,
+            imported_file_count=len(imported_files),
+            skipped_file_count=len(skipped_files),
+            imported_files=[
+                ImportedMidiFileSummary(
+                    file_name=imported_file.file_name,
+                    event_count=imported_file.payload.event_count,
+                    note_count=imported_file.payload.note_count,
+                    duration_seconds=imported_file.payload.duration_seconds,
+                )
+                for imported_file in imported_files
+            ],
+            skipped_files=skipped_files,
         )
 
     def get_history(
@@ -378,6 +463,7 @@ class SessionManager:
 
 
 __all__ = [
+    "MidiImportError",
     "NoContinuationAvailable",
     "SessionManager",
     "UnknownSessionError",

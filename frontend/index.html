@@ -321,8 +321,8 @@
                   <div>
                     <h3>MIDI I/O</h3>
                     <p class="section-copy">
-                      Connect browser MIDI, choose ports, and capture phrases
-                      from your keyboard.
+                      Connect browser MIDI, choose an input, and route playback
+                      to browser renderers or external synths.
                     </p>
                   </div>
                 </div>
@@ -341,9 +341,9 @@
                   </select>
                 </div>
                 <div class="field">
-                  <label for="midi-output-select">Playback Output</label>
+                  <label for="midi-output-select">Playback Renderer</label>
                   <select id="midi-output-select" disabled>
-                    <option>Browser Synth</option>
+                    <option>Browser Triangle</option>
                   </select>
                 </div>
                 <label class="toggle">
@@ -356,8 +356,8 @@
                     <dd id="selected-input-name">None</dd>
                   </div>
                   <div>
-                    <dt>Selected Output</dt>
-                    <dd id="selected-output-name">Browser Synth</dd>
+                    <dt>Selected Renderer</dt>
+                    <dd id="selected-output-name">Browser Triangle</dd>
                   </div>
                   <div>
                     <dt>Last MIDI Event</dt>
@@ -368,6 +368,163 @@
                     <dd>1 second after final note-off</dd>
                   </div>
                 </dl>
+              </section>
+
+              <section id="faust-renderer-panel" class="panel-section accent-section" hidden>
+                <div class="section-head">
+                  <div>
+                    <h3>Faust Renderer</h3>
+                    <p class="section-copy">
+                      Route playback through the built-in Clavier or compile
+                      your own polyphonic Faust instrument directly in the
+                      browser.
+                    </p>
+                  </div>
+                  <div id="faust-renderer-status" class="status-pill">Idle</div>
+                </div>
+                <div id="faust-clavier-panel">
+                  <div class="faust-control-grid">
+                    <div class="field faust-field">
+                      <div class="faust-label-row">
+                        <label for="faust-brightness-input">Brightness</label>
+                        <output id="faust-brightness-value" for="faust-brightness-input">0.58</output>
+                      </div>
+                      <input
+                        id="faust-brightness-input"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value="0.58"
+                      />
+                    </div>
+                    <div class="field faust-field">
+                      <div class="faust-label-row">
+                        <label for="faust-hardness-input">Hardness</label>
+                        <output id="faust-hardness-value" for="faust-hardness-input">0.34</output>
+                      </div>
+                      <input
+                        id="faust-hardness-input"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value="0.34"
+                      />
+                    </div>
+                    <div class="field faust-field">
+                      <div class="faust-label-row">
+                        <label for="faust-damping-input">Damping</label>
+                        <output id="faust-damping-value" for="faust-damping-input">0.42</output>
+                      </div>
+                      <input
+                        id="faust-damping-input"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value="0.42"
+                      />
+                    </div>
+                    <div class="field faust-field">
+                      <div class="faust-label-row">
+                        <label for="faust-release-input">Release</label>
+                        <output id="faust-release-value" for="faust-release-input">0.95 s</output>
+                      </div>
+                      <input
+                        id="faust-release-input"
+                        type="range"
+                        min="0.08"
+                        max="4"
+                        step="0.01"
+                        value="0.95"
+                      />
+                    </div>
+                    <div class="field faust-field">
+                      <div class="faust-label-row">
+                        <label for="faust-body-input">Body</label>
+                        <output id="faust-body-value" for="faust-body-input">0.33</output>
+                      </div>
+                      <input
+                        id="faust-body-input"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value="0.33"
+                      />
+                    </div>
+                    <div class="field faust-field">
+                      <div class="faust-label-row">
+                        <label for="faust-stereo-input">Stereo</label>
+                        <output id="faust-stereo-value" for="faust-stereo-input">0.45</output>
+                      </div>
+                      <input
+                        id="faust-stereo-input"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.01"
+                        value="0.45"
+                      />
+                    </div>
+                  </div>
+                </div>
+                <div id="faust-custom-panel" hidden>
+                  <div class="section-head faust-section-head">
+                    <div>
+                      <h4>Custom Faust</h4>
+                      <p class="section-copy">
+                        Paste a polyphonic Faust DSP with hidden
+                        <code>freq</code>, <code>gain</code>, and
+                        <code>gate</code> controls, then compile it locally.
+                      </p>
+                    </div>
+                    <div class="button-row faust-editor-actions">
+                      <button id="faust-custom-compile-button" type="button">
+                        Compile &amp; Use
+                      </button>
+                      <button
+                        id="faust-custom-reset-button"
+                        class="ghost"
+                        type="button"
+                      >
+                        Restore Starter
+                      </button>
+                    </div>
+                  </div>
+                  <div class="field faust-editor-field">
+                    <label for="faust-custom-code-input">DSP Source</label>
+                    <textarea
+                      id="faust-custom-code-input"
+                      class="faust-code-input"
+                      spellcheck="false"
+                      autocapitalize="off"
+                      autocomplete="off"
+                    ></textarea>
+                    <p id="faust-custom-dirty-state" class="field-hint">
+                      Edits stay local to this browser. Compile to turn the
+                      latest source into the active renderer.
+                    </p>
+                  </div>
+                  <div class="section-head faust-section-head">
+                    <div>
+                      <h4>Custom Parameters</h4>
+                      <p class="section-copy">
+                        Visible Faust controls appear here automatically after a
+                        successful compile.
+                      </p>
+                    </div>
+                  </div>
+                  <div id="faust-custom-controls" class="faust-control-grid"></div>
+                  <p id="faust-custom-controls-hint" class="field-hint">
+                    Compile a polyphonic instrument to expose its parameters.
+                  </p>
+                </div>
+                <p id="faust-renderer-hint" class="field-hint">
+                  Faust instruments are compiled locally in your browser the
+                  first time you use them.
+                </p>
               </section>
 
               <section class="panel-section">
@@ -382,6 +539,9 @@
                 </div>
                 <div class="button-row">
                   <button id="send-phrase-button">Send Phrase</button>
+                  <button id="generate-memory-button" class="ghost">
+                    Generate From Memory
+                  </button>
                   <button id="replay-generated-button" class="ghost">Replay Output</button>
                   <button id="clear-phrase-button" class="ghost">Clear</button>
                 </div>
@@ -487,6 +647,21 @@
                       <span>Transpose incoming phrases before learning</span>
                     </label>
                     <div class="field">
+                      <label for="markov-order-input">Markov order K</label>
+                      <input
+                        id="markov-order-input"
+                        type="number"
+                        min="1"
+                        max="16"
+                        step="1"
+                        value="4"
+                      />
+                      <p class="field-hint">
+                        Higher K follows longer contexts, but can hit dead ends
+                        sooner.
+                      </p>
+                    </div>
+                    <div class="field">
                       <label for="decay-mode-select">Decay mode</label>
                       <select id="decay-mode-select">
                         <option value="full">Full</option>
@@ -535,6 +710,55 @@
                     <dd id="server-status">Checking…</dd>
                   </div>
                 </dl>
+              </section>
+
+              <section class="panel-section accent-section">
+                <div class="section-head">
+                  <div>
+                    <h3>MIDI Import</h3>
+                    <p class="section-copy">
+                      Load existing MIDI files into the current Continuator
+                      session and use them as live memory.
+                    </p>
+                  </div>
+                </div>
+                <div class="button-row">
+                  <button
+                    id="import-midi-files-button"
+                    class="ghost"
+                    type="button"
+                  >
+                    Import MIDI Files
+                  </button>
+                  <button
+                    id="import-midi-folder-button"
+                    class="ghost"
+                    type="button"
+                  >
+                    Import MIDI Folder
+                  </button>
+                </div>
+                <p class="field-hint">
+                  Imported phrases are learned into the active session memory
+                  and logged like other learned inputs. Folder import works
+                  best in Chromium-based browsers.
+                </p>
+                <input
+                  id="midi-import-input"
+                  type="file"
+                  accept=".mid,.midi,audio/midi"
+                  multiple
+                  hidden
+                />
+                <input
+                  id="midi-folder-import-input"
+                  type="file"
+                  accept=".mid,.midi,audio/midi"
+                  multiple
+                  webkitdirectory
+                  directory
+                  hidden
+                />
               </section>
             </div>
           </section>
@@ -640,6 +864,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20260423-readme-panel"></script>
+    <script type="module" src="/assets/app.js?v=20260423-faust-custom"></script>
   </body>
 </html>

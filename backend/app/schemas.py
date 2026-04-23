@@ -36,6 +36,7 @@ class PhrasePayload(BaseModel):
     event_count: int = Field(ge=0)
     note_count: int = Field(ge=0)
     duration_seconds: float = Field(ge=0.0)
+    handoff_seconds: float | None = Field(default=None, ge=0.0)
     events: list[PlaybackMidiEvent]
     notes: list[PhraseNote]
 
@@ -46,6 +47,7 @@ class CreateSessionRequest(BaseModel):
     forget_past: bool = False
     keep_last_inputs: int = Field(default=20, ge=1, le=500)
     decay_mode: DecayMode = "full"
+    markov_order: int = Field(default=4, ge=1, le=16)
 
 
 class SessionConfiguration(BaseModel):
@@ -54,6 +56,7 @@ class SessionConfiguration(BaseModel):
     forget_past: bool
     keep_last_inputs: int = Field(ge=1, le=500)
     decay_mode: DecayMode
+    markov_order: int = Field(default=4, ge=1, le=16)
     seeded: bool
 
 
@@ -68,6 +71,7 @@ class ContinueRequest(BaseModel):
     phrase: list[MidiEvent] = Field(min_length=1)
     learn_input: bool | None = None
     continuation_note_count: int | None = Field(default=None, ge=1)
+    enforce_end_constraint: bool = True
 
 
 class ContinueResponse(BaseModel):
@@ -77,6 +81,35 @@ class ContinueResponse(BaseModel):
     input_phrase: PhrasePayload
     generated_phrase: PhrasePayload
     status_message: str | None = None
+
+
+class GeneratePhraseRequest(BaseModel):
+    note_count: int | None = Field(default=None, ge=1, le=512)
+    enforce_end_constraint: bool = True
+
+
+class GeneratePhraseResponse(BaseModel):
+    session_id: str
+    request_id: str
+    created_at: str
+    generated_phrase: PhrasePayload
+    status_message: str | None = None
+
+
+class ImportedMidiFileSummary(BaseModel):
+    file_name: str = Field(min_length=1)
+    event_count: int = Field(ge=0)
+    note_count: int = Field(ge=0)
+    duration_seconds: float = Field(ge=0.0)
+
+
+class ImportMidiResponse(BaseModel):
+    session_id: str
+    created_at: str
+    imported_file_count: int = Field(ge=0)
+    skipped_file_count: int = Field(ge=0)
+    imported_files: list[ImportedMidiFileSummary]
+    skipped_files: list[str] = Field(default_factory=list)
 
 
 class HistoryItem(BaseModel):
@@ -129,6 +162,7 @@ class UpdateSessionSettingsRequest(BaseModel):
     forget_past: bool | None = None
     keep_last_inputs: int | None = Field(default=None, ge=1, le=500)
     decay_mode: DecayMode | None = None
+    markov_order: int | None = Field(default=None, ge=1, le=16)
 
 
 class UpdateSessionSettingsResponse(BaseModel):

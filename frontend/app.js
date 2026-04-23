@@ -1,8 +1,35 @@
-const BROWSER_SYNTH_ID = "__browser_synth__";
+const DEFAULT_PLAYBACK_CHOICE = "browser_triangle";
+const FAUST_CLAVIER_ID = "faust_clavier";
+const FAUST_CUSTOM_ID = "faust_custom";
+const WEB_MIDI_RENDERER_ID = "web_midi";
+const PLAYBACK_CHOICE_SEPARATOR = "::";
 const PHRASE_TIMEOUT_MS = 1000;
 const PLAYBACK_START_DELAY_MS = 80;
 const INFINITE_MIN_LOOKAHEAD_MS = 600;
 const INFINITE_MAX_LOOKAHEAD_MS = 2200;
+const FAUST_WASM_ESM_URL = "/assets/vendor/faustwasm/esm/index.js";
+const FAUST_WASM_JS_URL = "/assets/vendor/faustwasm/libfaust-wasm/libfaust-wasm.js";
+const FAUST_WASM_DATA_URL = "/assets/vendor/faustwasm/libfaust-wasm/libfaust-wasm.data";
+const FAUST_WASM_BINARY_URL = "/assets/vendor/faustwasm/libfaust-wasm/libfaust-wasm.wasm";
+const FAUST_CLAVIER_DSP_URL = "/assets/faust/continuator-clavier.dsp";
+const FAUST_CUSTOM_TEMPLATE_DSP_URL = "/assets/faust/custom-poly-template.dsp";
+const FAUST_CUSTOM_SOURCE_STORAGE_KEY = "continuator.faust.custom.source";
+const FAUST_CUSTOM_VALUES_STORAGE_KEY = "continuator.faust.custom.values";
+const FAUST_UI_CONTROL_TYPES = new Set([
+  "hslider",
+  "vslider",
+  "nentry",
+  "checkbox",
+  "button",
+]);
+const FAUST_POLY_RESERVED_SUFFIXES = [
+  "/gate",
+  "/freq",
+  "/gain",
+  "/key",
+  "/vel",
+  "/velocity",
+];
 
 const elements = {
   serverStatus: document.querySelector("#server-status"),
@@ -60,10 +87,34 @@ const elements = {
   viewTabs: document.querySelectorAll("[data-view-tab]"),
   midiInputSelect: document.querySelector("#midi-input-select"),
   midiOutputSelect: document.querySelector("#midi-output-select"),
+  faustRendererPanel: document.querySelector("#faust-renderer-panel"),
+  faustClavierPanel: document.querySelector("#faust-clavier-panel"),
+  faustCustomPanel: document.querySelector("#faust-custom-panel"),
+  faustRendererStatus: document.querySelector("#faust-renderer-status"),
+  faustRendererHint: document.querySelector("#faust-renderer-hint"),
+  faustBrightnessInput: document.querySelector("#faust-brightness-input"),
+  faustBrightnessValue: document.querySelector("#faust-brightness-value"),
+  faustHardnessInput: document.querySelector("#faust-hardness-input"),
+  faustHardnessValue: document.querySelector("#faust-hardness-value"),
+  faustDampingInput: document.querySelector("#faust-damping-input"),
+  faustDampingValue: document.querySelector("#faust-damping-value"),
+  faustReleaseInput: document.querySelector("#faust-release-input"),
+  faustReleaseValue: document.querySelector("#faust-release-value"),
+  faustBodyInput: document.querySelector("#faust-body-input"),
+  faustBodyValue: document.querySelector("#faust-body-value"),
+  faustStereoInput: document.querySelector("#faust-stereo-input"),
+  faustStereoValue: document.querySelector("#faust-stereo-value"),
+  faustCustomCodeInput: document.querySelector("#faust-custom-code-input"),
+  faustCustomCompileButton: document.querySelector("#faust-custom-compile-button"),
+  faustCustomResetButton: document.querySelector("#faust-custom-reset-button"),
+  faustCustomDirtyState: document.querySelector("#faust-custom-dirty-state"),
+  faustCustomControls: document.querySelector("#faust-custom-controls"),
+  faustCustomControlsHint: document.querySelector("#faust-custom-controls-hint"),
   learnInputToggle: document.querySelector("#learn-input-toggle"),
   autoSendToggle: document.querySelector("#auto-send-toggle"),
   transposeToggle: document.querySelector("#transpose-toggle"),
   forgetToggle: document.querySelector("#forget-toggle"),
+  markovOrderInput: document.querySelector("#markov-order-input"),
   keepLastInput: document.querySelector("#keep-last-input"),
   decayModeSelect: document.querySelector("#decay-mode-select"),
   continuationLengthInput: document.querySelector("#continuation-length-input"),
@@ -72,9 +123,14 @@ const elements = {
   createSessionButton: document.querySelector("#create-session-button"),
   resetSessionButton: document.querySelector("#reset-session-button"),
   applySettingsButton: document.querySelector("#apply-settings-button"),
+  importMidiFilesButton: document.querySelector("#import-midi-files-button"),
+  importMidiFolderButton: document.querySelector("#import-midi-folder-button"),
+  midiImportInput: document.querySelector("#midi-import-input"),
+  midiFolderImportInput: document.querySelector("#midi-folder-import-input"),
   connectMidiButton: document.querySelector("#connect-midi-button"),
   refreshMidiButton: document.querySelector("#refresh-midi-button"),
   sendPhraseButton: document.querySelector("#send-phrase-button"),
+  generateMemoryButton: document.querySelector("#generate-memory-button"),
   replayGeneratedButton: document.querySelector("#replay-generated-button"),
   clearPhraseButton: document.querySelector("#clear-phrase-button"),
 };
@@ -90,6 +146,8 @@ const state = {
   sessionConfiguration: null,
   lastCapturedPhrase: [],
   lastGeneratedPhrase: null,
+  lastCapturedAt: 0,
+  lastGeneratedAt: 0,
   historyItems: [],
   memoryItems: [],
   savedSessions: [],
@@ -104,10 +162,98 @@ const state = {
   infiniteScheduleTimerId: null,
   infiniteAbortController: null,
   infiniteRunId: 0,
+  customFaustSource: "",
+  customFaustTemplateSource: "",
+  customFaustControlDescriptors: [],
+  customFaustControlBindings: [],
 };
 
-class BrowserSynth {
-  constructor() {
+function midiToFrequency(note) {
+  return 440 * 2 ** ((note - 69) / 12);
+}
+
+function createTriangleVoice(context, destination, note, velocity, at) {
+  const oscillator = new OscillatorNode(context, {
+    type: "triangle",
+    frequency: midiToFrequency(note),
+  });
+  const gain = new GainNode(context, { gain: 0.0001 });
+  oscillator.connect(gain).connect(destination);
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(
+    Math.max(0.03, (velocity / 127) * 0.2),
+    at + 0.015,
+  );
+  oscillator.start(at);
+
+  return {
+    release(releaseAt, releaseSeconds = 0.08) {
+      gain.gain.cancelScheduledValues(releaseAt);
+      gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), releaseAt);
+      gain.gain.exponentialRampToValueAtTime(0.0001, releaseAt + releaseSeconds);
+      oscillator.stop(releaseAt + releaseSeconds + 0.02);
+    },
+  };
+}
+
+function createElectricVoice(context, destination, note, velocity, at) {
+  const frequency = midiToFrequency(note);
+  const filter = new BiquadFilterNode(context, {
+    type: "lowpass",
+    frequency: 3200,
+    Q: 0.8,
+  });
+  const gain = new GainNode(context, { gain: 0.0001 });
+  const bodyGain = new GainNode(context, { gain: 0.82 });
+  const shimmerGain = new GainNode(context, { gain: 0.18 });
+  const bodyOscillator = new OscillatorNode(context, {
+    type: "triangle",
+    frequency,
+  });
+  const shimmerOscillator = new OscillatorNode(context, {
+    type: "sine",
+    frequency: frequency * 2,
+  });
+
+  bodyOscillator.connect(bodyGain).connect(filter);
+  shimmerOscillator.connect(shimmerGain).connect(filter);
+  filter.connect(gain).connect(destination);
+
+  const peak = Math.max(0.025, (velocity / 127) * 0.17);
+  const sustain = Math.max(0.015, peak * 0.55);
+  gain.gain.setValueAtTime(0.0001, at);
+  gain.gain.exponentialRampToValueAtTime(peak, at + 0.01);
+  gain.gain.exponentialRampToValueAtTime(sustain, at + 0.12);
+  filter.frequency.setValueAtTime(3200, at);
+  filter.frequency.exponentialRampToValueAtTime(1500, at + 0.18);
+
+  bodyOscillator.start(at);
+  shimmerOscillator.start(at);
+
+  return {
+    release(releaseAt, releaseSeconds = 0.16) {
+      gain.gain.cancelScheduledValues(releaseAt);
+      gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), releaseAt);
+      gain.gain.exponentialRampToValueAtTime(0.0001, releaseAt + releaseSeconds);
+      bodyOscillator.stop(releaseAt + releaseSeconds + 0.03);
+      shimmerOscillator.stop(releaseAt + releaseSeconds + 0.03);
+    },
+  };
+}
+
+class BrowserAudioRenderer {
+  constructor({
+    id,
+    label,
+    masterGain = 0.18,
+    createVoice,
+    groupLabel = "Browser Renderers",
+  }) {
+    this.id = id;
+    this.label = label;
+    this.masterGain = masterGain;
+    this.createVoice = createVoice;
+    this.groupLabel = groupLabel;
     this.context = null;
     this.master = null;
     this.activeVoices = new Map();
@@ -116,7 +262,7 @@ class BrowserSynth {
   async ensureContext() {
     if (!this.context) {
       this.context = new window.AudioContext();
-      this.master = new window.GainNode(this.context, { gain: 0.18 });
+      this.master = new GainNode(this.context, { gain: this.masterGain });
       this.master.connect(this.context.destination);
     }
     if (this.context.state === "suspended") {
@@ -124,12 +270,17 @@ class BrowserSynth {
     }
   }
 
-  key(note, channel) {
-    return `${channel}:${note}`;
+  async createPlaybackSession() {
+    await this.ensureContext();
+    return {};
   }
 
-  midiToFrequency(note) {
-    return 440 * 2 ** ((note - 69) / 12);
+  getDisplayName() {
+    return this.label;
+  }
+
+  key(note, channel) {
+    return `${channel}:${note}`;
   }
 
   noteOn(note, channel, velocity) {
@@ -139,21 +290,9 @@ class BrowserSynth {
 
     const at = this.context.currentTime + 0.001;
     const key = this.key(note, channel);
-    const oscillator = new OscillatorNode(this.context, {
-      type: "triangle",
-      frequency: this.midiToFrequency(note),
-    });
-    const gain = new GainNode(this.context, { gain: 0.0001 });
-    oscillator.connect(gain).connect(this.master);
-    gain.gain.setValueAtTime(0.0001, at);
-    gain.gain.exponentialRampToValueAtTime(
-      Math.max(0.03, (velocity / 127) * 0.2),
-      at + 0.015,
-    );
-    oscillator.start(at);
-
+    const voice = this.createVoice(this.context, this.master, note, velocity, at);
     const existing = this.activeVoices.get(key) || [];
-    existing.push({ oscillator, gain });
+    existing.push(voice);
     this.activeVoices.set(key, existing);
   }
 
@@ -168,32 +307,358 @@ class BrowserSynth {
       return;
     }
 
-    const at = this.context.currentTime + 0.001;
     const voice = voices.shift();
-    voice.gain.gain.cancelScheduledValues(at);
-    voice.gain.gain.setValueAtTime(Math.max(0.0001, voice.gain.gain.value), at);
-    voice.gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.08);
-    voice.oscillator.stop(at + 0.1);
+    voice.release(this.context.currentTime + 0.001);
     if (!voices.length) {
       this.activeVoices.delete(key);
     }
   }
 
-  stop() {
-    if (!this.context) {
+  dispatchEvent(playback, event) {
+    if (event.type === "note_on" && event.velocity > 0) {
+      this.noteOn(event.note, event.channel, event.velocity);
       return;
+    }
+    this.noteOff(event.note, event.channel);
+  }
+
+  stopVoices(releaseSeconds = 0.04) {
+    if (!this.context) {
+      return false;
     }
 
     const at = this.context.currentTime + 0.001;
+    const hadVoices = this.activeVoices.size > 0;
     for (const voices of this.activeVoices.values()) {
       for (const voice of voices) {
-        voice.gain.gain.cancelScheduledValues(at);
-        voice.gain.gain.setValueAtTime(Math.max(0.0001, voice.gain.gain.value), at);
-        voice.gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.04);
-        voice.oscillator.stop(at + 0.06);
+        voice.release(at, releaseSeconds);
       }
     }
     this.activeVoices.clear();
+    return hadVoices;
+  }
+
+  stopPlayback() {
+    this.stopVoices(0.04);
+  }
+
+  panicPlayback() {
+    return this.stopVoices(0.02);
+  }
+
+  panicTarget() {
+    return this.stopVoices(0.02);
+  }
+}
+
+function walkFaustUi(items, visit) {
+  for (const item of items || []) {
+    if (Array.isArray(item?.items)) {
+      walkFaustUi(item.items, visit);
+      continue;
+    }
+    visit(item);
+  }
+}
+
+let faustApiPromise = null;
+let faustCompilerBundlePromise = null;
+
+function safeLocalStorageGet(key) {
+  try {
+    return window.localStorage?.getItem(key) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function safeLocalStorageSet(key, value) {
+  try {
+    if (!window.localStorage) {
+      return;
+    }
+    if (value == null) {
+      window.localStorage.removeItem(key);
+      return;
+    }
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Ignore private-browsing or storage-denied failures.
+  }
+}
+
+function createFaustParamPathMap(ui) {
+  const paramPaths = new Map();
+  walkFaustUi(ui, (item) => {
+    const shortname = String(item?.shortname || "");
+    const address = String(item?.address || "");
+    const label = String(item?.label || "");
+    if (!address) {
+      return;
+    }
+    paramPaths.set(address, address);
+    if (shortname && !paramPaths.has(shortname)) {
+      paramPaths.set(shortname, address);
+    }
+    if (label) {
+      const labelTail = label.split("/").pop() || label;
+      const simplifiedLabel = labelTail.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+      if (labelTail && !paramPaths.has(labelTail)) {
+        paramPaths.set(labelTail, address);
+      }
+      if (simplifiedLabel && !paramPaths.has(simplifiedLabel)) {
+        paramPaths.set(simplifiedLabel, address);
+      }
+      const lowercaseLabel = simplifiedLabel.toLowerCase();
+      if (lowercaseLabel && !paramPaths.has(lowercaseLabel)) {
+        paramPaths.set(lowercaseLabel, address);
+      }
+    }
+  });
+  return paramPaths;
+}
+
+async function loadFaustApi() {
+  if (!faustApiPromise) {
+    faustApiPromise = import(FAUST_WASM_ESM_URL);
+  }
+  return faustApiPromise;
+}
+
+async function getFaustCompilerBundle() {
+  if (!faustCompilerBundlePromise) {
+    faustCompilerBundlePromise = (async () => {
+      const api = await loadFaustApi();
+      const faustModule = await api.instantiateFaustModuleFromFile(
+        FAUST_WASM_JS_URL,
+        FAUST_WASM_DATA_URL,
+        FAUST_WASM_BINARY_URL,
+      );
+      return {
+        api,
+        compiler: new api.FaustCompiler(new api.LibFaust(faustModule)),
+      };
+    })();
+  }
+  return faustCompilerBundlePromise;
+}
+
+class FaustPolyRenderer {
+  constructor({
+    id,
+    label,
+    dspUrl,
+    getCode = null,
+    voices = 24,
+    controlDefaults = {},
+    groupLabel = "Faust Instruments",
+    idleDetail = "Ready when you route playback here.",
+  }) {
+    this.id = id;
+    this.label = label;
+    this.dspUrl = dspUrl;
+    this.getCode = getCode;
+    this.voices = voices;
+    this.groupLabel = groupLabel;
+    this.context = null;
+    this.generator = null;
+    this.node = null;
+    this.codePromise = null;
+    this.initializationPromise = null;
+    this.paramPaths = new Map();
+    this.controlValues = new Map(Object.entries(controlDefaults));
+    this.ui = [];
+    this.status = "Idle";
+    this.statusDetail = idleDetail;
+    this.lastError = null;
+    this.lastCompiledCode = null;
+  }
+
+  getDisplayName() {
+    return this.label;
+  }
+
+  setStatus(status, detail) {
+    this.status = status;
+    if (detail != null) {
+      this.statusDetail = detail;
+    }
+    syncFaustRendererPanel();
+  }
+
+  async ensureContext() {
+    if (!this.context) {
+      this.context = new window.AudioContext();
+    }
+    if (this.context.state === "suspended") {
+      await this.context.resume();
+    }
+  }
+
+  async loadCode(forceRefresh = false) {
+    if (this.getCode) {
+      const code = await this.getCode();
+      if (!String(code || "").trim()) {
+        throw new Error("No Faust DSP source is available.");
+      }
+      return code;
+    }
+
+    if (!this.codePromise || forceRefresh) {
+      this.codePromise = fetch(this.dspUrl).then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Unable to load the Faust DSP (${response.status}).`);
+        }
+        return response.text();
+      });
+    }
+    return this.codePromise;
+  }
+
+  captureParamPaths(ui) {
+    this.paramPaths = createFaustParamPathMap(ui);
+  }
+
+  applyControlValues() {
+    if (!this.node) {
+      return;
+    }
+
+    this.controlValues.forEach((value, key) => {
+      const path = this.paramPaths.get(key);
+      if (path) {
+        this.node.setParamValue(path, Number(value));
+      }
+    });
+  }
+
+  getUi() {
+    return this.ui;
+  }
+
+  async ensureNode({ forceRecompile = false } = {}) {
+    await this.ensureContext();
+    if (this.node && !forceRecompile) {
+      return this.node;
+    }
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+
+    const previousNode = this.node;
+    const previousGenerator = this.generator;
+    const previousUi = this.ui;
+    const previousParamPaths = this.paramPaths;
+    this.initializationPromise = (async () => {
+      this.lastError = null;
+      this.setStatus("Loading", `Compiling ${this.label}…`);
+      const [{ api, compiler }, code] = await Promise.all([
+        getFaustCompilerBundle(),
+        this.loadCode(forceRecompile),
+      ]);
+      const generator = new api.FaustPolyDspGenerator();
+      const compiledGenerator = await generator.compile(compiler, this.id, code, "-ftz 2");
+      if (!compiledGenerator) {
+        throw new Error("Faust compilation returned no renderer.");
+      }
+      const nextNode = await compiledGenerator.createNode(this.context, this.voices, this.id);
+      if (!nextNode) {
+        throw new Error("Faust could not create a playable WebAudio node.");
+      }
+      nextNode.connect(this.context.destination);
+      const nextUi = compiledGenerator.getUI();
+      const nextParamPaths = createFaustParamPathMap(nextUi);
+      this.generator = compiledGenerator;
+      this.node = nextNode;
+      this.ui = nextUi;
+      this.paramPaths = nextParamPaths;
+      this.lastCompiledCode = code;
+      this.applyControlValues();
+      if (previousNode && previousNode !== nextNode) {
+        previousNode.allNotesOff?.(true);
+        previousNode.disconnect?.();
+      }
+      this.setStatus("Ready", `${this.voices} polyphonic voices are ready.`);
+      return nextNode;
+    })()
+      .catch((error) => {
+        if (this.node && this.node !== previousNode) {
+          this.node.allNotesOff?.(true);
+          this.node.disconnect?.();
+        }
+        this.node = previousNode;
+        this.generator = previousGenerator;
+        this.ui = previousUi;
+        this.paramPaths = previousParamPaths;
+        this.lastError = error instanceof Error ? error : new Error(String(error));
+        this.setStatus("Error", this.lastError.message);
+        throw this.lastError;
+      })
+      .finally(() => {
+        this.initializationPromise = null;
+      });
+
+    return this.initializationPromise;
+  }
+
+  async prepare(options = {}) {
+    await this.ensureNode(options);
+  }
+
+  setControlValue(key, value) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) {
+      return;
+    }
+
+    this.controlValues.set(key, numericValue);
+    const path = this.paramPaths.get(key);
+    if (this.node && path) {
+      this.node.setParamValue(path, numericValue);
+    }
+    syncFaustRendererPanel();
+  }
+
+  getControlValue(key) {
+    return Number(this.controlValues.get(key));
+  }
+
+  async createPlaybackSession() {
+    const node = await this.ensureNode();
+    return { node };
+  }
+
+  dispatchEvent(playback, event) {
+    if (!playback?.node) {
+      return;
+    }
+
+    if (event.type === "note_on" && event.velocity > 0) {
+      playback.node.keyOn(event.channel, event.note, event.velocity);
+      return;
+    }
+
+    playback.node.keyOff(event.channel, event.note, event.velocity || 0);
+  }
+
+  stopPlayback(playback) {
+    playback?.node?.allNotesOff?.(false);
+  }
+
+  panicPlayback(playback) {
+    if (!playback?.node) {
+      return false;
+    }
+    playback.node.allNotesOff?.(true);
+    return true;
+  }
+
+  panicTarget() {
+    if (!this.node) {
+      return false;
+    }
+    this.node.allNotesOff?.(true);
+    return true;
   }
 }
 
@@ -308,7 +773,171 @@ class PhraseRecorder {
   }
 }
 
-const synth = new BrowserSynth();
+const browserPlaybackRenderers = [
+  new BrowserAudioRenderer({
+    id: "browser_triangle",
+    label: "Browser Triangle",
+    masterGain: 0.18,
+    createVoice: createTriangleVoice,
+  }),
+  new BrowserAudioRenderer({
+    id: "browser_electric",
+    label: "Browser Electric",
+    masterGain: 0.16,
+    createVoice: createElectricVoice,
+  }),
+];
+
+const faustClavierRenderer = new FaustPolyRenderer({
+  id: FAUST_CLAVIER_ID,
+  label: "Faust Clavier",
+  dspUrl: FAUST_CLAVIER_DSP_URL,
+  voices: 24,
+  controlDefaults: {
+    brightness: 0.58,
+    hardness: 0.34,
+    damping: 0.42,
+    release: 0.95,
+    body: 0.33,
+    stereo: 0.45,
+  },
+});
+
+const customFaustRenderer = new FaustPolyRenderer({
+  id: FAUST_CUSTOM_ID,
+  label: "Custom Faust",
+  getCode: async () => {
+    if (state.customFaustSource.trim()) {
+      return state.customFaustSource;
+    }
+    return loadCustomFaustTemplate();
+  },
+  voices: 24,
+  idleDetail: "Paste or edit a polyphonic Faust instrument, then compile it locally.",
+});
+
+const faustClavierControls = [
+  {
+    key: "brightness",
+    input: elements.faustBrightnessInput,
+    output: elements.faustBrightnessValue,
+    format: (value) => Number(value).toFixed(2),
+  },
+  {
+    key: "hardness",
+    input: elements.faustHardnessInput,
+    output: elements.faustHardnessValue,
+    format: (value) => Number(value).toFixed(2),
+  },
+  {
+    key: "damping",
+    input: elements.faustDampingInput,
+    output: elements.faustDampingValue,
+    format: (value) => Number(value).toFixed(2),
+  },
+  {
+    key: "release",
+    input: elements.faustReleaseInput,
+    output: elements.faustReleaseValue,
+    format: (value) => `${Number(value).toFixed(2)} s`,
+  },
+  {
+    key: "body",
+    input: elements.faustBodyInput,
+    output: elements.faustBodyValue,
+    format: (value) => Number(value).toFixed(2),
+  },
+  {
+    key: "stereo",
+    input: elements.faustStereoInput,
+    output: elements.faustStereoValue,
+    format: (value) => Number(value).toFixed(2),
+  },
+];
+
+const localPlaybackRenderers = [
+  ...browserPlaybackRenderers,
+  faustClavierRenderer,
+  customFaustRenderer,
+];
+
+const webMidiRenderer = {
+  id: WEB_MIDI_RENDERER_ID,
+
+  async createPlaybackSession(targetId) {
+    const output = midiOutputById(targetId);
+    if (!output) {
+      throw new Error("Selected MIDI output is unavailable.");
+    }
+    await output.open();
+    return {
+      output,
+      targetId,
+      activeOutputNotes: new Set(),
+    };
+  },
+
+  getDisplayName(targetId) {
+    const output = midiOutputById(targetId);
+    return output ? output.name || output.id : "Unavailable MIDI output";
+  },
+
+  dispatchEvent(playback, event) {
+    const status =
+      event.type === "note_on" && event.velocity > 0
+        ? 0x90 | (event.channel & 0x0f)
+        : 0x80 | (event.channel & 0x0f);
+    sendOutputMessage(playback.output, [status, event.note, event.velocity]);
+
+    const key = outputNoteKey(event.note, event.channel);
+    if (event.type === "note_on" && event.velocity > 0) {
+      playback.activeOutputNotes.add(key);
+    } else {
+      playback.activeOutputNotes.delete(key);
+    }
+  },
+
+  stopPlayback(playback) {
+    if (!playback.output) {
+      return;
+    }
+
+    playback.activeOutputNotes.forEach((key) => {
+      const [channelRaw, noteRaw] = key.split(":");
+      const channel = Number(channelRaw);
+      const note = Number(noteRaw);
+      sendOutputMessage(playback.output, [0x80 | (channel & 0x0f), note, 0]);
+    });
+    sendMidiPanicToOutput(playback.output);
+  },
+
+  panicPlayback(playback) {
+    if (!playback?.output) {
+      return false;
+    }
+    return sendMidiPanicToOutput(playback.output);
+  },
+
+  async panicTarget(targetId) {
+    const output = midiOutputById(targetId);
+    if (!output) {
+      return false;
+    }
+    try {
+      await output.open();
+    } catch {
+      return false;
+    }
+    return sendMidiPanicToOutput(output);
+  },
+};
+
+const playbackRendererRegistry = new Map(
+  [...localPlaybackRenderers, webMidiRenderer].map((renderer) => [
+    renderer.id,
+    renderer,
+  ]),
+);
 const recorder = new PhraseRecorder(
   PHRASE_TIMEOUT_MS,
   (events, completed) => {
@@ -316,10 +945,9 @@ const recorder = new PhraseRecorder(
     renderCapturedStats(events, notes, completed);
   },
   async (phrase) => {
-    state.lastCapturedPhrase = phrase;
+    rememberCapturedPhrase(phrase);
     const notes = eventsToNotes(phrase);
     renderCapturedStats(phrase, notes, true);
-    updateInfiniteActionState();
     setPhraseMessage(
       `Phrase complete: ${phrase.length} events / ${notes.length} notes captured.`,
     );
@@ -350,6 +978,60 @@ function setAuthMessage(message, danger = false) {
 
 function pluralize(value, singular, plural = `${singular}s`) {
   return `${value} ${value === 1 ? singular : plural}`;
+}
+
+function rememberCapturedPhrase(events) {
+  state.lastCapturedPhrase = Array.isArray(events) ? events : [];
+  state.lastCapturedAt = Date.now();
+  updateInfiniteActionState();
+}
+
+function rememberGeneratedPhrase(payload) {
+  state.lastGeneratedPhrase = payload || null;
+  state.lastGeneratedAt = Date.now();
+  updateInfiniteActionState();
+}
+
+function clearRememberedPhrases() {
+  state.lastCapturedPhrase = [];
+  state.lastGeneratedPhrase = null;
+  state.lastCapturedAt = 0;
+  state.lastGeneratedAt = 0;
+  updateInfiniteActionState();
+}
+
+function latestLoopSeedEvents() {
+  const generatedEvents = state.lastGeneratedPhrase?.events || [];
+  if (generatedEvents.length && state.lastGeneratedAt >= state.lastCapturedAt) {
+    return generatedEvents;
+  }
+  if (state.lastCapturedPhrase.length) {
+    return state.lastCapturedPhrase;
+  }
+  return generatedEvents;
+}
+
+function preferredGenerationNoteCount(referenceEvents = null) {
+  const requestedNoteCount = normalizedContinuationNoteCount(
+    elements.continuationLengthInput.value,
+  );
+  if (requestedNoteCount != null) {
+    return requestedNoteCount;
+  }
+
+  if (referenceEvents?.length) {
+    return Math.max(1, eventsToNotes(referenceEvents).length);
+  }
+
+  if (state.lastGeneratedPhrase?.note_count) {
+    return Math.max(1, Number(state.lastGeneratedPhrase.note_count));
+  }
+
+  if (state.lastCapturedPhrase.length) {
+    return Math.max(1, eventsToNotes(state.lastCapturedPhrase).length);
+  }
+
+  return 12;
 }
 
 function renderAccountTrigger() {
@@ -474,6 +1156,14 @@ function normalizedKeepLastInputs(value) {
   return Math.min(500, Math.max(1, Math.round(parsed)));
 }
 
+function normalizedMarkovOrder(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 4;
+  }
+  return Math.min(16, Math.max(1, Math.round(parsed)));
+}
+
 function normalizedContinuationNoteCount(value) {
   if (value == null || value === "") {
     return null;
@@ -483,6 +1173,10 @@ function normalizedContinuationNoteCount(value) {
     return null;
   }
   return Math.max(1, Math.round(parsed));
+}
+
+function hasMidiFileExtension(name) {
+  return /\.(mid|midi)$/i.test(String(name || ""));
 }
 
 function validateAuthCredentials() {
@@ -540,8 +1234,15 @@ function continuationDurationMs(payload) {
   );
 }
 
+function continuationHandoffMs(payload) {
+  if (payload?.handoff_seconds != null) {
+    return Math.max(0, Math.round(Number(payload.handoff_seconds) * 1000));
+  }
+  return continuationDurationMs(payload);
+}
+
 function infiniteLookaheadMs(payload) {
-  const durationMs = continuationDurationMs(payload);
+  const durationMs = continuationHandoffMs(payload);
   return Math.min(
     INFINITE_MAX_LOOKAHEAD_MS,
     Math.max(INFINITE_MIN_LOOKAHEAD_MS, Math.round(durationMs * 0.4)),
@@ -553,18 +1254,20 @@ function readSessionSettingsFromControls() {
     learn_input: elements.learnInputToggle.checked,
     transposition: elements.transposeToggle.checked,
     forget_past: elements.forgetToggle.checked,
+    markov_order: normalizedMarkovOrder(elements.markovOrderInput.value),
     keep_last_inputs: normalizedKeepLastInputs(elements.keepLastInput.value),
     decay_mode: elements.decayModeSelect.value,
   };
 }
 
 function describeSessionSettings(settings) {
+  const orderLabel = `K=${settings.markov_order}`;
   const transposeLabel = settings.transposition ? "Transpose on" : "Transpose off";
   const memoryLabel = settings.forget_past
     ? `Keep last ${settings.keep_last_inputs} phrases`
     : "Keep full memory";
   const decayLabel = `Decay ${settings.decay_mode}`;
-  return [transposeLabel, memoryLabel, decayLabel];
+  return [orderLabel, transposeLabel, memoryLabel, decayLabel];
 }
 
 function renderSessionSettingsSummary() {
@@ -588,6 +1291,9 @@ function syncSettingsControls(configuration) {
   elements.learnInputToggle.checked = configuration.learn_input;
   elements.transposeToggle.checked = configuration.transposition;
   elements.forgetToggle.checked = configuration.forget_past;
+  elements.markovOrderInput.value = String(
+    normalizedMarkovOrder(configuration.markov_order),
+  );
   elements.keepLastInput.value = String(configuration.keep_last_inputs);
   elements.decayModeSelect.value = configuration.decay_mode;
   updateKeepLastFieldState();
@@ -625,15 +1331,13 @@ function formatTimestamp(value) {
 
 function clearPhraseBuffers() {
   stopInfiniteMode({ stopPlayback: true, silent: true });
-  state.lastCapturedPhrase = [];
-  state.lastGeneratedPhrase = null;
+  clearRememberedPhrases();
   state.previewedHistoryIndex = null;
   state.previewedMemoryIndex = null;
   recorder.reset();
   renderCapturedStats([], [], false);
   renderGeneratedStats(null);
   syncPreviewSelection();
-  updateInfiniteActionState();
   setPhraseStatus("Waiting for MIDI");
 }
 
@@ -795,13 +1499,12 @@ function revealPreviewTarget(kind) {
 
 function previewPhrasePayload(payload, kind, message) {
   if (kind === "generated") {
-    state.lastGeneratedPhrase = payload;
+    rememberGeneratedPhrase(payload);
     renderGeneratedStats(payload);
   } else {
-    state.lastCapturedPhrase = payload.events;
+    rememberCapturedPhrase(payload.events);
     renderCapturedStats(payload.events, payload.notes, true);
   }
-  updateInfiniteActionState();
   setPhraseMessage(message);
   revealPreviewTarget(kind);
 }
@@ -884,6 +1587,7 @@ function createMemorySummaryMarkup(memory) {
   if (memory.summary.seeded_phrase_count) {
     chips.push(`${memory.summary.seeded_phrase_count} seed`);
   }
+  chips.push(`K=${memory.configuration.markov_order}`);
   chips.push(memory.configuration.transposition ? "Transpose on" : "Transpose off");
   chips.push(
     memory.configuration.forget_past
@@ -1328,7 +2032,12 @@ async function refreshSessionActivity() {
   await Promise.all([refreshHistory(), refreshMemory()]);
 }
 
-function buildContinuationRequestBody(phraseEvents, learnInput, signal = null) {
+function buildContinuationRequestBody(
+  phraseEvents,
+  learnInput,
+  signal = null,
+  enforceEndConstraint = true,
+) {
   const continuationNoteCount = normalizedContinuationNoteCount(
     elements.continuationLengthInput.value,
   );
@@ -1336,6 +2045,7 @@ function buildContinuationRequestBody(phraseEvents, learnInput, signal = null) {
     session_id: state.sessionId,
     phrase: phraseEvents,
     learn_input: learnInput,
+    enforce_end_constraint: enforceEndConstraint,
   };
   if (continuationNoteCount != null) {
     requestBody.continuation_note_count = continuationNoteCount;
@@ -1362,11 +2072,43 @@ function defaultContinuationMessage(payload, continuationNoteCount) {
 }
 
 function applyContinuationPayload(payload) {
-  state.lastCapturedPhrase = payload.input_phrase.events;
+  rememberCapturedPhrase(payload.input_phrase.events);
   renderCapturedStats(payload.input_phrase.events, payload.input_phrase.notes, true);
-  state.lastGeneratedPhrase = payload.generated_phrase;
+  rememberGeneratedPhrase(payload.generated_phrase);
   renderGeneratedStats(payload.generated_phrase);
-  updateInfiniteActionState();
+}
+
+function applyGeneratedPhrasePayload(payload) {
+  rememberGeneratedPhrase(payload);
+  renderGeneratedStats(payload);
+}
+
+function defaultMidiImportMessage(payload) {
+  const importedCount = Number(payload?.imported_file_count || 0);
+  const skippedCount = Number(payload?.skipped_file_count || 0);
+  const importedNames = Array.isArray(payload?.imported_files)
+    ? payload.imported_files
+        .map((item) => item?.file_name)
+        .filter((value) => typeof value === "string" && value.length)
+    : [];
+
+  let message = `Imported ${pluralize(importedCount, "MIDI file")} into the current session memory.`;
+  if (importedNames.length) {
+    const shownNames = importedNames.slice(0, 3).join(", ");
+    const overflow = importedNames.length > 3 ? `, and ${importedNames.length - 3} more` : "";
+    message += ` ${shownNames}${overflow}.`;
+  }
+  if (skippedCount) {
+    message += ` Skipped ${pluralize(skippedCount, "file")} that were empty, unreadable, or not MIDI.`;
+  }
+  return message;
+}
+
+function defaultMemoryGenerationMessage(payload, requestedNoteCount) {
+  return (
+    payload.status_message ||
+    `Fresh phrase generated from memory: ${payload.generated_phrase.note_count} notes returned from a ${requestedNoteCount}-note request.`
+  );
 }
 
 async function requestContinuationFromEvents(
@@ -1375,6 +2117,7 @@ async function requestContinuationFromEvents(
     learnInput = elements.learnInputToggle.checked,
     statusLabel = "Sending",
     signal = null,
+    enforceEndConstraint = true,
   } = {},
 ) {
   if (!phraseEvents?.length) {
@@ -1387,9 +2130,33 @@ async function requestContinuationFromEvents(
     phraseEvents,
     learnInput,
     signal,
+    enforceEndConstraint,
   );
   const payload = await requestJson("/api/continue", fetchOptions);
   return { payload, continuationNoteCount };
+}
+
+async function requestMemoryGeneration(
+  {
+    noteCount = preferredGenerationNoteCount(),
+    statusLabel = "Generating",
+    signal = null,
+    enforceEndConstraint = true,
+  } = {},
+) {
+  await ensureSession();
+  setPhraseStatus(statusLabel);
+  const requestBody = {
+    note_count: noteCount,
+    enforce_end_constraint: enforceEndConstraint,
+  };
+  const payload = await requestJson(`/api/sessions/${state.sessionId}/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestBody),
+    signal,
+  });
+  return { payload, noteCount };
 }
 
 async function sendCurrentPhrase() {
@@ -1408,6 +2175,62 @@ async function sendCurrentPhrase() {
   setPhraseMessage(defaultContinuationMessage(payload, continuationNoteCount));
 }
 
+async function generateFreshPhrase() {
+  stopInfiniteMode({ stopPlayback: true, silent: true });
+  const { payload, noteCount } = await requestMemoryGeneration({
+    noteCount: preferredGenerationNoteCount(),
+    statusLabel: "Generating",
+  });
+  applyGeneratedPhrasePayload(payload.generated_phrase);
+  if (payload.generated_phrase.event_count > 0) {
+    await playPayload(payload.generated_phrase);
+  }
+  await refreshSessionActivity();
+  await refreshSavedSessions();
+  setPhraseStatus(payload.generated_phrase.note_count ? "Generated" : "Primed");
+  setPhraseMessage(defaultMemoryGenerationMessage(payload, noteCount));
+}
+
+async function importSelectedMidiFiles(fileList, selectionLabel = "selection") {
+  const selectedFiles = Array.from(fileList || []);
+  if (!selectedFiles.length) {
+    return;
+  }
+
+  const midiFiles = selectedFiles.filter((file) =>
+    hasMidiFileExtension(file.webkitRelativePath || file.name),
+  );
+  if (!midiFiles.length) {
+    throw new Error(`No MIDI files were found in the selected ${selectionLabel}.`);
+  }
+
+  stopInfiniteMode({ stopPlayback: true, silent: true });
+  await ensureSession();
+
+  const formData = new FormData();
+  midiFiles.forEach((file, index) => {
+    const uploadName =
+      file.webkitRelativePath || file.name || `imported_${index + 1}.mid`;
+    formData.append("files", file, uploadName);
+  });
+
+  setPhraseMessage(
+    `Importing ${pluralize(midiFiles.length, "MIDI file")} into the current session memory...`,
+  );
+  const payload = await requestJson(`/api/sessions/${state.sessionId}/import-midi`, {
+    method: "POST",
+    body: formData,
+  });
+
+  await refreshSessionActivity();
+  await refreshSavedSessions();
+  setControlView("continuator");
+  setActivityView("memory");
+  setSessionStatus("Ready");
+  setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
+  setPhraseMessage(defaultMidiImportMessage(payload));
+}
+
 async function checkServer() {
   const payload = await requestJson("/health");
   elements.serverStatus.textContent = payload.ok
@@ -1417,11 +2240,439 @@ async function checkServer() {
     : "Unavailable";
 }
 
-function selectedMidiOutput() {
-  if (!state.midiAccess) {
+function midiOutputById(outputId) {
+  if (!state.midiAccess || !outputId) {
     return null;
   }
-  return state.midiAccess.outputs.get(elements.midiOutputSelect.value) || null;
+  return state.midiAccess.outputs.get(outputId) || null;
+}
+
+function selectedPlaybackChoiceValue() {
+  return elements.midiOutputSelect.value || DEFAULT_PLAYBACK_CHOICE;
+}
+
+function encodePlaybackChoice(rendererId, targetId = null) {
+  return targetId
+    ? `${rendererId}${PLAYBACK_CHOICE_SEPARATOR}${targetId}`
+    : rendererId;
+}
+
+function parsePlaybackChoice(choiceValue) {
+  if (!choiceValue) {
+    return {
+      rendererId: DEFAULT_PLAYBACK_CHOICE,
+      targetId: null,
+    };
+  }
+
+  const [rendererId, ...targetParts] = String(choiceValue).split(
+    PLAYBACK_CHOICE_SEPARATOR,
+  );
+  return {
+    rendererId: rendererId || DEFAULT_PLAYBACK_CHOICE,
+    targetId: targetParts.length
+      ? targetParts.join(PLAYBACK_CHOICE_SEPARATOR)
+      : null,
+  };
+}
+
+function resolvePlaybackChoice(choiceValue = selectedPlaybackChoiceValue()) {
+  const { rendererId, targetId } = parsePlaybackChoice(choiceValue);
+  const renderer =
+    playbackRendererRegistry.get(rendererId) ||
+    playbackRendererRegistry.get(DEFAULT_PLAYBACK_CHOICE) ||
+    null;
+  return {
+    value: encodePlaybackChoice(renderer?.id || rendererId, targetId),
+    rendererId: renderer?.id || rendererId,
+    targetId,
+    renderer,
+  };
+}
+
+function selectedPlaybackChoice() {
+  return resolvePlaybackChoice(selectedPlaybackChoiceValue());
+}
+
+function playbackChoiceLabel(choiceValue = selectedPlaybackChoiceValue()) {
+  const choice = resolvePlaybackChoice(choiceValue);
+  return choice.renderer
+    ? choice.renderer.getDisplayName(choice.targetId)
+    : "Unavailable renderer";
+}
+
+async function loadCustomFaustTemplate() {
+  if (state.customFaustTemplateSource) {
+    return state.customFaustTemplateSource;
+  }
+
+  const response = await fetch(FAUST_CUSTOM_TEMPLATE_DSP_URL);
+  if (!response.ok) {
+    throw new Error(`Unable to load the Custom Faust starter template (${response.status}).`);
+  }
+  state.customFaustTemplateSource = await response.text();
+  return state.customFaustTemplateSource;
+}
+
+async function initializeCustomFaustSource() {
+  const storedSource = safeLocalStorageGet(FAUST_CUSTOM_SOURCE_STORAGE_KEY);
+  if (storedSource && storedSource.trim()) {
+    state.customFaustSource = storedSource;
+    elements.faustCustomCodeInput.value = storedSource;
+    return;
+  }
+
+  const template = await loadCustomFaustTemplate();
+  state.customFaustSource = template;
+  elements.faustCustomCodeInput.value = template;
+  safeLocalStorageSet(FAUST_CUSTOM_SOURCE_STORAGE_KEY, template);
+}
+
+function setCustomFaustSource(source, { persist = true } = {}) {
+  state.customFaustSource = String(source ?? "");
+  if (
+    document.activeElement !== elements.faustCustomCodeInput &&
+    elements.faustCustomCodeInput.value !== state.customFaustSource
+  ) {
+    elements.faustCustomCodeInput.value = state.customFaustSource;
+  }
+  if (persist) {
+    safeLocalStorageSet(FAUST_CUSTOM_SOURCE_STORAGE_KEY, state.customFaustSource);
+  }
+}
+
+function selectedFaustRenderer(choiceValue = selectedPlaybackChoiceValue()) {
+  const renderer = resolvePlaybackChoice(choiceValue).renderer;
+  return renderer instanceof FaustPolyRenderer ? renderer : null;
+}
+
+function selectedRendererIsFaust(choiceValue = selectedPlaybackChoiceValue()) {
+  return Boolean(selectedFaustRenderer(choiceValue));
+}
+
+function selectedRendererIsCustomFaust(choiceValue = selectedPlaybackChoiceValue()) {
+  return resolvePlaybackChoice(choiceValue).rendererId === FAUST_CUSTOM_ID;
+}
+
+function clampFaustControlValue(value, descriptor) {
+  if (descriptor.kind !== "range") {
+    return value >= 0.5 ? 1 : 0;
+  }
+  return Math.min(descriptor.max, Math.max(descriptor.min, value));
+}
+
+function faustMetaMap(item) {
+  const meta = {};
+  for (const entry of item?.meta || []) {
+    for (const [key, value] of Object.entries(entry || {})) {
+      meta[key] = value;
+    }
+  }
+  return meta;
+}
+
+function faustLabel(item) {
+  const rawLabel = String(item?.label || item?.shortname || item?.address || "Control");
+  const label = rawLabel.split("/").pop() || rawLabel;
+  const withSpaces = label.replace(/_/g, " ").trim();
+  return withSpaces ? withSpaces.charAt(0).toUpperCase() + withSpaces.slice(1) : "Control";
+}
+
+function faustControlPrecision(step) {
+  const numericStep = Number(step);
+  if (!Number.isFinite(numericStep) || numericStep <= 0 || numericStep >= 1) {
+    return 0;
+  }
+  return Math.min(4, Math.max(0, Math.ceil(-Math.log10(numericStep))));
+}
+
+function formatFaustControlValue(descriptor, value) {
+  if (descriptor.kind === "toggle") {
+    return value >= 0.5 ? "On" : "Off";
+  }
+  const precision = faustControlPrecision(descriptor.step);
+  const formatted = Number(value).toFixed(precision);
+  return descriptor.unit ? `${formatted} ${descriptor.unit}` : formatted;
+}
+
+function loadStoredCustomFaustValues() {
+  const stored = safeLocalStorageGet(FAUST_CUSTOM_VALUES_STORAGE_KEY);
+  if (!stored) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(stored);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function persistCustomFaustValues() {
+  if (!state.customFaustControlDescriptors.length) {
+    safeLocalStorageSet(FAUST_CUSTOM_VALUES_STORAGE_KEY, null);
+    return;
+  }
+
+  const snapshot = {};
+  for (const descriptor of state.customFaustControlDescriptors) {
+    snapshot[descriptor.key] = customFaustRenderer.getControlValue(descriptor.key);
+  }
+  safeLocalStorageSet(FAUST_CUSTOM_VALUES_STORAGE_KEY, JSON.stringify(snapshot));
+}
+
+function buildCustomFaustControlDescriptors(ui) {
+  const storedValues = loadStoredCustomFaustValues();
+  const descriptors = [];
+  walkFaustUi(ui, (item) => {
+    if (!FAUST_UI_CONTROL_TYPES.has(item?.type)) {
+      return;
+    }
+
+    const address = String(item?.address || "");
+    const meta = faustMetaMap(item);
+    if (!address || meta.hidden === "1") {
+      return;
+    }
+    if (FAUST_POLY_RESERVED_SUFFIXES.some((suffix) => address.endsWith(suffix))) {
+      return;
+    }
+
+    const kind =
+      item.type === "checkbox" || item.type === "button" ? "toggle" : "range";
+    const descriptor = {
+      key: address,
+      kind,
+      label: faustLabel(item),
+      unit: String(meta.unit || ""),
+      min: Number.isFinite(Number(item?.min)) ? Number(item.min) : 0,
+      max: Number.isFinite(Number(item?.max)) ? Number(item.max) : 1,
+      step:
+        Number.isFinite(Number(item?.step)) && Number(item.step) > 0
+          ? Number(item.step)
+          : kind === "range"
+            ? 0.01
+            : 1,
+      defaultValue: Number.isFinite(Number(item?.init)) ? Number(item.init) : 0,
+    };
+
+    const existingValue = customFaustRenderer.controlValues.get(descriptor.key);
+    const storedValue = storedValues[descriptor.key];
+    const nextValue = Number.isFinite(Number(existingValue))
+      ? Number(existingValue)
+      : Number.isFinite(Number(storedValue))
+        ? Number(storedValue)
+        : descriptor.defaultValue;
+    descriptor.value = clampFaustControlValue(nextValue, descriptor);
+    descriptors.push(descriptor);
+  });
+
+  customFaustRenderer.controlValues = new Map(
+    descriptors.map((descriptor) => [descriptor.key, descriptor.value]),
+  );
+  return descriptors;
+}
+
+function rebuildCustomFaustControls() {
+  elements.faustCustomControls.replaceChildren();
+  state.customFaustControlBindings = [];
+
+  if (!state.customFaustControlDescriptors.length) {
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+  state.customFaustControlDescriptors.forEach((descriptor, index) => {
+    const field = document.createElement("div");
+    field.className = "field faust-field";
+
+    const labelRow = document.createElement("div");
+    labelRow.className = "faust-label-row";
+
+    const label = document.createElement("label");
+    const output = document.createElement("output");
+    const inputId = `faust-custom-control-${index}`;
+    label.setAttribute("for", inputId);
+    output.setAttribute("for", inputId);
+    label.textContent = descriptor.label;
+
+    let input;
+    if (descriptor.kind === "toggle") {
+      input = document.createElement("input");
+      input.type = "checkbox";
+      input.id = inputId;
+      input.checked = descriptor.value >= 0.5;
+      input.addEventListener("change", () => {
+        const nextValue = input.checked ? 1 : 0;
+        descriptor.value = nextValue;
+        customFaustRenderer.setControlValue(descriptor.key, nextValue);
+        persistCustomFaustValues();
+        syncFaustRendererPanel();
+      });
+    } else {
+      input = document.createElement("input");
+      input.type = "range";
+      input.id = inputId;
+      input.min = String(descriptor.min);
+      input.max = String(descriptor.max);
+      input.step = String(descriptor.step);
+      input.value = String(descriptor.value);
+      input.addEventListener("input", () => {
+        const nextValue = clampFaustControlValue(Number(input.value), descriptor);
+        descriptor.value = nextValue;
+        customFaustRenderer.setControlValue(descriptor.key, nextValue);
+        persistCustomFaustValues();
+        syncFaustRendererPanel();
+      });
+    }
+
+    output.textContent = formatFaustControlValue(descriptor, descriptor.value);
+    labelRow.append(label, output);
+    field.append(labelRow, input);
+    fragment.append(field);
+    state.customFaustControlBindings.push({ descriptor, input, output });
+  });
+
+  elements.faustCustomControls.append(fragment);
+}
+
+function syncCustomFaustControls() {
+  const customSelected = selectedRendererIsCustomFaust();
+  const inputsEnabled =
+    customSelected &&
+    customFaustRenderer.status !== "Loading" &&
+    customFaustRenderer.status !== "Error";
+  for (const binding of state.customFaustControlBindings) {
+    const currentValue = customFaustRenderer.getControlValue(binding.descriptor.key);
+    binding.descriptor.value = clampFaustControlValue(currentValue, binding.descriptor);
+    if (binding.descriptor.kind === "toggle") {
+      binding.input.checked = binding.descriptor.value >= 0.5;
+    } else if (binding.input.value !== String(binding.descriptor.value)) {
+      binding.input.value = String(binding.descriptor.value);
+    }
+    binding.input.disabled = !inputsEnabled;
+    binding.output.textContent = formatFaustControlValue(
+      binding.descriptor,
+      binding.descriptor.value,
+    );
+  }
+
+  elements.faustCustomControlsHint.hidden = state.customFaustControlBindings.length > 0;
+  if (state.customFaustControlBindings.length) {
+    return;
+  }
+  if (customFaustRenderer.status === "Ready") {
+    elements.faustCustomControlsHint.textContent =
+      "This DSP compiled successfully, but it does not expose any visible user parameters.";
+    return;
+  }
+  elements.faustCustomControlsHint.textContent =
+    "Compile a polyphonic instrument to expose its parameters.";
+}
+
+function customFaustHasPendingChanges() {
+  return state.customFaustSource !== (customFaustRenderer.lastCompiledCode || "");
+}
+
+function customFaustDirtyCopy() {
+  if (!state.customFaustSource.trim()) {
+    return "Paste or write a Faust DSP before compiling.";
+  }
+  if (customFaustRenderer.status === "Loading") {
+    return "Compiling the current source in your browser…";
+  }
+  if (customFaustHasPendingChanges()) {
+    return customFaustRenderer.lastCompiledCode
+      ? "Edits are saved locally. Compile to replace the last working build with these changes."
+      : "Compile to turn this source into the active renderer.";
+  }
+  if (customFaustRenderer.status === "Ready") {
+    return "The editor matches the currently active compiled renderer.";
+  }
+  return "Compile to turn the latest source into the active renderer.";
+}
+
+function refreshCustomFaustControlState() {
+  state.customFaustControlDescriptors = buildCustomFaustControlDescriptors(
+    customFaustRenderer.getUi(),
+  );
+  rebuildCustomFaustControls();
+  persistCustomFaustValues();
+}
+
+function syncFaustRendererPanel() {
+  const selectedRenderer = selectedFaustRenderer();
+  const faustSelected = Boolean(selectedRenderer);
+  elements.faustRendererPanel.hidden = !faustSelected;
+  elements.faustClavierPanel.hidden = !faustSelected || selectedRenderer?.id !== FAUST_CLAVIER_ID;
+  elements.faustCustomPanel.hidden = !faustSelected || selectedRenderer?.id !== FAUST_CUSTOM_ID;
+  elements.faustRendererStatus.textContent = selectedRenderer?.status || "Idle";
+
+  let hint = "Faust instruments are compiled locally in your browser the first time you use them.";
+  if (selectedRenderer?.lastError) {
+    hint = `Faust renderer error: ${selectedRenderer.lastError.message}`;
+  } else if (selectedRenderer?.id === FAUST_CLAVIER_ID) {
+    if (selectedRenderer.status === "Loading") {
+      hint =
+        "Compiling the built-in Faust Clavier in your browser. Once it is ready, these controls update the live renderer.";
+    } else if (selectedRenderer.status === "Ready") {
+      hint =
+        "These controls are live on the built-in Faust Clavier. They shape attack, damping, release, body resonance, and stereo spread.";
+    }
+  } else if (selectedRenderer?.id === FAUST_CUSTOM_ID) {
+    if (selectedRenderer.status === "Loading") {
+      hint = "Compiling your Custom Faust source in the browser and rebuilding its parameter panel.";
+    } else if (customFaustHasPendingChanges()) {
+      hint =
+        "Custom Faust keeps using the last compiled build until you compile the latest source in the editor.";
+    } else if (selectedRenderer.status === "Ready") {
+      hint =
+        "The Custom Faust renderer is active. Any visible Faust controls from your DSP appear below automatically.";
+    }
+  }
+  elements.faustRendererHint.textContent = hint;
+
+  for (const control of faustClavierControls) {
+    const value = faustClavierRenderer.getControlValue(control.key);
+    const inputValue = String(value);
+    if (control.input.value !== inputValue) {
+      control.input.value = inputValue;
+    }
+    control.input.disabled =
+      !faustSelected ||
+      selectedRenderer?.id !== FAUST_CLAVIER_ID ||
+      selectedRenderer.status === "Loading";
+    control.output.textContent = control.format(value);
+  }
+
+  if (document.activeElement !== elements.faustCustomCodeInput) {
+    elements.faustCustomCodeInput.value = state.customFaustSource;
+  }
+  elements.faustCustomCompileButton.disabled =
+    !state.customFaustSource.trim() || customFaustRenderer.status === "Loading";
+  elements.faustCustomResetButton.disabled = customFaustRenderer.status === "Loading";
+  elements.faustCustomDirtyState.textContent = customFaustDirtyCopy();
+  syncCustomFaustControls();
+}
+
+async function createPlaybackSession(choiceValue = selectedPlaybackChoiceValue()) {
+  const choice = resolvePlaybackChoice(choiceValue);
+  if (!choice.renderer) {
+    throw new Error("Selected playback renderer is unavailable.");
+  }
+
+  const rendererState = (await choice.renderer.createPlaybackSession?.(choice.targetId)) || {};
+  return {
+    renderer: choice.renderer,
+    rendererId: choice.renderer.id,
+    targetId: choice.targetId,
+    choiceValue: choice.value,
+    timerIds: new Set(),
+    cleanupTimerId: null,
+    handoffAtMs: performance.now(),
+    endsAtMs: performance.now(),
+    ...rendererState,
+  };
 }
 
 function outputNoteKey(note, channel) {
@@ -1436,6 +2687,50 @@ function sendOutputMessage(output, message) {
   }
 }
 
+function sendMidiPanicToOutput(output) {
+  if (!output) {
+    return false;
+  }
+
+  for (let channel = 0; channel < 16; channel += 1) {
+    sendOutputMessage(output, [0xb0 | channel, 64, 0]);
+    sendOutputMessage(output, [0xb0 | channel, 121, 0]);
+    for (let note = 0; note < 128; note += 1) {
+      sendOutputMessage(output, [0x80 | (channel & 0x0f), note, 0]);
+    }
+    sendOutputMessage(output, [0xb0 | channel, 123, 0]);
+    sendOutputMessage(output, [0xb0 | channel, 120, 0]);
+  }
+  return true;
+}
+
+async function sendPlaybackPanic() {
+  let sent = false;
+  const activePlayback = state.activePlayback;
+
+  if (activePlayback?.renderer?.panicPlayback) {
+    sent = (await activePlayback.renderer.panicPlayback(activePlayback)) || sent;
+  }
+
+  for (const renderer of localPlaybackRenderers) {
+    if (activePlayback?.renderer === renderer) {
+      continue;
+    }
+    sent = (await renderer.panicTarget()) || sent;
+  }
+
+  const selectedChoice = selectedPlaybackChoice();
+  const matchesActiveSelection =
+    activePlayback &&
+    activePlayback.rendererId === selectedChoice.rendererId &&
+    activePlayback.targetId === selectedChoice.targetId;
+  if (!matchesActiveSelection && selectedChoice.renderer?.panicTarget) {
+    sent = (await selectedChoice.renderer.panicTarget(selectedChoice.targetId)) || sent;
+  }
+
+  return sent;
+}
+
 function stopActivePlayback() {
   const playback = state.activePlayback;
   if (!playback) {
@@ -1445,51 +2740,16 @@ function stopActivePlayback() {
   playback.timerIds.forEach((timerId) => {
     window.clearTimeout(timerId);
   });
-
-  if (playback.output) {
-    playback.activeOutputNotes.forEach((key) => {
-      const [channelRaw, noteRaw] = key.split(":");
-      const channel = Number(channelRaw);
-      const note = Number(noteRaw);
-      sendOutputMessage(playback.output, [0x80 | (channel & 0x0f), note, 0]);
-    });
-
-    for (let channel = 0; channel < 16; channel += 1) {
-      sendOutputMessage(playback.output, [0xb0 | channel, 64, 0]);
-      sendOutputMessage(playback.output, [0xb0 | channel, 123, 0]);
-      sendOutputMessage(playback.output, [0xb0 | channel, 120, 0]);
-    }
-  }
-
-  synth.stop();
+  playback.timerIds.clear();
+  playback.cleanupTimerId = null;
+  playback.renderer?.stopPlayback?.(playback);
   state.activePlayback = null;
   updateInfiniteActionState();
   return true;
 }
 
 function dispatchPlaybackEvent(playback, event) {
-  if (playback.output) {
-    const status =
-      event.type === "note_on" && event.velocity > 0
-        ? 0x90 | (event.channel & 0x0f)
-        : 0x80 | (event.channel & 0x0f);
-    sendOutputMessage(playback.output, [status, event.note, event.velocity]);
-
-    const key = outputNoteKey(event.note, event.channel);
-    if (event.type === "note_on" && event.velocity > 0) {
-      playback.activeOutputNotes.add(key);
-    } else {
-      playback.activeOutputNotes.delete(key);
-    }
-    return;
-  }
-
-  if (event.type === "note_on" && event.velocity > 0) {
-    synth.noteOn(event.note, event.channel, event.velocity);
-    return;
-  }
-
-  synth.noteOff(event.note, event.channel);
+  playback.renderer?.dispatchEvent?.(playback, event);
 }
 
 async function playPayload(
@@ -1506,26 +2766,7 @@ async function playPayload(
   let playback = state.activePlayback;
   if (!append || !playback) {
     stopActivePlayback();
-
-    let output = null;
-    if (elements.midiOutputSelect.value !== BROWSER_SYNTH_ID) {
-      output = selectedMidiOutput();
-      if (output) {
-        await output.open();
-      }
-    }
-
-    if (!output) {
-      await synth.ensureContext();
-    }
-
-    playback = {
-      output,
-      timerIds: new Set(),
-      activeOutputNotes: new Set(),
-      cleanupTimerId: null,
-      endsAtMs: performance.now(),
-    };
+    playback = await createPlaybackSession();
     state.activePlayback = playback;
   }
 
@@ -1537,6 +2778,7 @@ async function playPayload(
 
   const scheduleDelayMs = Math.max(0, startDelayMs);
   const scheduleBaseMs = performance.now();
+  const handoffMs = continuationHandoffMs(payload);
   let cursorMs = 0;
   for (const event of payload.events) {
     cursorMs += event.delta_seconds * 1000;
@@ -1559,6 +2801,10 @@ async function playPayload(
   }, scheduleDelayMs + cursorMs + 200);
   playback.cleanupTimerId = cleanupTimerId;
   playback.timerIds.add(cleanupTimerId);
+  playback.handoffAtMs = Math.max(
+    playback.handoffAtMs,
+    scheduleBaseMs + scheduleDelayMs + handoffMs,
+  );
   playback.endsAtMs = Math.max(playback.endsAtMs, scheduleBaseMs + scheduleDelayMs + cursorMs);
   updateInfiniteActionState();
 }
@@ -1603,12 +2849,14 @@ function stopLoopAndPlayback(message) {
 
   if (hadInfiniteState) {
     stopInfiniteMode({ stopPlayback: true, silent: true });
+    void sendPlaybackPanic();
     setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
     setPhraseMessage(message || "Infinite mode stopped.");
     return true;
   }
 
   if (stopActivePlayback()) {
+    void sendPlaybackPanic();
     setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
     setPhraseMessage(message || "Playback stopped.");
     return true;
@@ -1624,8 +2872,8 @@ function scheduleInfiniteStep(prefixPayload, runId) {
 
   clearInfiniteScheduler();
   const remainingPlaybackMs = state.activePlayback
-    ? Math.max(0, state.activePlayback.endsAtMs - performance.now())
-    : continuationDurationMs(prefixPayload);
+    ? Math.max(0, state.activePlayback.handoffAtMs - performance.now())
+    : continuationHandoffMs(prefixPayload);
   const delayMs = Math.max(0, remainingPlaybackMs - infiniteLookaheadMs(prefixPayload));
 
   state.infiniteScheduleTimerId = window.setTimeout(() => {
@@ -1648,30 +2896,70 @@ async function runInfiniteStep(prefixEvents, runId) {
   state.infiniteAbortController = abortController;
   updateInfiniteActionState();
 
+  const continueInfiniteFromMemory = async (reason) => {
+    const { payload } = await requestMemoryGeneration({
+      noteCount: preferredGenerationNoteCount(prefixEvents),
+      statusLabel: state.activePlayback ? "Re-seeding from memory" : "Generating from memory",
+      signal: abortController.signal,
+      enforceEndConstraint: false,
+    });
+    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
+      return true;
+    }
+
+    const generatedPhrase = payload.generated_phrase;
+    if (!generatedPhrase.event_count) {
+      throw new Error("the memory fallback returned an empty phrase");
+    }
+
+    applyGeneratedPhrasePayload(generatedPhrase);
+    const startDelayMs = state.activePlayback
+      ? Math.max(0, state.activePlayback.handoffAtMs - performance.now())
+      : PLAYBACK_START_DELAY_MS;
+    await playPayload(generatedPhrase, {
+      startDelayMs,
+      append: Boolean(state.activePlayback),
+    });
+    await refreshSessionActivity();
+    await refreshSavedSessions();
+    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
+      return true;
+    }
+
+    setPhraseStatus("Infinite");
+    setPhraseMessage(
+      payload.status_message ||
+        `Infinite mode resumed from memory because ${reason}.`,
+    );
+    scheduleInfiniteStep(generatedPhrase, runId);
+    return true;
+  };
+
   try {
     const { payload } = await requestContinuationFromEvents(prefixEvents, {
       learnInput: false,
       statusLabel: state.activePlayback ? "Queueing next" : "Sending",
       signal: abortController.signal,
+      enforceEndConstraint: false,
     });
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
       return;
     }
 
-    applyContinuationPayload(payload);
-    if (!payload.generated_phrase.event_count) {
-      stopInfiniteMode({
-        stopPlayback: false,
-        message: "Infinite mode stopped because the latest continuation was empty.",
-      });
-      setPhraseStatus("Primed");
+    const generatedPhrase = payload.generated_phrase;
+    applyContinuationPayload({
+      ...payload,
+      generated_phrase: generatedPhrase,
+    });
+    if (!generatedPhrase.event_count) {
+      await continueInfiniteFromMemory("the latest continuation was empty");
       return;
     }
 
     const startDelayMs = state.activePlayback
-      ? Math.max(0, state.activePlayback.endsAtMs - performance.now())
+      ? Math.max(0, state.activePlayback.handoffAtMs - performance.now())
       : PLAYBACK_START_DELAY_MS;
-    await playPayload(payload.generated_phrase, {
+    await playPayload(generatedPhrase, {
       startDelayMs,
       append: Boolean(state.activePlayback),
     });
@@ -1683,13 +2971,25 @@ async function runInfiniteStep(prefixEvents, runId) {
 
     setPhraseStatus("Infinite");
     setPhraseMessage(
-      `Infinite mode running: ${payload.generated_phrase.note_count} notes queued from the latest continuation.`,
+      `Infinite mode running: ${generatedPhrase.note_count} notes queued from the latest continuation.`,
     );
-    scheduleInfiniteStep(payload.generated_phrase, runId);
+    scheduleInfiniteStep(generatedPhrase, runId);
   } catch (error) {
     if (error.name === "AbortError") {
       return;
     }
+
+    try {
+      const resumed = await continueInfiniteFromMemory(
+        "the latest continuation reached a dead end",
+      );
+      if (resumed) {
+        return;
+      }
+    } catch (fallbackError) {
+      error = fallbackError;
+    }
+
     if (runId === state.infiniteRunId) {
       stopInfiniteMode({
         stopPlayback: false,
@@ -1723,9 +3023,7 @@ async function startInfiniteMode() {
     return;
   }
 
-  const seedEvents = state.lastCapturedPhrase.length
-    ? state.lastCapturedPhrase
-    : state.lastGeneratedPhrase?.events || [];
+  const seedEvents = latestLoopSeedEvents();
   if (!seedEvents.length) {
     setPhraseMessage("Play or preview a phrase before starting infinite mode.", true);
     return;
@@ -1746,13 +3044,18 @@ async function startInfiniteMode() {
     const { payload } = await requestContinuationFromEvents(seedEvents, {
       learnInput: elements.learnInputToggle.checked,
       signal: abortController.signal,
+      enforceEndConstraint: false,
     });
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
       return;
     }
 
-    applyContinuationPayload(payload);
-    if (!payload.generated_phrase.event_count) {
+    const generatedPhrase = payload.generated_phrase;
+    applyContinuationPayload({
+      ...payload,
+      generated_phrase: generatedPhrase,
+    });
+    if (!generatedPhrase.event_count) {
       stopInfiniteMode({
         stopPlayback: false,
         message: "Infinite mode stopped because the first continuation was empty.",
@@ -1761,7 +3064,7 @@ async function startInfiniteMode() {
       return;
     }
 
-    await playPayload(payload.generated_phrase);
+    await playPayload(generatedPhrase);
     await refreshSessionActivity();
     await refreshSavedSessions();
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
@@ -1770,9 +3073,9 @@ async function startInfiniteMode() {
 
     setPhraseStatus("Infinite");
     setPhraseMessage(
-      `Infinite mode running: ${payload.generated_phrase.note_count} notes in the first continuation.`,
+      `Infinite mode running: ${generatedPhrase.note_count} notes in the first continuation.`,
     );
-    scheduleInfiniteStep(payload.generated_phrase, runId);
+    scheduleInfiniteStep(generatedPhrase, runId);
   } catch (error) {
     if (error.name === "AbortError") {
       return;
@@ -1793,15 +3096,59 @@ async function startInfiniteMode() {
   }
 }
 
+function populatePlaybackChoices() {
+  const outputs = state.midiAccess ? [...state.midiAccess.outputs.values()] : [];
+  const previousChoiceValue = selectedPlaybackChoiceValue();
+  const availableChoices = new Set([
+    ...localPlaybackRenderers.map((renderer) => encodePlaybackChoice(renderer.id)),
+    ...outputs.map((output) =>
+      encodePlaybackChoice(WEB_MIDI_RENDERER_ID, output.id),
+    ),
+  ]);
+
+  const localRendererGroups = new Map();
+  for (const renderer of localPlaybackRenderers) {
+    const groupLabel = renderer.groupLabel || "Playback Renderers";
+    const existing = localRendererGroups.get(groupLabel) || [];
+    existing.push(
+      `<option value="${encodePlaybackChoice(renderer.id)}">${renderer.getDisplayName()}</option>`,
+    );
+    localRendererGroups.set(groupLabel, existing);
+  }
+  const midiOptions = outputs
+    .map(
+      (output) =>
+        `<option value="${encodePlaybackChoice(
+          WEB_MIDI_RENDERER_ID,
+          output.id,
+        )}">${output.name || output.id}</option>`,
+    )
+    .join("");
+
+  elements.midiOutputSelect.disabled = false;
+  elements.midiOutputSelect.innerHTML = [
+    ...Array.from(localRendererGroups.entries()).map(
+      ([groupLabel, options]) =>
+        `<optgroup label="${groupLabel}">${options.join("")}</optgroup>`,
+    ),
+    midiOptions ? `<optgroup label="External MIDI">${midiOptions}</optgroup>` : "",
+  ]
+    .filter(Boolean)
+    .join("");
+  elements.midiOutputSelect.value = availableChoices.has(previousChoiceValue)
+    ? previousChoiceValue
+    : DEFAULT_PLAYBACK_CHOICE;
+  updateSelectedOutput();
+}
+
 async function populateMidiSelectors() {
+  populatePlaybackChoices();
   if (!state.midiAccess) {
     return;
   }
 
   const inputs = [...state.midiAccess.inputs.values()];
-  const outputs = [...state.midiAccess.outputs.values()];
   const previousInputId = elements.midiInputSelect.value;
-  const previousOutputId = elements.midiOutputSelect.value;
 
   elements.midiInputSelect.disabled = false;
   elements.midiInputSelect.innerHTML = inputs.length
@@ -1812,23 +3159,6 @@ async function populateMidiSelectors() {
         )
         .join("")
     : `<option value="">No MIDI inputs found</option>`;
-
-  elements.midiOutputSelect.disabled = false;
-  const outputOptions = [
-    `<option value="${BROWSER_SYNTH_ID}">Browser Synth</option>`,
-    ...outputs.map(
-      (output) =>
-        `<option value="${output.id}">${output.name || output.id}</option>`,
-    ),
-  ];
-  elements.midiOutputSelect.innerHTML = outputOptions.join("");
-  elements.midiOutputSelect.value =
-    previousOutputId &&
-    (previousOutputId === BROWSER_SYNTH_ID ||
-      state.midiAccess.outputs.has(previousOutputId))
-      ? previousOutputId
-      : BROWSER_SYNTH_ID;
-  updateSelectedOutput();
 
   if (inputs.length) {
     const inputId = state.midiAccess.inputs.has(previousInputId)
@@ -1919,14 +3249,20 @@ async function connectMidi() {
 }
 
 function updateSelectedOutput() {
-  const outputId = elements.midiOutputSelect.value;
-  if (outputId === BROWSER_SYNTH_ID) {
-    setSelectedOutputName("Browser Synth");
-    return;
+  setSelectedOutputName(playbackChoiceLabel());
+  syncFaustRendererPanel();
+}
+
+async function compileCustomFaustFromEditor() {
+  const source = elements.faustCustomCodeInput.value;
+  if (!source.trim()) {
+    throw new Error("Paste or write a Faust DSP before compiling.");
   }
 
-  const output = selectedMidiOutput();
-  setSelectedOutputName(output ? output.name || output.id : "Unavailable output");
+  setCustomFaustSource(source);
+  stopLoopAndPlayback("Stopped playback before recompiling Custom Faust.");
+  await customFaustRenderer.prepare({ forceRecompile: true });
+  refreshCustomFaustControlState();
 }
 
 function clearPhrases() {
@@ -2102,6 +3438,15 @@ function bindEvents() {
     }
   });
 
+  elements.generateMemoryButton.addEventListener("click", async () => {
+    try {
+      await generateFreshPhrase();
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+      setPhraseStatus("Error");
+    }
+  });
+
   elements.replayGeneratedButton.addEventListener("click", async () => {
     if (!state.lastGeneratedPhrase) {
       setPhraseMessage("No generated phrase is available yet.", true);
@@ -2152,16 +3497,59 @@ function bindEvents() {
 
   elements.midiOutputSelect.addEventListener("change", async () => {
     updateSelectedOutput();
-    const output = selectedMidiOutput();
-    if (output) {
-      try {
+    const choice = selectedPlaybackChoice();
+    try {
+      if (choice.rendererId === WEB_MIDI_RENDERER_ID) {
+        const output = midiOutputById(choice.targetId);
+        if (!output) {
+          setPhraseMessage("The selected MIDI output is unavailable.", true);
+          return;
+        }
         await output.open();
-      } catch (error) {
-        setPhraseMessage(error.message, true);
-        return;
+      } else if (choice.renderer instanceof FaustPolyRenderer) {
+        await choice.renderer.prepare();
+        if (choice.rendererId === FAUST_CUSTOM_ID) {
+          refreshCustomFaustControlState();
+        }
       }
+      setPhraseMessage(`Playback renderer set to ${elements.selectedOutputName.textContent}.`);
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    } finally {
+      syncFaustRendererPanel();
     }
-    setPhraseMessage(`Playback output set to ${elements.selectedOutputName.textContent}.`);
+  });
+
+  faustClavierControls.forEach((control) => {
+    control.input.addEventListener("input", () => {
+      faustClavierRenderer.setControlValue(control.key, control.input.value);
+    });
+  });
+
+  elements.faustCustomCodeInput.addEventListener("input", () => {
+    setCustomFaustSource(elements.faustCustomCodeInput.value);
+    syncFaustRendererPanel();
+  });
+
+  elements.faustCustomCompileButton.addEventListener("click", async () => {
+    try {
+      await compileCustomFaustFromEditor();
+      setPhraseMessage("Custom Faust compiled and is ready for playback.");
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+      setPhraseStatus("Error");
+    }
+  });
+
+  elements.faustCustomResetButton.addEventListener("click", async () => {
+    try {
+      const starter = await loadCustomFaustTemplate();
+      setCustomFaustSource(starter);
+      syncFaustRendererPanel();
+      setPhraseMessage("Restored the Custom Faust starter template. Compile to use it.");
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
   });
 
   elements.learnInputToggle.addEventListener("change", () => {
@@ -2169,6 +3557,13 @@ function bindEvents() {
   });
 
   elements.transposeToggle.addEventListener("change", () => {
+    renderSessionSettingsSummary();
+  });
+
+  elements.markovOrderInput.addEventListener("change", () => {
+    elements.markovOrderInput.value = String(
+      normalizedMarkovOrder(elements.markovOrderInput.value),
+    );
     renderSessionSettingsSummary();
   });
 
@@ -2196,6 +3591,36 @@ function bindEvents() {
       noteCount == null ? "" : String(noteCount);
   });
 
+  elements.importMidiFilesButton.addEventListener("click", () => {
+    elements.midiImportInput.click();
+  });
+
+  elements.importMidiFolderButton.addEventListener("click", () => {
+    elements.midiFolderImportInput.click();
+  });
+
+  elements.midiImportInput.addEventListener("change", async (event) => {
+    const input = event.target;
+    try {
+      await importSelectedMidiFiles(input.files, "file selection");
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    } finally {
+      input.value = "";
+    }
+  });
+
+  elements.midiFolderImportInput.addEventListener("change", async (event) => {
+    const input = event.target;
+    try {
+      await importSelectedMidiFiles(input.files, "folder");
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    } finally {
+      input.value = "";
+    }
+  });
+
   window.addEventListener("resize", () => {
     drawPianoRoll(
       elements.inputRoll,
@@ -2209,13 +3634,20 @@ function bindEvents() {
 
 async function initialize() {
   bindEvents();
+  try {
+    await initializeCustomFaustSource();
+  } catch (error) {
+    setPhraseMessage(error.message, true);
+  }
+  populatePlaybackChoices();
   syncAuthUI();
   renderSavedSessions([]);
   clearCurrentSessionState();
   setControlView("perform");
   setActivityView("history");
   setSelectedInputName("No MIDI input selected");
-  setSelectedOutputName("Browser Synth");
+  updateSelectedOutput();
+  syncFaustRendererPanel();
   setLastMidiEvent("None yet");
   updateKeepLastFieldState();
   renderSessionSettingsSummary();
