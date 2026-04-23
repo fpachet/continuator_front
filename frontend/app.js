@@ -7,6 +7,10 @@ const INFINITE_MAX_LOOKAHEAD_MS = 2200;
 const elements = {
   serverStatus: document.querySelector("#server-status"),
   controlWorkspace: document.querySelector(".control-workspace"),
+  openReadmeButton: document.querySelector("#open-readme-button"),
+  closeReadmeButton: document.querySelector("#close-readme-button"),
+  readmePanel: document.querySelector("#readme-panel"),
+  readmeOverlay: document.querySelector("#readme-overlay"),
   accountPanel: document.querySelector("#account-panel"),
   accountPanelCopy: document.querySelector("#account-panel-copy"),
   authStatus: document.querySelector("#auth-status"),
@@ -81,6 +85,7 @@ const state = {
   authUser: null,
   sessionId: null,
   sessionIsOwned: false,
+  readmeOpen: false,
   accountPanelOpen: false,
   sessionConfiguration: null,
   lastCapturedPhrase: [],
@@ -366,6 +371,20 @@ function renderAccountTrigger() {
   elements.authAvatar.textContent = "G";
   elements.authStatusLabel.textContent = "Guest mode";
   elements.authStatusCopy.textContent = "Click to sign in";
+}
+
+function setReadmeOpen(open) {
+  state.readmeOpen = open;
+  elements.readmePanel.hidden = !open;
+  elements.readmeOverlay.hidden = !open;
+  elements.openReadmeButton.setAttribute("aria-expanded", String(open));
+  document.body.classList.toggle("sheet-open", open);
+  if (open) {
+    setAccountPanelOpen(false);
+    window.requestAnimationFrame(() => {
+      elements.closeReadmeButton?.focus();
+    });
+  }
 }
 
 function setAccountPanelOpen(open) {
@@ -1985,7 +2004,22 @@ function bindEvents() {
     });
   });
 
+  elements.openReadmeButton.addEventListener("click", () => {
+    setReadmeOpen(!state.readmeOpen);
+  });
+
+  elements.closeReadmeButton.addEventListener("click", () => {
+    setReadmeOpen(false);
+  });
+
+  elements.readmeOverlay.addEventListener("click", () => {
+    setReadmeOpen(false);
+  });
+
   elements.authStatus.addEventListener("click", () => {
+    if (state.readmeOpen) {
+      setReadmeOpen(false);
+    }
     setAccountPanelOpen(!state.accountPanelOpen);
   });
 
@@ -2012,6 +2046,10 @@ function bindEvents() {
   });
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.readmeOpen) {
+      setReadmeOpen(false);
+      return;
+    }
     if (event.key === "Escape" && state.accountPanelOpen) {
       setAccountPanelOpen(false);
     }

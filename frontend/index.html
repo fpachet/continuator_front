@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Web Continuator</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260423-header-account" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260423-readme-panel" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -14,6 +14,18 @@
         <h1>Web Continuator</h1>
       </div>
       <div class="hero-side">
+        <div class="hero-actions">
+          <button
+            class="hero-utility-button ghost"
+            id="open-readme-button"
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded="false"
+            aria-controls="readme-panel"
+          >
+            Read Me
+          </button>
+        </div>
         <button
           class="account-trigger"
           id="auth-status"
@@ -99,6 +111,152 @@
         </section>
       </div>
     </header>
+
+    <div id="readme-overlay" class="sheet-overlay" hidden></div>
+    <aside
+      id="readme-panel"
+      class="readme-panel"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="readme-title"
+      hidden
+    >
+      <div class="readme-head">
+        <div>
+          <p class="readme-kicker">Read Me</p>
+          <h2 id="readme-title">Web Continuator Guide</h2>
+          <p class="section-copy">
+            A compact overview of the app, the musical flow, and how sessions
+            are saved.
+          </p>
+        </div>
+        <button id="close-readme-button" class="ghost sheet-close" type="button">
+          Close
+        </button>
+      </div>
+
+      <div class="readme-sections">
+        <section class="readme-block">
+          <h3>What It Does</h3>
+          <p>
+            Web Continuator captures a phrase from browser MIDI, sends it to
+            the Python Continuator engine, and plays back the continuation
+            either through the built-in browser synth or a MIDI output port.
+          </p>
+        </section>
+
+        <section class="readme-block">
+          <h3>Quick Start</h3>
+          <ol class="readme-list">
+            <li>Create or open a session.</li>
+            <li>Click <strong>Connect MIDI</strong> and choose an input.</li>
+            <li>Play a short phrase on your keyboard.</li>
+            <li>Wait for the phrase to end, or click <strong>Send Phrase</strong>.</li>
+            <li>Review the continuation in the piano rolls, history, and memory.</li>
+          </ol>
+        </section>
+
+        <section class="readme-block">
+          <h3>Studio Layout</h3>
+          <ul class="readme-list">
+            <li><strong>Perform</strong>: MIDI ports, phrase capture, generation, replay, and infinite mode.</li>
+            <li><strong>Continuator</strong>: session lifecycle and advanced engine settings.</li>
+            <li><strong>Sessions</strong>: reopen saved sessions and rebuild their live memory.</li>
+          </ul>
+        </section>
+
+        <section class="readme-block">
+          <h3>History vs Memory</h3>
+          <p>
+            <strong>History</strong> is the logged record of phrases sent and
+            generated for a session. <strong>Memory</strong> is the live state
+            currently active inside the Continuator engine. They are related,
+            but not always identical.
+          </p>
+        </section>
+
+        <section class="readme-block">
+          <h3>Accounts and Saved Sessions</h3>
+          <p>
+            Guest mode works immediately. Sign in only if you want sessions
+            saved under your username so you can reopen them later. The account
+            menu lives in the top-right header and includes sign in, sign out,
+            and saved-session access.
+          </p>
+        </section>
+
+        <section class="readme-block">
+          <h3>History and References</h3>
+          <p>
+            Continuator was developed by François Pachet at Sony CSL Paris in
+            1999 as an interactive musical system that learns a
+            performer’s style in real time and answers with stylistically
+            coherent continuations. The foundational paper introduced the idea
+            of a playable “virtual musician”, later articles described the
+            instrument in practice and in educational settings, and the current
+            Python implementation extends the approach with more explicit
+            controllable constraints.
+          </p>
+          <ul class="readme-list readme-link-list">
+            <li>
+              <a
+                href="https://github.com/fpachet/Continuator"
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                GitHub: fpachet/Continuator
+              </a>
+            </li>
+            <li>
+              <a
+                href="https://doi.org/10.1076/jnmr.32.3.333.16861"
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                The Continuator: Musical Interaction With Style (2003)
+              </a>
+            </li>
+            <li>
+              <a
+                href="https://doi.org/10.1109/MCG.2004.1255806"
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                Beyond the Cybernetic Jam Fantasy: the Continuator (2004)
+              </a>
+            </li>
+            <li>
+              <a
+                href="https://doi.org/10.1177/1029864906010001021"
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                Young Children Confronting the Continuator (2006)
+              </a>
+            </li>
+            <li>
+              <a
+                href="https://www.francoispachet.fr/tag/ai-music/"
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                François Pachet publications and AI music notes
+              </a>
+            </li>
+          </ul>
+        </section>
+
+        <section class="readme-block">
+          <h3>Performance Notes</h3>
+          <ul class="readme-list">
+            <li><strong>Auto-send phrase</strong> starts generation after the phrase ends.</li>
+            <li>A phrase closes 1 second after the final note-off.</li>
+            <li><strong>Infinite mode</strong> keeps chaining continuations until you stop it.</li>
+            <li>Playing live MIDI interrupts whatever continuation is currently playing.</li>
+          </ul>
+        </section>
+      </div>
+    </aside>
 
     <main class="layout">
       <section class="column">
@@ -482,6 +640,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20260423-header-account"></script>
+    <script type="module" src="/assets/app.js?v=20260423-readme-panel"></script>
   </body>
 </html>
