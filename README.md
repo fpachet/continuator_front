@@ -1,16 +1,24 @@
 ---
-title: Continuator Web Pilot
+title: Web Continuator
 emoji: 🎹
 colorFrom: blue
 colorTo: green
 sdk: docker
 app_port: 7860
-pinned: false
+short_description: Browser MIDI continuations in your playing style.
+tags:
+  - music
+  - midi
+  - interactive
+  - generative-ai
+  - fastapi
+  - webmidi
+pinned: true
 ---
 
-# Continuator Web Pilot
+# Web Continuator
 
-This repository is a browser-based front-end and API wrapper for the Continuator system.
+This repository packages Continuator as a browser-based instrument and API wrapper.
 It lets a user play a MIDI phrase in the browser, send that phrase to a Python Continuator engine, receive a generated continuation, and play it back immediately.
 
 The current implementation is meant as an MVP for experimentation, demos, and architecture validation. It already supports:
