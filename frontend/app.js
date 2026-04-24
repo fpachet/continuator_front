@@ -13,6 +13,7 @@ const FAUST_WASM_DATA_URL = "/assets/vendor/faustwasm/libfaust-wasm/libfaust-was
 const FAUST_WASM_BINARY_URL = "/assets/vendor/faustwasm/libfaust-wasm/libfaust-wasm.wasm";
 const FAUST_CLAVIER_DSP_URL = "/assets/faust/continuator-clavier.dsp";
 const FAUST_CUSTOM_TEMPLATE_DSP_URL = "/assets/faust/custom-poly-template.dsp";
+const PHRASE_TIMEOUT_STORAGE_KEY = "continuator.phrase.timeout.ms";
 const FAUST_CUSTOM_SOURCE_STORAGE_KEY = "continuator.faust.custom.source";
 const FAUST_CUSTOM_VALUES_STORAGE_KEY = "continuator.faust.custom.values";
 const FAUST_UI_CONTROL_TYPES = new Set([
@@ -81,6 +82,7 @@ const elements = {
   controlTabs: document.querySelectorAll("[data-control-tab]"),
   controlPanels: document.querySelectorAll("[data-control-panel]"),
   midiInputSelect: document.querySelector("#midi-input-select"),
+  phraseTimeoutInput: document.querySelector("#phrase-timeout-input"),
   midiOutputSelect: document.querySelector("#midi-output-select"),
   faustRendererPanel: document.querySelector("#faust-renderer-panel"),
   faustClavierPanel: document.querySelector("#faust-clavier-panel"),
@@ -151,6 +153,7 @@ const state = {
   previewedMemoryIndex: null,
   previewPulseTimeoutId: null,
   activePlayback: null,
+  phraseTimeoutMs: PHRASE_TIMEOUT_MS,
   infiniteModeEnabled: false,
   infiniteRequestInFlight: false,
   infiniteScheduleTimerId: null,
@@ -664,6 +667,14 @@ class PhraseRecorder {
     this.reset();
   }
 
+  setTimeoutMs(timeoutMs) {
+    this.timeoutMs = timeoutMs;
+    if (!this.events.length || this.lastTimestamp == null || this.pendingNotes.size) {
+      return;
+    }
+    this.scheduleCompletionCheck(window.performance.now());
+  }
+
   reset() {
     this.events = [];
     this.pendingNotes = new Set();
@@ -1171,6 +1182,50 @@ function normalizedContinuationNoteCount(value) {
     return null;
   }
   return Math.max(1, Math.round(parsed));
+}
+
+function normalizedPhraseTimeoutMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return PHRASE_TIMEOUT_MS;
+  }
+  const clampedSeconds = Math.min(5, Math.max(0.2, parsed));
+  const roundedSeconds = Math.round(clampedSeconds * 10) / 10;
+  return Math.round(roundedSeconds * 1000);
+}
+
+function clampedPhraseTimeoutMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return PHRASE_TIMEOUT_MS;
+  }
+  return Math.min(5000, Math.max(200, Math.round(parsed / 100) * 100));
+}
+
+function formatPhraseTimeoutSeconds(timeoutMs) {
+  const seconds = (clampedPhraseTimeoutMs(timeoutMs) / 1000).toFixed(1);
+  return seconds.endsWith(".0") ? seconds.slice(0, -2) : seconds;
+}
+
+function applyPhraseTimeoutSetting(value, { persist = true, announce = false } = {}) {
+  const timeoutMs = normalizedPhraseTimeoutMs(value);
+  state.phraseTimeoutMs = timeoutMs;
+  elements.phraseTimeoutInput.value = formatPhraseTimeoutSeconds(timeoutMs);
+  recorder.setTimeoutMs(timeoutMs);
+  if (persist) {
+    safeLocalStorageSet(PHRASE_TIMEOUT_STORAGE_KEY, String(timeoutMs / 1000));
+  }
+  if (announce) {
+    setPhraseMessage(`Phrase gap set to ${formatPhraseTimeoutSeconds(timeoutMs)}s.`);
+  }
+}
+
+function initializePhraseTimeoutSetting() {
+  const storedValue = safeLocalStorageGet(PHRASE_TIMEOUT_STORAGE_KEY);
+  applyPhraseTimeoutSetting(
+    storedValue ?? String(PHRASE_TIMEOUT_MS / 1000),
+    { persist: false },
+  );
 }
 
 function hasMidiFileExtension(name) {
@@ -3491,6 +3546,10 @@ function bindEvents() {
     }
   });
 
+  elements.phraseTimeoutInput.addEventListener("change", () => {
+    applyPhraseTimeoutSetting(elements.phraseTimeoutInput.value, { announce: true });
+  });
+
   elements.midiOutputSelect.addEventListener("change", async () => {
     updateSelectedOutput();
     const choice = selectedPlaybackChoice();
@@ -3635,6 +3694,7 @@ async function initialize() {
   } catch (error) {
     setPhraseMessage(error.message, true);
   }
+  initializePhraseTimeoutSetting();
   populatePlaybackChoices();
   syncAuthUI();
   renderSavedSessions([]);

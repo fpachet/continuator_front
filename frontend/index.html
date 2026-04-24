@@ -251,7 +251,7 @@
           <h3>Performance Notes</h3>
           <ul class="readme-list">
             <li><strong>Auto-send phrase</strong> starts generation after the phrase ends.</li>
-            <li>A phrase closes 1 second after the final note-off.</li>
+            <li>A phrase closes after the selected phrase gap following the final note-off.</li>
             <li><strong>Infinite mode</strong> keeps chaining continuations until you stop it.</li>
             <li>Playing live MIDI interrupts whatever continuation is currently playing.</li>
           </ul>
@@ -265,10 +265,6 @@
           <div class="card-head control-head">
             <div>
               <h2>Studio Controls</h2>
-              <p class="small-copy control-copy">
-                Keep performance tools in front and tuck setup into calmer
-                spaces.
-              </p>
             </div>
             <div class="status-cluster">
               <span class="status-pill" id="session-status">No session</span>
@@ -331,10 +327,6 @@
                 <div class="section-head">
                   <div>
                     <h3>Live Input</h3>
-                    <p class="section-copy">
-                      Connect browser MIDI, choose the live keyboard or controller,
-                      and decide how phrases should flow into generation.
-                    </p>
                   </div>
                 </div>
                 <div class="button-row">
@@ -351,6 +343,21 @@
                     <option>Connect MIDI first</option>
                   </select>
                 </div>
+                <div class="field">
+                  <label for="phrase-timeout-input">Phrase gap (seconds)</label>
+                  <input
+                    id="phrase-timeout-input"
+                    type="number"
+                    min="0.2"
+                    max="5"
+                    step="0.1"
+                    value="1"
+                    inputmode="decimal"
+                  />
+                  <p class="field-hint">
+                    Capture completes after this delay once all notes are released.
+                  </p>
+                </div>
                 <label class="toggle">
                   <input id="learn-input-toggle" type="checkbox" checked />
                   <span>Learn the played phrase before generating</span>
@@ -363,10 +370,6 @@
                   <div>
                     <dt>Last MIDI Event</dt>
                     <dd id="last-midi-event">None yet</dd>
-                  </div>
-                  <div>
-                    <dt>Capture Rule</dt>
-                    <dd>1 second after final note-off</dd>
                   </div>
                 </dl>
               </section>
@@ -419,10 +422,6 @@
                         Stop
                       </button>
                     </div>
-                    <p class="field-hint">
-                      Queues the next continuation before the current one ends,
-                      using the latest continuation as the next prefix.
-                    </p>
                   </div>
                 </div>
               </section>
@@ -457,10 +456,6 @@
                   <div>
                     <dt>Selected Renderer</dt>
                     <dd id="selected-output-name">Browser Triangle</dd>
-                  </div>
-                  <div>
-                    <dt>Routing Note</dt>
-                    <dd>Use browser synths instantly or send output to external MIDI.</dd>
                   </div>
                 </dl>
                 <p class="field-hint">
@@ -663,8 +658,7 @@
                 </div>
                 <p class="field-hint">
                   Imported phrases are learned into the active session memory
-                  and logged like other learned inputs. Folder import works
-                  best in Chromium-based browsers.
+                  and logged like other learned inputs.
                 </p>
                 <input
                   id="midi-import-input"
@@ -691,7 +685,7 @@
                       <h3>Active Engine Memory</h3>
                       <p class="section-copy">
                         Inspect what is currently active inside the Continuator
-                        engine, not just what happened earlier in the session.
+                        engine.
                       </p>
                     </div>
                   </div>

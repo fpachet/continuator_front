@@ -197,22 +197,26 @@ body.sheet-open {
   margin-bottom: 18px;
 }
 
-.control-copy {
-  display: block;
-  margin-top: 6px;
-  max-width: 34ch;
-  line-height: 1.5;
-}
-
 .status-cluster {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
 
 .status-cluster .status-pill {
   background: rgba(255, 255, 255, 0.04);
+  padding: 7px 10px;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.status-cluster::-webkit-scrollbar {
+  display: none;
 }
 
 .account-trigger {

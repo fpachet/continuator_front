@@ -31,11 +31,10 @@ def _env_path(name: str) -> Path | None:
 
 def load_settings() -> Settings:
     return Settings(
-        app_name=os.getenv("CONTINUATOR_APP_NAME", "Continuator Web"),
+        app_name=os.getenv("CONTINUATOR_APP_NAME", "Web Continuator"),
         frontend_dir=FRONTEND_DIR,
         vendor_dir=VENDOR_DIR,
         db_path=_env_path("CONTINUATOR_DB_PATH") or (DATA_DIR / "continuator.sqlite3"),
         seed_midi_file=_env_path("CONTINUATOR_SEED_MIDI_FILE"),
         seed_midi_folder=_env_path("CONTINUATOR_SEED_MIDI_FOLDER"),
     )
-

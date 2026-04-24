@@ -103,7 +103,7 @@ The phrase pipeline is:
 1. A user clicks `Connect MIDI` and chooses a browser MIDI input.
 2. The browser receives `note_on` and `note_off` events in real time.
 3. The front-end keeps a phrase open while notes are still active.
-4. A phrase closes when all notes are released and 1 second has passed since the final note event, which in practice means 1 second after the final `note_off`.
+4. A phrase closes when all notes are released and the selected phrase gap has passed since the final note event. The UI defaults this gap to 1 second after the final `note_off`.
 5. The browser stores the captured phrase as JSON with timing deltas.
 6. The client sends that JSON to `POST /api/continue`.
 7. The backend reconstructs `mido.Message` objects and asks Continuator for a phrase representation.
@@ -258,7 +258,7 @@ Typical local interaction:
 4. Choose `Browser Synth` or a hardware output.
 5. Optionally open `Advanced Continuator Settings`.
 6. Play a phrase.
-7. Wait 1 second after the final note release.
+7. Wait until the selected phrase gap has elapsed after the final note release. The default gap is 1 second.
 8. Let auto-send submit the phrase, or click `Send Phrase`.
 9. Inspect `History` or `Memory` in the `Session Activity` card.
 
