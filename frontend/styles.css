@@ -193,15 +193,22 @@ body.sheet-open {
 }
 
 .control-head {
+  flex-direction: column;
   align-items: flex-start;
+  gap: 10px;
   margin-bottom: 18px;
+}
+
+.control-head h2 {
+  white-space: nowrap;
 }
 
 .status-cluster {
   display: flex;
   flex-wrap: nowrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 6px;
+  width: 100%;
   max-width: 100%;
   overflow-x: auto;
   scrollbar-width: none;
