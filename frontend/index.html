@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Web Continuator</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260425-memory-actions" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260425-playback-ux" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -466,21 +466,29 @@
               <section class="panel-section accent-section">
                 <div class="section-head">
                   <div>
-                    <h3>Playback Route</h3>
+                    <h3>Playback</h3>
                     <p class="section-copy">
-                      Choose how continuations should sound: browser synths,
-                      external MIDI, Faust-based instruments or server-based
-                      renderings.
+                      Choose the sound source for continuations.
                     </p>
                   </div>
                 </div>
-                <div class="field">
-                  <label for="midi-output-select">Playback Renderer</label>
+                <div class="route-picker">
+                  <label class="route-picker-label" for="midi-output-select">Renderer</label>
                   <select id="midi-output-select" disabled>
                     <option>Browser Triangle</option>
                   </select>
                 </div>
-                <div class="button-row sound-actions">
+                <div class="playback-status-row">
+                  <span class="playback-status-chip">
+                    <span>Using</span>
+                    <strong id="selected-output-name">Browser Triangle</strong>
+                  </span>
+                  <span class="playback-status-chip">
+                    <span>Health</span>
+                    <strong id="renderer-health">Browser renderer ready</strong>
+                  </span>
+                </div>
+                <div class="sound-actions">
                   <button id="test-note-button" class="ghost" type="button">
                     Test Note
                   </button>
@@ -488,18 +496,8 @@
                     Panic
                   </button>
                 </div>
-                <dl class="info-grid">
-                  <div>
-                    <dt>Selected Renderer</dt>
-                    <dd id="selected-output-name">Browser Triangle</dd>
-                  </div>
-                  <div>
-                    <dt>Renderer Health</dt>
-                    <dd id="renderer-health">Browser renderer ready</dd>
-                  </div>
-                </dl>
-                <p class="field-hint">
-                  External MIDI outputs appear here once browser MIDI access is connected in Perform.
+                <p class="field-hint compact-hint">
+                  External MIDI appears after MIDI is connected in Perform.
                 </p>
               </section>
 
@@ -887,6 +885,53 @@
                 <div id="my-sessions-list" class="history-list">
                   <p class="muted">Sign in to see your saved sessions.</p>
                 </div>
+                <div id="saved-session-preview" class="session-preview-panel" hidden>
+                  <div class="session-preview-head">
+                    <div>
+                      <span class="small-copy">Selected saved session</span>
+                      <strong id="saved-session-preview-name">No session selected</strong>
+                    </div>
+                    <button
+                      id="saved-session-preview-open-button"
+                      class="ghost session-open-button"
+                      type="button"
+                    >
+                      Open
+                    </button>
+                  </div>
+                  <div class="session-name-editor">
+                    <label for="saved-session-name-input">Name</label>
+                    <div class="session-name-row">
+                      <input
+                        id="saved-session-name-input"
+                        type="text"
+                        maxlength="80"
+                        autocomplete="off"
+                      />
+                      <button id="rename-session-button" class="ghost" type="button">
+                        Rename
+                      </button>
+                    </div>
+                  </div>
+                  <dl class="session-preview-grid">
+                    <div>
+                      <dt>Memory</dt>
+                      <dd id="saved-session-preview-memory">-</dd>
+                    </div>
+                    <div>
+                      <dt>History</dt>
+                      <dd id="saved-session-preview-history">-</dd>
+                    </div>
+                    <div>
+                      <dt>Settings</dt>
+                      <dd id="saved-session-preview-settings">-</dd>
+                    </div>
+                    <div>
+                      <dt>Last Seen</dt>
+                      <dd id="saved-session-preview-seen">-</dd>
+                    </div>
+                  </dl>
+                </div>
               </section>
             </div>
           </section>
@@ -965,6 +1010,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20260425-memory-actions"></script>
+    <script type="module" src="/assets/app.js?v=20260425-playback-ux"></script>
   </body>
 </html>

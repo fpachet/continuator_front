@@ -25,6 +25,8 @@ from .schemas import (
     SessionHistoryResponse,
     SessionMemoryResponse,
     SessionMemorySummary,
+    UpdateSessionNameRequest,
+    UpdateSessionNameResponse,
     UpdateSessionSettingsRequest,
     UpdateSessionSettingsResponse,
     UserSessionListItem,
@@ -78,6 +80,7 @@ class SessionManager:
             decay_mode=request.decay_mode,
             markov_order=request.markov_order,
             seeded=self.seeded,
+            display_name=None,
         )
 
     def _build_engine(self, configuration: SessionConfiguration) -> ContinuatorSessionEngine:
@@ -469,6 +472,35 @@ class SessionManager:
             last_seen_at=updated_at,
         )
         return UpdateSessionSettingsResponse(
+            session_id=session_id,
+            updated_at=updated_at,
+            configuration=state.configuration,
+        )
+
+    def update_session_name(
+        self,
+        session_id: str,
+        owner_user_id: str,
+        request: UpdateSessionNameRequest,
+    ) -> UpdateSessionNameResponse:
+        state = self._require_session(session_id, owner_user_id)
+        if state.owner_user_id != owner_user_id:
+            raise UnknownSessionError(session_id)
+        updated_at = utc_now_iso()
+        display_name = " ".join(request.display_name.split())
+        if not display_name:
+            display_name = session_id[:8]
+
+        state.configuration = state.configuration.model_copy(
+            update={"display_name": display_name}
+        )
+        state.last_seen_at = updated_at
+        self.storage.update_session_metadata(
+            session_id=session_id,
+            metadata=state.configuration.model_dump(),
+            last_seen_at=updated_at,
+        )
+        return UpdateSessionNameResponse(
             session_id=session_id,
             updated_at=updated_at,
             configuration=state.configuration,

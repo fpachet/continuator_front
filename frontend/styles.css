@@ -1100,6 +1100,65 @@ input[type="password"]:disabled {
   margin-bottom: 0;
 }
 
+.route-picker {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px 12px;
+  margin-bottom: 12px;
+  border-radius: 18px;
+  border: 1px solid rgba(109, 211, 206, 0.18);
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.route-picker-label {
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.route-picker select {
+  min-height: 44px;
+  padding: 6px 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font-weight: 700;
+}
+
+.playback-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.playback-status-chip {
+  display: inline-grid;
+  gap: 2px;
+  min-width: 150px;
+  padding: 8px 11px;
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.055);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.playback-status-chip span {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.playback-status-chip strong {
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
+.compact-hint {
+  margin-top: 10px;
+}
+
 .transport-button {
   min-width: 84px;
 }
@@ -1126,11 +1185,21 @@ input[type="password"]:disabled {
   width: 100%;
   height: 244px;
   display: block;
+  cursor: pointer;
   border-radius: 18px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
     rgba(255, 255, 255, 0.02);
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.piano-roll:hover {
+  border-color: rgba(109, 211, 206, 0.24);
+}
+
+.piano-roll.is-roll-playing {
+  border-color: rgba(255, 245, 212, 0.42);
+  box-shadow: 0 0 0 1px rgba(255, 245, 212, 0.16), 0 0 22px rgba(255, 245, 212, 0.1);
 }
 
 .roll-playhead {
@@ -1316,6 +1385,115 @@ input[type="password"]:disabled {
   background: linear-gradient(135deg, rgba(244, 162, 97, 0.14), rgba(255, 255, 255, 0.03));
 }
 
+.history-item.is-previewed:not(.is-selected) {
+  border-color: rgba(109, 211, 206, 0.34);
+  background: linear-gradient(135deg, rgba(109, 211, 206, 0.1), rgba(255, 255, 255, 0.03));
+}
+
+.session-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+}
+
+.session-preview-button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+  text-align: left;
+}
+
+.session-preview-button:hover:not(:disabled) {
+  transform: none;
+}
+
+.session-open-button {
+  min-width: 82px;
+  align-self: stretch;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.session-preview-panel {
+  display: grid;
+  gap: 14px;
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(109, 211, 206, 0.18);
+  background: rgba(109, 211, 206, 0.06);
+}
+
+.session-preview-panel[hidden] {
+  display: none;
+}
+
+.session-preview-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.session-preview-head strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--text);
+}
+
+.session-name-editor {
+  display: grid;
+  gap: 7px;
+}
+
+.session-name-editor label {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.session-name-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.session-name-row input {
+  min-width: 0;
+}
+
+.session-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.session-preview-grid div {
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(255, 255, 255, 0.055);
+}
+
+.session-preview-grid dt {
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-bottom: 5px;
+}
+
+.session-preview-grid dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
 .session-item .history-meta {
   gap: 6px;
 }
@@ -1454,6 +1632,32 @@ input[type="password"]:disabled {
   }
 
   .panel-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .session-item {
+    grid-template-columns: 1fr;
+  }
+
+  .session-preview-button {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .session-open-button {
+    width: 100%;
+    min-height: 38px;
+  }
+
+  .session-preview-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .session-name-row {
+    grid-template-columns: 1fr;
+  }
+
+  .session-preview-grid {
     grid-template-columns: 1fr;
   }
 

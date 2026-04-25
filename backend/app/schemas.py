@@ -79,6 +79,7 @@ class SessionConfiguration(BaseModel):
     decay_mode: DecayMode
     markov_order: int = Field(default=4, ge=1, le=16)
     seeded: bool
+    display_name: str | None = Field(default=None, min_length=1, max_length=80)
 
 
 class CreateSessionResponse(BaseModel):
@@ -190,6 +191,16 @@ class UpdateSessionSettingsRequest(BaseModel):
 
 
 class UpdateSessionSettingsResponse(BaseModel):
+    session_id: str
+    updated_at: str
+    configuration: SessionConfiguration
+
+
+class UpdateSessionNameRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=80)
+
+
+class UpdateSessionNameResponse(BaseModel):
     session_id: str
     updated_at: str
     configuration: SessionConfiguration

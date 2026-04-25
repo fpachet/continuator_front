@@ -58,6 +58,15 @@ const elements = {
   savedSessionCount: document.querySelector("#saved-session-count"),
   savedSessionsCopy: document.querySelector("#saved-sessions-copy"),
   mySessionsList: document.querySelector("#my-sessions-list"),
+  savedSessionPreview: document.querySelector("#saved-session-preview"),
+  savedSessionPreviewName: document.querySelector("#saved-session-preview-name"),
+  savedSessionPreviewOpenButton: document.querySelector("#saved-session-preview-open-button"),
+  savedSessionNameInput: document.querySelector("#saved-session-name-input"),
+  renameSessionButton: document.querySelector("#rename-session-button"),
+  savedSessionPreviewMemory: document.querySelector("#saved-session-preview-memory"),
+  savedSessionPreviewHistory: document.querySelector("#saved-session-preview-history"),
+  savedSessionPreviewSettings: document.querySelector("#saved-session-preview-settings"),
+  savedSessionPreviewSeen: document.querySelector("#saved-session-preview-seen"),
   refreshSessionsButton: document.querySelector("#refresh-sessions-button"),
   sessionStatus: document.querySelector("#session-status"),
   sessionId: document.querySelector("#session-id"),
@@ -171,9 +180,11 @@ const state = {
   activeControlView: "perform",
   previewedHistoryIndex: null,
   previewedMemoryIndex: null,
+  previewedSavedSessionId: null,
   previewPulseTimeoutId: null,
   activePlayback: null,
   activeMemoryPlaybackIndex: null,
+  activeRollPlaybackKind: null,
   currentPlaybackPayload: null,
   queuedPlaybackPayload: null,
   lastGenerationMs: null,
@@ -182,6 +193,7 @@ const state = {
   playbackVisualizationFrameId: null,
   playbackVisualizationStartTimerId: null,
   playbackVisualizationDisplayEndsAtMs: 0,
+  playbackVisualizationRollKind: "output",
   playbackVisualizationToken: 0,
   phraseTimeoutMs: PHRASE_TIMEOUT_MS,
   infiniteModeEnabled: false,
@@ -1261,9 +1273,11 @@ function clearRememberedPhrases() {
   state.currentPlaybackPayload = null;
   state.queuedPlaybackPayload = null;
   state.activeMemoryPlaybackIndex = null;
+  state.activeRollPlaybackKind = null;
   state.lastGenerationMs = null;
   state.lastCaptureDurationMs = null;
   renderConstraintStatus(null);
+  syncRollPlaybackState();
   renderPerformanceState();
   updateInfiniteActionState();
 }
@@ -1676,6 +1690,44 @@ function formatTimestamp(value) {
   return parsed.toLocaleString();
 }
 
+function formatShortTimestamp(value) {
+  if (!value) {
+    return "New";
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function generatedSessionName(item) {
+  const settings = item?.configuration || {};
+  const kLabel = `K${settings.markov_order || 4}`;
+  const timeLabel = formatShortTimestamp(item?.created_at || item?.last_seen_at);
+  const learnedCount = Number(item?.active_learned_phrase_count || 0);
+  const phraseCount = Number(item?.phrase_count || 0);
+  if (learnedCount > 0) {
+    return `Live ${pluralize(learnedCount, "phrase")} · ${kLabel} · ${timeLabel}`;
+  }
+  if (phraseCount > 0) {
+    return `Logged ${pluralize(phraseCount, "phrase")} · ${kLabel} · ${timeLabel}`;
+  }
+  return `Empty ${kLabel} · ${timeLabel}`;
+}
+
+function sessionDisplayName(item) {
+  const customName = item?.configuration?.display_name;
+  return typeof customName === "string" && customName.trim()
+    ? customName.trim()
+    : generatedSessionName(item);
+}
+
 function clearPhraseBuffers() {
   stopInfiniteMode({ stopPlayback: true, silent: true });
   stopPhraseGapCountdown();
@@ -1718,36 +1770,143 @@ function createSavedSessionsMarkup(items) {
   return items
     .map((item) => {
       const current = item.session_id === state.sessionId;
+      const previewed = item.session_id === state.previewedSavedSessionId;
       const stateLabel = current ? "current" : item.loaded ? "live" : "saved";
       const activityLabel = `${item.active_learned_phrase_count} learned active · ${item.phrase_count} logged`;
       const resetLabel = item.last_reset_at
         ? ` · Reset ${formatTimestamp(item.last_reset_at)}`
         : "";
       const settingsLabel = describeSessionSettings(item.configuration).join(" · ");
+      const displayName = sessionDisplayName(item);
       return `
-        <button
-          class="history-item session-item ${current ? "is-selected" : ""}"
+        <div
+          class="history-item session-item ${current ? "is-selected" : ""} ${previewed ? "is-previewed" : ""}"
           data-owned-session-id="${item.session_id}"
-          type="button"
         >
-          <span class="history-kind">${stateLabel}</span>
-          <span class="history-meta">
-            <strong>${activityLabel}</strong>
-            <span>Seen ${formatTimestamp(item.last_seen_at)}${resetLabel}</span>
-            <span>${settingsLabel}</span>
-          </span>
-          <span class="history-index">${current ? "current" : "open"}</span>
-        </button>
+          <button
+            class="session-preview-button"
+            data-owned-session-preview-id="${item.session_id}"
+            type="button"
+          >
+            <span class="history-kind">${stateLabel}</span>
+            <span class="history-meta">
+              <strong>${displayName}</strong>
+              <span>${activityLabel}</span>
+              <span>Seen ${formatTimestamp(item.last_seen_at)}${resetLabel}</span>
+              <span>${settingsLabel}</span>
+            </span>
+          </button>
+          <button
+            class="ghost session-open-button"
+            data-owned-session-open-id="${item.session_id}"
+            type="button"
+            ${current ? "disabled" : ""}
+          >
+            ${current ? "Current" : "Open"}
+          </button>
+        </div>
       `;
     })
     .join("");
 }
 
-function attachSavedSessionEvents() {
+function syncSavedSessionSelection() {
   elements.mySessionsList.querySelectorAll("[data-owned-session-id]").forEach((node) => {
+    const sessionId = node.dataset.ownedSessionId;
+    const current = sessionId === state.sessionId;
+    const previewed = sessionId === state.previewedSavedSessionId;
+    node.classList.toggle("is-selected", current);
+    node.classList.toggle("is-previewed", previewed);
+    const openButton = node.querySelector("[data-owned-session-open-id]");
+    if (openButton) {
+      openButton.disabled = current;
+      openButton.textContent = current ? "Current" : "Open";
+    }
+  });
+  renderSavedSessionPreview();
+}
+
+function previewSavedSession(sessionId) {
+  const item = state.savedSessions.find((session) => session.session_id === sessionId);
+  if (!item) {
+    return;
+  }
+  state.previewedSavedSessionId = sessionId;
+  syncSavedSessionSelection();
+  setAuthMessage(
+    `${item.session_id === state.sessionId ? "Current session" : "Previewing"}: ${sessionDisplayName(item)}.`,
+  );
+}
+
+function selectedSavedSession() {
+  return state.savedSessions.find(
+    (session) => session.session_id === state.previewedSavedSessionId,
+  );
+}
+
+function renderSavedSessionPreview() {
+  const item = selectedSavedSession();
+  if (!elements.savedSessionPreview) {
+    return;
+  }
+  elements.savedSessionPreview.hidden = !item;
+  if (!item) {
+    return;
+  }
+
+  const current = item.session_id === state.sessionId;
+  elements.savedSessionPreviewName.textContent = sessionDisplayName(item);
+  elements.savedSessionNameInput.value = item.configuration?.display_name || "";
+  elements.savedSessionNameInput.placeholder = generatedSessionName(item);
+  elements.savedSessionPreviewOpenButton.disabled = current;
+  elements.savedSessionPreviewOpenButton.textContent = current ? "Current" : "Open";
+  elements.savedSessionPreviewMemory.textContent =
+    `${pluralize(item.active_learned_phrase_count, "learned phrase")} active`;
+  elements.savedSessionPreviewHistory.textContent =
+    `${pluralize(item.phrase_count, "logged phrase")} · ${pluralize(item.input_phrase_count, "input")}`;
+  elements.savedSessionPreviewSettings.textContent =
+    describeSessionSettings(item.configuration).join(" · ");
+  elements.savedSessionPreviewSeen.textContent =
+    `${formatTimestamp(item.last_seen_at)}${item.last_reset_at ? ` · Reset ${formatTimestamp(item.last_reset_at)}` : ""}`;
+}
+
+async function renamePreviewedSession() {
+  const item = selectedSavedSession();
+  if (!item) {
+    setAuthMessage("Select a saved session before renaming it.", true);
+    return;
+  }
+  const displayName = elements.savedSessionNameInput.value.trim();
+  if (!displayName) {
+    setAuthMessage("Enter a session name before saving.", true);
+    return;
+  }
+
+  const payload = await requestJson(`/api/my/sessions/${item.session_id}/name`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ display_name: displayName }),
+  });
+  item.configuration = payload.configuration;
+  item.last_seen_at = payload.updated_at;
+  if (item.session_id === state.sessionId) {
+    state.sessionConfiguration = payload.configuration;
+  }
+  renderSavedSessions(state.savedSessions);
+  setAuthMessage(`Renamed session to ${sessionDisplayName(item)}.`);
+}
+
+function attachSavedSessionEvents() {
+  elements.mySessionsList.querySelectorAll("[data-owned-session-preview-id]").forEach((node) => {
+    node.addEventListener("click", () => {
+      previewSavedSession(node.dataset.ownedSessionPreviewId);
+    });
+  });
+
+  elements.mySessionsList.querySelectorAll("[data-owned-session-open-id]").forEach((node) => {
     node.addEventListener("click", async () => {
       try {
-        await openSavedSession(node.dataset.ownedSessionId);
+        await openSavedSession(node.dataset.ownedSessionOpenId);
       } catch (error) {
         setAuthMessage(error.message, true);
       }
@@ -1757,15 +1916,22 @@ function attachSavedSessionEvents() {
 
 function renderSavedSessions(items) {
   state.savedSessions = items;
+  if (
+    state.previewedSavedSessionId &&
+    !items.some((item) => item.session_id === state.previewedSavedSessionId)
+  ) {
+    state.previewedSavedSessionId = null;
+  }
   elements.mySessionsList.innerHTML = createSavedSessionsMarkup(items);
   elements.savedSessionCount.textContent = state.authUser
     ? `${items.length} saved`
     : "Guest mode";
   elements.savedSessionsCopy.textContent = state.authUser
-    ? "Open any session to rebuild its live memory from learned input phrases."
+    ? "Select a session to preview its details, then open it when you want to load its memory."
     : "Use the account control above to sign in, then reopen saved sessions here.";
   renderAccountTrigger();
   attachSavedSessionEvents();
+  syncSavedSessionSelection();
 }
 
 function syncAuthUI() {
@@ -1870,6 +2036,7 @@ function renderCapturedStats(events, notes, completed) {
   elements.capturedNoteCount.textContent = String(notes.length);
   setPhraseStatus(completed ? "Phrase ready" : "Listening");
   drawPianoRoll(elements.inputRoll, notes, "#6dd3ce", "Input phrase");
+  syncRollPlaybackState();
 }
 
 function renderGeneratedStats(payload) {
@@ -1880,6 +2047,82 @@ function renderGeneratedStats(payload) {
     payload?.notes || [],
     "#f4a261",
     "Generated continuation",
+  );
+  syncRollPlaybackState();
+}
+
+function capturedRollPayload() {
+  const events = state.lastCapturedPhrase;
+  if (!events?.length) {
+    return null;
+  }
+  const notes = eventsToNotes(events);
+  if (!notes.length) {
+    return null;
+  }
+  return {
+    event_count: events.length,
+    note_count: notes.length,
+    duration_seconds: phraseDurationMs(events) / 1000,
+    events,
+    notes,
+  };
+}
+
+function rollPayload(kind) {
+  return kind === "input" ? capturedRollPayload() : state.lastGeneratedPhrase;
+}
+
+function syncRollPlaybackState() {
+  elements.inputRoll.classList.toggle(
+    "is-roll-playing",
+    state.activeRollPlaybackKind === "input",
+  );
+  elements.outputRoll.classList.toggle(
+    "is-roll-playing",
+    state.activeRollPlaybackKind === "output",
+  );
+  elements.inputRoll.title = state.activeRollPlaybackKind === "input"
+    ? "Click to stop the captured phrase"
+    : "Click to play the captured phrase";
+  elements.outputRoll.title = state.activeRollPlaybackKind === "output"
+    ? "Click to stop the generated continuation"
+    : "Click to play the generated continuation";
+}
+
+async function toggleRollPlayback(kind) {
+  const payload = rollPayload(kind);
+  if (!payload?.events?.length) {
+    setPhraseMessage(
+      kind === "input"
+        ? "No captured phrase is available to play yet."
+        : "No generated continuation is available to play yet.",
+      true,
+    );
+    return;
+  }
+
+  if (state.activeRollPlaybackKind === kind) {
+    stopActivePlayback();
+    setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
+    setPhraseMessage(
+      kind === "input"
+        ? "Stopped the captured phrase."
+        : "Stopped the generated continuation.",
+    );
+    return;
+  }
+
+  stopInfiniteMode({ stopPlayback: true, silent: true });
+  await playPayload(payload, {
+    visualizationRoll: kind === "input" ? "input" : "output",
+  });
+  state.activeRollPlaybackKind = kind;
+  syncRollPlaybackState();
+  setPhraseMessage(
+    kind === "input"
+      ? "Playing the captured phrase from the piano roll."
+      : "Playing the generated continuation from the piano roll.",
   );
 }
 
@@ -2417,6 +2660,7 @@ async function openSavedSession(sessionId) {
   const payload = await requestJson(`/api/my/sessions/${sessionId}/open`, {
     method: "POST",
   });
+  state.previewedSavedSessionId = sessionId;
   useSessionPayload(payload, { owned: true });
   setControlView("perform");
   clearPhraseBuffers();
@@ -3295,6 +3539,7 @@ async function sendPlaybackPanic() {
 }
 
 function stopPlaybackVisualization({ redraw = true } = {}) {
+  const rollKind = state.playbackVisualizationRollKind || "output";
   state.playbackVisualizationToken += 1;
   if (state.playbackVisualizationStartTimerId) {
     window.clearTimeout(state.playbackVisualizationStartTimerId);
@@ -3306,13 +3551,23 @@ function stopPlaybackVisualization({ redraw = true } = {}) {
     state.playbackVisualizationFrameId = null;
   }
   if (redraw) {
-    renderGeneratedStats(state.lastGeneratedPhrase);
+    if (rollKind === "input") {
+      drawPianoRoll(
+        elements.inputRoll,
+        eventsToNotes(state.lastCapturedPhrase),
+        "#6dd3ce",
+        "Input phrase",
+      );
+    } else {
+      renderGeneratedStats(state.lastGeneratedPhrase);
+    }
   }
   elements.outputPlayhead.hidden = true;
   elements.outputPlayhead.style.transform = "translateX(0)";
   state.currentPlaybackPayload = null;
   state.queuedPlaybackPayload = null;
   state.playbackVisualizationDisplayEndsAtMs = 0;
+  state.playbackVisualizationRollKind = "output";
   renderPerformanceState();
 }
 
@@ -3321,11 +3576,19 @@ function outputPlayheadMaxX() {
   return Math.max(0, width - 2);
 }
 
-function startPlaybackVisualization(payload, audioStartAtMs, durationMs) {
+function startPlaybackVisualization(
+  payload,
+  audioStartAtMs,
+  durationMs,
+  { rollKind = "output" } = {},
+) {
   const notes = payload?.notes?.length ? payload.notes : eventsToNotes(payload?.events || []);
   if (!notes.length) {
     return;
   }
+  const targetRoll = rollKind === "input" ? elements.inputRoll : elements.outputRoll;
+  const accent = rollKind === "input" ? "#6dd3ce" : "#f4a261";
+  const emptyLabel = rollKind === "input" ? "Input phrase" : "Generated continuation";
 
   const displayStartAtMs = Math.max(
     audioStartAtMs,
@@ -3340,17 +3603,18 @@ function startPlaybackVisualization(payload, audioStartAtMs, durationMs) {
     renderPerformanceState();
     state.playbackVisualizationStartTimerId = window.setTimeout(() => {
       state.playbackVisualizationStartTimerId = null;
-      startPlaybackVisualization(payload, displayStartAtMs, durationMs);
+      startPlaybackVisualization(payload, displayStartAtMs, durationMs, { rollKind });
     }, delayUntilStartMs);
     return;
   }
 
   stopPlaybackVisualization({ redraw: false });
+  state.playbackVisualizationRollKind = rollKind;
   state.currentPlaybackPayload = payload;
   if (state.queuedPlaybackPayload === payload) {
     state.queuedPlaybackPayload = null;
   }
-  renderGeneratedStats(payload);
+  drawPianoRoll(targetRoll, notes, accent, emptyLabel);
   renderPerformanceState();
   const token = ++state.playbackVisualizationToken;
   const startedAtMs = window.performance.now();
@@ -3360,7 +3624,7 @@ function startPlaybackVisualization(payload, audioStartAtMs, durationMs) {
   );
   const safeDurationMs = Math.max(1, Number(durationMs) || totalDurationSeconds * 1000);
   state.playbackVisualizationDisplayEndsAtMs = startedAtMs + safeDurationMs;
-  elements.outputPlayhead.hidden = false;
+  elements.outputPlayhead.hidden = rollKind !== "output";
 
   const tick = () => {
     if (token !== state.playbackVisualizationToken) {
@@ -3368,15 +3632,17 @@ function startPlaybackVisualization(payload, audioStartAtMs, durationMs) {
     }
     const elapsedMs = Math.max(0, window.performance.now() - startedAtMs);
     const progressRatio = Math.min(1, elapsedMs / safeDurationMs);
-    elements.outputPlayhead.hidden = false;
-    elements.outputPlayhead.style.transform = `translateX(${Math.round(
-      progressRatio * outputPlayheadMaxX(),
-    )}px)`;
+    if (rollKind === "output") {
+      elements.outputPlayhead.hidden = false;
+      elements.outputPlayhead.style.transform = `translateX(${Math.round(
+        progressRatio * outputPlayheadMaxX(),
+      )}px)`;
+    }
     drawPianoRoll(
-      elements.outputRoll,
+      targetRoll,
       notes,
-      "#f4a261",
-      "Generated continuation",
+      accent,
+      emptyLabel,
       {
         progressRatio,
         playbackSeconds: progressRatio * totalDurationSeconds,
@@ -3390,7 +3656,16 @@ function startPlaybackVisualization(payload, audioStartAtMs, durationMs) {
           state.playbackVisualizationDisplayEndsAtMs = 0;
           elements.outputPlayhead.hidden = true;
           renderPerformanceState();
-          renderGeneratedStats(state.lastGeneratedPhrase);
+          if (rollKind === "input") {
+            drawPianoRoll(
+              elements.inputRoll,
+              eventsToNotes(state.lastCapturedPhrase),
+              "#6dd3ce",
+              "Input phrase",
+            );
+          } else {
+            renderGeneratedStats(state.lastGeneratedPhrase);
+          }
         }
       }, 180);
       return;
@@ -3415,8 +3690,10 @@ function stopActivePlayback() {
   playback.renderer?.stopPlayback?.(playback);
   state.activePlayback = null;
   state.activeMemoryPlaybackIndex = null;
+  state.activeRollPlaybackKind = null;
   stopPlaybackVisualization();
   syncMemoryPlaybackState();
+  syncRollPlaybackState();
   updateInfiniteActionState();
   return true;
 }
@@ -3430,6 +3707,7 @@ async function playPayload(
   {
     startDelayMs = PLAYBACK_START_DELAY_MS,
     append = false,
+    visualizationRoll = "output",
   } = {},
 ) {
   if (!payload?.events?.length) {
@@ -3442,7 +3720,9 @@ async function playPayload(
     playback = await createPlaybackSession();
     state.activePlayback = playback;
     state.activeMemoryPlaybackIndex = null;
+    state.activeRollPlaybackKind = null;
     syncMemoryPlaybackState();
+    syncRollPlaybackState();
   }
 
   if (playback.cleanupTimerId != null) {
@@ -3481,7 +3761,12 @@ async function playPayload(
     scheduleBaseMs + scheduleDelayMs + handoffMs,
   );
   playback.endsAtMs = Math.max(playback.endsAtMs, scheduleBaseMs + scheduleDelayMs + cursorMs);
-  startPlaybackVisualization(payload, scheduleBaseMs + scheduleDelayMs, cursorMs);
+  startPlaybackVisualization(
+    payload,
+    scheduleBaseMs + scheduleDelayMs,
+    cursorMs,
+    { rollKind: visualizationRoll },
+  );
   updateInfiniteActionState();
 }
 
@@ -4012,6 +4297,38 @@ function bindEvents() {
     }
   });
 
+  elements.savedSessionPreviewOpenButton.addEventListener("click", async () => {
+    const item = selectedSavedSession();
+    if (!item) {
+      return;
+    }
+    try {
+      await openSavedSession(item.session_id);
+    } catch (error) {
+      setAuthMessage(error.message, true);
+    }
+  });
+
+  elements.renameSessionButton.addEventListener("click", async () => {
+    try {
+      await renamePreviewedSession();
+    } catch (error) {
+      setAuthMessage(error.message, true);
+    }
+  });
+
+  elements.savedSessionNameInput.addEventListener("keydown", async (event) => {
+    if (event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    try {
+      await renamePreviewedSession();
+    } catch (error) {
+      setAuthMessage(error.message, true);
+    }
+  });
+
   [elements.authUsernameInput, elements.authPasswordInput].forEach((input) => {
     input.addEventListener("keydown", async (event) => {
       if (event.key !== "Enter") {
@@ -4198,6 +4515,22 @@ function bindEvents() {
 
   elements.clearPhraseButton.addEventListener("click", () => {
     clearPhrases();
+  });
+
+  elements.inputRoll.addEventListener("click", async () => {
+    try {
+      await toggleRollPlayback("input");
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
+  });
+
+  elements.outputRoll.addEventListener("click", async () => {
+    try {
+      await toggleRollPlayback("output");
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
   });
 
   elements.applySettingsButton.addEventListener("click", async () => {
