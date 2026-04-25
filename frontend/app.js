@@ -3216,6 +3216,7 @@ function stopPlaybackVisualization({ redraw = true } = {}) {
     state.playbackVisualizationStartTimerId = null;
   }
   if (state.playbackVisualizationFrameId) {
+    window.clearTimeout(state.playbackVisualizationFrameId);
     window.cancelAnimationFrame(state.playbackVisualizationFrameId);
     state.playbackVisualizationFrameId = null;
   }
@@ -3288,7 +3289,7 @@ function startPlaybackVisualization(payload, startAtMs, durationMs) {
       }, 180);
       return;
     }
-    state.playbackVisualizationFrameId = window.requestAnimationFrame(tick);
+    state.playbackVisualizationFrameId = window.setTimeout(tick, 33);
   };
 
   tick();
