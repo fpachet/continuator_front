@@ -49,6 +49,19 @@ class PhrasePayload(BaseModel):
     notes: list[PhraseNote]
 
 
+class GenerationConstraintState(BaseModel):
+    requested: bool = False
+    applied: bool = False
+    relaxed: bool = False
+    value: str | None = None
+    reason: str | None = None
+
+
+class GenerationConstraintsStatus(BaseModel):
+    start: GenerationConstraintState
+    end: GenerationConstraintState
+
+
 class CreateSessionRequest(BaseModel):
     learn_input: bool = True
     transposition: bool = False
@@ -89,6 +102,7 @@ class ContinueResponse(BaseModel):
     created_at: str
     input_phrase: PhrasePayload
     generated_phrase: PhrasePayload
+    constraints: GenerationConstraintsStatus | None = None
     status_message: str | None = None
 
 
@@ -102,6 +116,7 @@ class GeneratePhraseResponse(BaseModel):
     request_id: str
     created_at: str
     generated_phrase: PhrasePayload
+    constraints: GenerationConstraintsStatus | None = None
     status_message: str | None = None
 
 

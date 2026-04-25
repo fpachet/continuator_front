@@ -49,6 +49,7 @@ class SessionState:
     last_seen_at: str
     configuration: SessionConfiguration
     engine: ContinuatorSessionEngine
+    continuation_request_count: int = 0
 
 
 class SessionManager:
@@ -163,6 +164,10 @@ class SessionManager:
             last_seen_at=restored_at,
             configuration=configuration,
             engine=engine,
+            continuation_request_count=self.storage.count_continuation_requests(
+                session_id,
+                last_reset_at=session_record.get("last_reset_at"),
+            ),
         )
 
         with self._lock:
@@ -263,15 +268,19 @@ class SessionManager:
             if request.learn_input is None
             else request.learn_input
         )
-        input_phrase, generated_phrase, status_message = state.engine.continue_phrase(
+        enforce_end_constraint = (
+            request.enforce_end_constraint and state.continuation_request_count > 0
+        )
+        input_phrase, generated_phrase, constraints, status_message = state.engine.continue_phrase(
             request.phrase,
             learn_input=should_learn,
             continuation_note_count=request.continuation_note_count,
-            enforce_end_constraint=request.enforce_end_constraint,
+            enforce_end_constraint=enforce_end_constraint,
             handoff_viewpoint=request.handoff_viewpoint,
         )
 
         state.last_seen_at = created_at
+        state.continuation_request_count += 1
         self.storage.touch_session(state.session_id, created_at)
         self.storage.log_phrase(
             phrase_id=uuid.uuid4().hex,
@@ -298,6 +307,7 @@ class SessionManager:
             created_at=created_at,
             input_phrase=input_phrase,
             generated_phrase=generated_phrase,
+            constraints=constraints,
             status_message=status_message,
         )
 
@@ -311,7 +321,7 @@ class SessionManager:
         state = self._require_session(session_id, owner_user_id)
         created_at = utc_now_iso()
         request_id = uuid.uuid4().hex
-        generated_phrase, status_message = state.engine.generate_phrase(
+        generated_phrase, constraints, status_message = state.engine.generate_phrase(
             note_count=note_count,
             enforce_end_constraint=enforce_end_constraint,
         )
@@ -333,6 +343,7 @@ class SessionManager:
             request_id=request_id,
             created_at=created_at,
             generated_phrase=generated_phrase,
+            constraints=constraints,
             status_message=status_message,
         )
 
@@ -423,6 +434,7 @@ class SessionManager:
     def reset_session(self, session_id: str, owner_user_id: str | None) -> ResetSessionResponse:
         state = self._require_session(session_id, owner_user_id)
         state.engine.reset()
+        state.continuation_request_count = 0
         state.last_seen_at = utc_now_iso()
         self.storage.mark_session_reset(session_id, state.last_seen_at, state.last_seen_at)
         return ResetSessionResponse(

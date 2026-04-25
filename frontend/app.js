@@ -74,6 +74,7 @@ const elements = {
   generatedEventCount: document.querySelector("#generated-event-count"),
   generatedNoteCount: document.querySelector("#generated-note-count"),
   messageBox: document.querySelector("#message-box"),
+  constraintStatus: document.querySelector("#constraint-status"),
   globalPanicButton: document.querySelector("#global-panic-button"),
   readySessionStep: document.querySelector("#ready-session-step"),
   readyMidiStep: document.querySelector("#ready-midi-step"),
@@ -92,6 +93,7 @@ const elements = {
   memoryRibbon: document.querySelector("#memory-ribbon"),
   inputRoll: document.querySelector("#input-roll"),
   outputRoll: document.querySelector("#output-roll"),
+  outputPlayhead: document.querySelector("#output-playhead"),
   settingsSummary: document.querySelector("#settings-summary"),
   controlTabs: document.querySelectorAll("[data-control-tab]"),
   controlPanels: document.querySelectorAll("[data-control-panel]"),
@@ -171,6 +173,7 @@ const state = {
   previewedMemoryIndex: null,
   previewPulseTimeoutId: null,
   activePlayback: null,
+  activeMemoryPlaybackIndex: null,
   currentPlaybackPayload: null,
   queuedPlaybackPayload: null,
   lastGenerationMs: null,
@@ -178,6 +181,7 @@ const state = {
   phraseGapAnimationFrameId: null,
   playbackVisualizationFrameId: null,
   playbackVisualizationStartTimerId: null,
+  playbackVisualizationDisplayEndsAtMs: 0,
   playbackVisualizationToken: 0,
   phraseTimeoutMs: PHRASE_TIMEOUT_MS,
   infiniteModeEnabled: false,
@@ -1147,6 +1151,50 @@ function setPhraseMessage(message, danger = false) {
   elements.messageBox.style.color = danger ? "var(--danger)" : "var(--muted)";
 }
 
+function constraintPillText(label, state) {
+  if (!state?.requested) {
+    return `${label}: off${state?.reason ? ` (${state.reason})` : ""}`;
+  }
+  const status = state.relaxed ? "relaxed" : state.applied ? "on" : "off";
+  const value = state.value ? ` · ${state.value}` : "";
+  return `${label}: ${status}${value}`;
+}
+
+function constraintPillClass(state) {
+  if (!state?.requested || (!state.applied && !state.relaxed)) {
+    return "constraint-pill is-off";
+  }
+  if (state.relaxed) {
+    return "constraint-pill is-relaxed";
+  }
+  return "constraint-pill";
+}
+
+function renderConstraintStatus(constraints) {
+  if (!elements.constraintStatus) {
+    return;
+  }
+  elements.constraintStatus.replaceChildren();
+  if (!constraints) {
+    elements.constraintStatus.hidden = true;
+    return;
+  }
+
+  [
+    ["Start", constraints.start],
+    ["End", constraints.end],
+  ].forEach(([label, value]) => {
+    const pill = document.createElement("span");
+    pill.className = constraintPillClass(value);
+    pill.textContent = constraintPillText(label, value);
+    if (value?.reason) {
+      pill.title = value.reason;
+    }
+    elements.constraintStatus.append(pill);
+  });
+  elements.constraintStatus.hidden = false;
+}
+
 function setAuthMessage(message, danger = false) {
   elements.authMessageBox.textContent = message;
   elements.authMessageBox.style.color = danger ? "var(--danger)" : "var(--muted)";
@@ -1212,8 +1260,10 @@ function clearRememberedPhrases() {
   state.lastGeneratedAt = 0;
   state.currentPlaybackPayload = null;
   state.queuedPlaybackPayload = null;
+  state.activeMemoryPlaybackIndex = null;
   state.lastGenerationMs = null;
   state.lastCaptureDurationMs = null;
+  renderConstraintStatus(null);
   renderPerformanceState();
   updateInfiniteActionState();
 }
@@ -1768,6 +1818,23 @@ function syncPreviewSelection() {
   elements.memoryRibbon.querySelectorAll("[data-memory-index]").forEach((node) => {
     node.classList.toggle("is-selected", isSelectedMemoryIndex(node));
   });
+
+  syncMemoryPlaybackState();
+}
+
+function syncMemoryPlaybackState() {
+  elements.memoryList.querySelectorAll("[data-memory-index]").forEach((node) => {
+    const memoryIndex = Number(node.dataset.memoryIndex);
+    const isPlaying = memoryIndex === state.activeMemoryPlaybackIndex;
+    node.classList.toggle("is-playing", isPlaying);
+    const playButton = node.querySelector("[data-memory-play-index]");
+    if (playButton) {
+      playButton.textContent = isPlaying ? "Stop" : "Play";
+      playButton.classList.toggle("danger-button", isPlaying);
+      playButton.setAttribute("aria-pressed", String(isPlaying));
+      playButton.title = isPlaying ? "Stop this memory phrase" : "Play this memory phrase";
+    }
+  });
 }
 
 function revealPreviewTarget(kind) {
@@ -1943,12 +2010,14 @@ function createMemoryMarkup(items) {
               <span>Active phrase ${item.slot} in the current style memory</span>
             </span>
           </button>
-          <button class="ghost memory-play-button" data-memory-play-index="${item.slot - 1}" type="button">
-            Play
-          </button>
-          <button class="ghost memory-seed-button" data-memory-seed-index="${item.slot - 1}" type="button">
-            Use as Seed
-          </button>
+          <div class="memory-actions">
+            <button class="ghost memory-play-button" data-memory-play-index="${item.slot - 1}" type="button">
+              Play
+            </button>
+            <button class="ghost memory-seed-button" data-memory-seed-index="${item.slot - 1}" type="button">
+              Seed
+            </button>
+          </div>
         </div>
       `;
     })
@@ -2002,6 +2071,12 @@ function attachMemoryEvents() {
   const playMemoryIndex = async (rawIndex) => {
     const memoryIndex = Number(rawIndex);
     const item = state.memoryItems[memoryIndex];
+    if (memoryIndex === state.activeMemoryPlaybackIndex) {
+      stopActivePlayback();
+      setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
+      setPhraseMessage(`Stopped ${item?.source || "memory"} memory slot ${item?.slot || memoryIndex + 1}.`);
+      return;
+    }
     if (!item?.payload?.events?.length) {
       setPhraseMessage("That memory phrase has no playable events.", true);
       return;
@@ -2010,6 +2085,8 @@ function attachMemoryEvents() {
     try {
       stopInfiniteMode({ stopPlayback: true, silent: true });
       await playPayload(item.payload);
+      state.activeMemoryPlaybackIndex = memoryIndex;
+      syncMemoryPlaybackState();
       setPhraseMessage(`Playing ${item.source} memory slot ${item.slot}.`);
     } catch (error) {
       setPhraseMessage(error.message, true);
@@ -2024,11 +2101,14 @@ function attachMemoryEvents() {
       return;
     }
     previewMemoryIndex(rawIndex);
+    stopInfiniteMode({ stopPlayback: true, silent: true });
     state.lastGeneratedPhrase = null;
     state.lastGeneratedAt = 0;
     state.queuedPlaybackPayload = null;
     state.currentPlaybackPayload = null;
+    state.activeMemoryPlaybackIndex = null;
     renderGeneratedStats(null);
+    syncMemoryPlaybackState();
     updateInfiniteActionState();
     renderPerformanceState();
     setPhraseMessage(`Using ${item.source} memory slot ${item.slot} as the infinite-mode seed.`);
@@ -2493,15 +2573,20 @@ function applyContinuationPayload(payload, { renderGenerated = true } = {}) {
   rememberCapturedPhrase(payload.input_phrase.events);
   renderCapturedStats(payload.input_phrase.events, payload.input_phrase.notes, true);
   rememberGeneratedPhrase(payload.generated_phrase);
+  renderConstraintStatus(payload.constraints);
   if (renderGenerated) {
     renderGeneratedStats(payload.generated_phrase);
   }
 }
 
 function applyGeneratedPhrasePayload(payload, { renderGenerated = true } = {}) {
-  rememberGeneratedPhrase(payload);
+  const generatedPhrase = payload?.generated_phrase || payload;
+  rememberGeneratedPhrase(generatedPhrase);
+  if (payload?.generated_phrase) {
+    renderConstraintStatus(payload.constraints);
+  }
   if (renderGenerated) {
-    renderGeneratedStats(payload);
+    renderGeneratedStats(generatedPhrase);
   }
 }
 
@@ -2611,7 +2696,7 @@ async function generateFreshPhrase() {
     noteCount: preferredGenerationNoteCount(),
     statusLabel: "Generating",
   });
-  applyGeneratedPhrasePayload(payload.generated_phrase);
+  applyGeneratedPhrasePayload(payload);
   if (payload.generated_phrase.event_count > 0) {
     await playPayload(payload.generated_phrase);
   }
@@ -3223,18 +3308,30 @@ function stopPlaybackVisualization({ redraw = true } = {}) {
   if (redraw) {
     renderGeneratedStats(state.lastGeneratedPhrase);
   }
+  elements.outputPlayhead.hidden = true;
+  elements.outputPlayhead.style.transform = "translateX(0)";
   state.currentPlaybackPayload = null;
   state.queuedPlaybackPayload = null;
+  state.playbackVisualizationDisplayEndsAtMs = 0;
   renderPerformanceState();
 }
 
-function startPlaybackVisualization(payload, startAtMs, durationMs) {
+function outputPlayheadMaxX() {
+  const width = elements.outputRoll.getBoundingClientRect().width || 0;
+  return Math.max(0, width - 2);
+}
+
+function startPlaybackVisualization(payload, audioStartAtMs, durationMs) {
   const notes = payload?.notes?.length ? payload.notes : eventsToNotes(payload?.events || []);
   if (!notes.length) {
     return;
   }
 
-  const delayUntilStartMs = startAtMs - window.performance.now();
+  const displayStartAtMs = Math.max(
+    audioStartAtMs,
+    state.playbackVisualizationDisplayEndsAtMs || 0,
+  );
+  const delayUntilStartMs = displayStartAtMs - window.performance.now();
   if (delayUntilStartMs > 24) {
     if (state.playbackVisualizationStartTimerId) {
       window.clearTimeout(state.playbackVisualizationStartTimerId);
@@ -3243,7 +3340,7 @@ function startPlaybackVisualization(payload, startAtMs, durationMs) {
     renderPerformanceState();
     state.playbackVisualizationStartTimerId = window.setTimeout(() => {
       state.playbackVisualizationStartTimerId = null;
-      startPlaybackVisualization(payload, startAtMs, durationMs);
+      startPlaybackVisualization(payload, displayStartAtMs, durationMs);
     }, delayUntilStartMs);
     return;
   }
@@ -3256,18 +3353,25 @@ function startPlaybackVisualization(payload, startAtMs, durationMs) {
   renderGeneratedStats(payload);
   renderPerformanceState();
   const token = ++state.playbackVisualizationToken;
+  const startedAtMs = window.performance.now();
   const totalDurationSeconds = Math.max(
     0.001,
     ...notes.map((note) => note.end_seconds || note.start_seconds + note.duration_seconds),
   );
   const safeDurationMs = Math.max(1, Number(durationMs) || totalDurationSeconds * 1000);
+  state.playbackVisualizationDisplayEndsAtMs = startedAtMs + safeDurationMs;
+  elements.outputPlayhead.hidden = false;
 
   const tick = () => {
     if (token !== state.playbackVisualizationToken) {
       return;
     }
-    const elapsedMs = Math.max(0, window.performance.now() - startAtMs);
+    const elapsedMs = Math.max(0, window.performance.now() - startedAtMs);
     const progressRatio = Math.min(1, elapsedMs / safeDurationMs);
+    elements.outputPlayhead.hidden = false;
+    elements.outputPlayhead.style.transform = `translateX(${Math.round(
+      progressRatio * outputPlayheadMaxX(),
+    )}px)`;
     drawPianoRoll(
       elements.outputRoll,
       notes,
@@ -3283,6 +3387,8 @@ function startPlaybackVisualization(payload, startAtMs, durationMs) {
       window.setTimeout(() => {
         if (token === state.playbackVisualizationToken) {
           state.currentPlaybackPayload = null;
+          state.playbackVisualizationDisplayEndsAtMs = 0;
+          elements.outputPlayhead.hidden = true;
           renderPerformanceState();
           renderGeneratedStats(state.lastGeneratedPhrase);
         }
@@ -3308,7 +3414,9 @@ function stopActivePlayback() {
   playback.cleanupTimerId = null;
   playback.renderer?.stopPlayback?.(playback);
   state.activePlayback = null;
+  state.activeMemoryPlaybackIndex = null;
   stopPlaybackVisualization();
+  syncMemoryPlaybackState();
   updateInfiniteActionState();
   return true;
 }
@@ -3333,6 +3441,8 @@ async function playPayload(
     stopActivePlayback();
     playback = await createPlaybackSession();
     state.activePlayback = playback;
+    state.activeMemoryPlaybackIndex = null;
+    syncMemoryPlaybackState();
   }
 
   if (playback.cleanupTimerId != null) {
@@ -3486,7 +3596,7 @@ async function runInfiniteStep(prefixPayload, runId) {
     }
 
     const willQueueAfterCurrentPlayback = Boolean(state.activePlayback);
-    applyGeneratedPhrasePayload(generatedPhrase, {
+    applyGeneratedPhrasePayload(payload, {
       renderGenerated: !willQueueAfterCurrentPlayback,
     });
     const startDelayMs = state.activePlayback

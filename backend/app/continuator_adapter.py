@@ -9,7 +9,15 @@ import threading
 
 import mido
 
-from .schemas import MidiEvent, PhraseNote, PhrasePayload, PlaybackMidiEvent, ViewpointSeed
+from .schemas import (
+    GenerationConstraintsStatus,
+    GenerationConstraintState,
+    MidiEvent,
+    PhraseNote,
+    PhrasePayload,
+    PlaybackMidiEvent,
+    ViewpointSeed,
+)
 
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -123,6 +131,26 @@ def _schema_to_viewpoint(seed: ViewpointSeed | None) -> tuple[int, int, bool, bo
         bool(seed.overlaps_left),
         bool(seed.overlaps_right),
     )
+
+
+def _pitch_label(pitch: int) -> str:
+    names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
+    return f"{names[pitch % 12]}{pitch // 12 - 1}"
+
+
+def _viewpoint_label(viewpoint: tuple[int, int, bool, bool] | None) -> str | None:
+    if viewpoint is None:
+        return None
+    pitch, duration_bin, overlaps_left, overlaps_right = viewpoint
+    overlap_label = ""
+    if overlaps_left or overlaps_right:
+        sides = []
+        if overlaps_left:
+            sides.append("left")
+        if overlaps_right:
+            sides.append("right")
+        overlap_label = f", overlaps {'/'.join(sides)}"
+    return f"{_pitch_label(int(pitch))}, duration bin {int(duration_bin)}{overlap_label}"
 
 
 def _notes_to_events(notes: list[object]) -> list[PlaybackMidiEvent]:
@@ -396,7 +424,7 @@ class ContinuatorSessionEngine:
         self,
         note_count: int | None = None,
         enforce_end_constraint: bool = True,
-    ) -> tuple[PhrasePayload, str | None]:
+    ) -> tuple[PhrasePayload, GenerationConstraintsStatus, str | None]:
         with self._lock:
             if not getattr(self._continuator.vom, "input_sequences", []):
                 raise NoContinuationAvailable(
@@ -405,6 +433,19 @@ class ContinuatorSessionEngine:
 
             target_note_count = note_count or 12
             status_message = None
+            constraints_status = GenerationConstraintsStatus(
+                start=GenerationConstraintState(
+                    requested=False,
+                    applied=False,
+                    reason="Generated directly from memory.",
+                ),
+                end=GenerationConstraintState(
+                    requested=enforce_end_constraint,
+                    applied=enforce_end_constraint,
+                    value="ending marker" if enforce_end_constraint else None,
+                    reason=None if enforce_end_constraint else "Ending constraint was disabled.",
+                ),
+            )
             if enforce_end_constraint:
                 constraints = {target_note_count: self._continuator.get_end_vp()}
                 generated_sequence = self._continuator.sample_sequence(
@@ -422,6 +463,9 @@ class ContinuatorSessionEngine:
                         "Generated from memory without the hard end constraint "
                         "because the exact-ending version had no solution."
                     )
+                    constraints_status.end.applied = False
+                    constraints_status.end.relaxed = True
+                    constraints_status.end.reason = "The exact-ending version had no solution."
             else:
                 generated_sequence = self._continuator.sample_sequence(
                     prefix=None,
@@ -444,7 +488,7 @@ class ContinuatorSessionEngine:
                 )
 
             rendered_sequence = self._continuator.realize_vp_sequence(rendered_vp_sequence)
-            return _build_phrase_payload(rendered_sequence), status_message
+            return _build_phrase_payload(rendered_sequence), constraints_status, status_message
 
     def continue_phrase(
         self,
@@ -453,7 +497,7 @@ class ContinuatorSessionEngine:
         continuation_note_count: int | None = None,
         enforce_end_constraint: bool = True,
         handoff_viewpoint: ViewpointSeed | None = None,
-    ) -> tuple[PhrasePayload, PhrasePayload, str | None]:
+    ) -> tuple[PhrasePayload, PhrasePayload, GenerationConstraintsStatus, str | None]:
         with self._lock:
             messages = [_event_to_mido_message(event) for event in phrase_events]
             input_phrase = self._continuator.get_phrase_from_mido(messages)
@@ -471,51 +515,104 @@ class ContinuatorSessionEngine:
             prefix_for_generation = input_phrase
             start_viewpoint = None
             requested_handoff_viewpoint = _schema_to_viewpoint(handoff_viewpoint)
+            input_handoff_viewpoint = self._continuator.get_viewpoint(input_phrase[-1])
+            displayed_start_viewpoint = requested_handoff_viewpoint or input_handoff_viewpoint
+            constraints_status = GenerationConstraintsStatus(
+                start=GenerationConstraintState(
+                    requested=True,
+                    applied=True,
+                    value=_viewpoint_label(displayed_start_viewpoint),
+                    reason=(
+                        "Using preserved handoff viewpoint."
+                        if requested_handoff_viewpoint is not None
+                        else "Using final input viewpoint."
+                    ),
+                ),
+                end=GenerationConstraintState(
+                    requested=enforce_end_constraint,
+                    applied=enforce_end_constraint,
+                    value="ending marker" if enforce_end_constraint else None,
+                    reason=None if enforce_end_constraint else "Ending constraint was disabled.",
+                ),
+            )
             if requested_handoff_viewpoint is not None:
                 if self._continuator.vom.has_viewpoint(requested_handoff_viewpoint):
                     prefix_for_generation = None
                     start_viewpoint = requested_handoff_viewpoint
                 else:
+                    constraints_status.start.applied = False
+                    constraints_status.start.relaxed = True
+                    constraints_status.start.reason = (
+                        "Preserved handoff viewpoint was outside the learned vocabulary."
+                    )
                     status_messages.append(
                         "Ignored the preserved handoff viewpoint because it was outside "
                         "the learned vocabulary."
                     )
 
             if start_viewpoint is None:
-                prefix_viewpoint = self._continuator.get_viewpoint(input_phrase[-1])
-                if not self._continuator.vom.has_viewpoint(prefix_viewpoint):
+                if not self._continuator.vom.has_viewpoint(input_handoff_viewpoint):
                     prefix_for_generation = None
+                    constraints_status.start.applied = False
+                    constraints_status.start.relaxed = True
+                    constraints_status.start.reason = (
+                        "Final input viewpoint was outside the learned vocabulary."
+                    )
                     status_messages.append(
                         "Relaxed the continuation handoff because the final input state "
                         "was outside the learned vocabulary."
                     )
 
-            if enforce_end_constraint:
-                constraints = {target_note_count: self._continuator.get_end_vp()}
-                generated_sequence = self._continuator.sample_sequence(
+            def sample_with_current_start(length: int, constraints: dict[int, object]):
+                return self._continuator.sample_sequence(
                     prefix=prefix_for_generation,
                     start_vp=start_viewpoint,
-                    length=target_note_count + 1,
+                    length=length,
+                    constraints=constraints,
+                    relax_prefix_on_fail=False,
+                )
+
+            def sample_with_relaxed_start(length: int, constraints: dict[int, object]):
+                return self._continuator.sample_sequence(
+                    prefix=None,
+                    start_vp=None,
+                    length=length,
                     constraints=constraints,
                 )
-                if generated_sequence is None:
-                    generated_sequence = self._continuator.sample_sequence(
-                        prefix=prefix_for_generation,
-                        start_vp=start_viewpoint,
-                        length=target_note_count,
-                        constraints={},
+
+            def relax_start_constraint(reason: str) -> None:
+                if constraints_status.start.applied:
+                    constraints_status.start.applied = False
+                    constraints_status.start.relaxed = True
+                    constraints_status.start.reason = reason
+                    status_messages.append(
+                        "Relaxed the continuation handoff because the requested start "
+                        "had no valid continuation."
                     )
+
+            if enforce_end_constraint:
+                constraints = {target_note_count: self._continuator.get_end_vp()}
+                generated_sequence = sample_with_current_start(
+                    target_note_count + 1,
+                    constraints,
+                )
+                if generated_sequence is None:
+                    generated_sequence = sample_with_current_start(target_note_count, {})
                     status_messages.append(
                         "Used a same-length continuation without the hard end constraint "
                         "because the exact-ending version had no solution."
                     )
+                    constraints_status.end.applied = False
+                    constraints_status.end.relaxed = True
+                    constraints_status.end.reason = "The exact-ending version had no solution."
+                if generated_sequence is None:
+                    relax_start_constraint("The requested handoff had no valid continuation.")
+                    generated_sequence = sample_with_relaxed_start(target_note_count, {})
             else:
-                generated_sequence = self._continuator.sample_sequence(
-                    prefix=prefix_for_generation,
-                    start_vp=start_viewpoint,
-                    length=target_note_count,
-                    constraints={},
-                )
+                generated_sequence = sample_with_current_start(target_note_count, {})
+                if generated_sequence is None:
+                    relax_start_constraint("The requested handoff had no valid continuation.")
+                    generated_sequence = sample_with_relaxed_start(target_note_count, {})
 
             if generated_sequence is None:
                 raise NoContinuationAvailable("The Continuator could not find a valid continuation.")
@@ -526,4 +623,9 @@ class ContinuatorSessionEngine:
 
             rendered_sequence = self._continuator.realize_vp_sequence(rendered_vp_sequence)
             status_message = " ".join(status_messages) or None
-            return input_payload, _build_phrase_payload(rendered_sequence), status_message
+            return (
+                input_payload,
+                _build_phrase_payload(rendered_sequence),
+                constraints_status,
+                status_message,
+            )

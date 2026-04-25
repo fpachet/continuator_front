@@ -441,6 +441,34 @@ class PhraseStorage:
 
         return [json.loads(str(row["payload_json"])) for row in rows]
 
+    def count_continuation_requests(
+        self,
+        session_id: str,
+        last_reset_at: str | None = None,
+    ) -> int:
+        query = """
+            SELECT COUNT(DISTINCT input.request_id) AS count
+            FROM phrases AS input
+            WHERE input.session_id = ?
+              AND input.kind = 'input'
+              AND EXISTS (
+                  SELECT 1
+                  FROM phrases AS generated
+                  WHERE generated.session_id = input.session_id
+                    AND generated.request_id = input.request_id
+                    AND generated.kind = 'generated'
+              )
+        """
+        params: list[object] = [session_id]
+        if last_reset_at is not None:
+            query += " AND input.created_at > ?"
+            params.append(last_reset_at)
+
+        with self._lock, self._connect() as connection:
+            row = connection.execute(query, params).fetchone()
+
+        return int(row["count"] or 0) if row is not None else 0
+
     def log_phrase(
         self,
         phrase_id: str,

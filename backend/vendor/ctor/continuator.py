@@ -273,7 +273,14 @@ class Continuator2:
         path = pathlib.Path(path_string)
         return list(path.glob('*.mid')) + list(path.glob('*.midi'))
 
-    def sample_sequence(self, prefix = None, length=50, constraints=None, start_vp=None):
+    def sample_sequence(
+        self,
+        prefix=None,
+        length=50,
+        constraints=None,
+        start_vp=None,
+        **sampling_options,
+    ):
         """
         :param length:
         :type constraints: dict
@@ -283,6 +290,7 @@ class Continuator2:
             prefix=prefix,
             constraints=constraints,
             start_vp=start_vp,
+            **sampling_options,
         )
 
     def sample_sequence_0(self, length=50, constraints=None):
