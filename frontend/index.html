@@ -357,6 +357,15 @@
                   <p class="field-hint">
                     Capture completes after this delay once all notes are released.
                   </p>
+                  <div id="phrase-gap-meter" class="phrase-gap-meter" hidden>
+                    <div class="phrase-gap-meter-head">
+                      <span>Phrase closing</span>
+                      <strong id="phrase-gap-meter-copy">1.0s</strong>
+                    </div>
+                    <div class="phrase-gap-track" aria-hidden="true">
+                      <div id="phrase-gap-meter-bar" class="phrase-gap-bar"></div>
+                    </div>
+                  </div>
                 </div>
                 <label class="toggle">
                   <input id="learn-input-toggle" type="checkbox" checked />
@@ -409,18 +418,24 @@
                   </div>
                   <div class="field generation-field">
                     <label>Infinite mode</label>
-                    <div class="button-row generation-actions">
-                      <button id="start-infinite-button" class="ghost" type="button">
-                        Start Infinite
-                      </button>
-                      <button
-                        id="stop-infinite-button"
-                        class="ghost danger-button"
-                        type="button"
-                        disabled
-                      >
-                        Stop
-                      </button>
+                    <div class="infinite-transport">
+                      <div class="transport-copy">
+                        <strong id="infinite-state-label">Idle</strong>
+                        <span id="infinite-seed-label">Seed: play or preview a phrase</span>
+                      </div>
+                      <div class="transport-actions">
+                        <button id="start-infinite-button" class="ghost transport-button" type="button">
+                          Play
+                        </button>
+                        <button
+                          id="stop-infinite-button"
+                          class="ghost danger-button transport-button"
+                          type="button"
+                          disabled
+                        >
+                          Stop
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -452,6 +467,14 @@
                   <select id="midi-output-select" disabled>
                     <option>Browser Triangle</option>
                   </select>
+                </div>
+                <div class="button-row sound-actions">
+                  <button id="test-note-button" class="ghost" type="button">
+                    Test Note
+                  </button>
+                  <button id="panic-button" class="ghost danger-button" type="button">
+                    Panic
+                  </button>
                 </div>
                 <dl class="info-grid">
                   <div>
@@ -683,10 +706,10 @@
                 <section class="panel-section">
                   <div class="section-head">
                     <div>
-                      <h3>Active Engine Memory</h3>
+                      <h3>Style Memory</h3>
                       <p class="section-copy">
-                        Inspect what is currently active inside the Continuator
-                        engine.
+                        Listen to what the Continuator currently knows as its
+                        musical vocabulary.
                       </p>
                     </div>
                   </div>
