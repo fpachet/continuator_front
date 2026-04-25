@@ -2124,11 +2124,12 @@ function renderCapturedStats(events, notes, completed) {
 }
 
 function renderGeneratedStats(payload) {
+  const notes = payloadNotes(payload);
   elements.generatedEventCount.textContent = String(payload?.event_count || 0);
-  elements.generatedNoteCount.textContent = String(payload?.note_count || 0);
+  elements.generatedNoteCount.textContent = String(payload?.note_count || notes.length);
   drawPianoRoll(
     elements.outputRoll,
-    payload?.notes || [],
+    notes,
     "#f4a261",
     "Generated continuation",
   );
@@ -2568,6 +2569,18 @@ function drawPianoRoll(canvas, notes, accent, emptyLabel, options = {}) {
     ctx.closePath();
     ctx.fill();
   }
+}
+
+function payloadNotes(payload) {
+  const notes = Array.isArray(payload?.notes)
+    ? payload.notes.filter(
+        (note) =>
+          Number.isFinite(Number(note?.pitch)) &&
+          Number.isFinite(Number(note?.start_seconds)) &&
+          Number.isFinite(Number(note?.duration_seconds)),
+      )
+    : [];
+  return notes.length ? notes : eventsToNotes(payload?.events || []);
 }
 
 function roundRect(ctx, x, y, width, height, radius, fill) {
@@ -3701,7 +3714,7 @@ function startPlaybackVisualization(
   durationMs,
   { rollKind = "output" } = {},
 ) {
-  const notes = payload?.notes?.length ? payload.notes : eventsToNotes(payload?.events || []);
+  const notes = payloadNotes(payload);
   if (!notes.length) {
     return;
   }

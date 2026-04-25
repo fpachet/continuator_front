@@ -2,12 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import os
-import sys
 from tempfile import TemporaryDirectory
 import threading
 
 import mido
+from ctor.continuator import Continuator2
 
 from .schemas import (
     GenerationConstraintsStatus,
@@ -18,32 +17,6 @@ from .schemas import (
     PlaybackMidiEvent,
     ViewpointSeed,
 )
-
-
-BACKEND_DIR = Path(__file__).resolve().parents[1]
-VENDOR_DIR = BACKEND_DIR / "vendor"
-
-
-def _bootstrap_continuator_imports() -> None:
-    candidate_paths: list[Path] = []
-    external_source = os.getenv("CONTINUATOR_SOURCE_DIR")
-    if external_source:
-        candidate_paths.append(Path(external_source).expanduser())
-    candidate_paths.append(VENDOR_DIR)
-
-    for path in candidate_paths:
-        if path.exists():
-            resolved = str(path)
-            if resolved not in sys.path:
-                sys.path.insert(0, resolved)
-            return
-
-    raise RuntimeError("Could not locate Continuator source files.")
-
-
-_bootstrap_continuator_imports()
-
-from ctor.continuator import Continuator2  # noqa: E402
 
 
 class NoContinuationAvailable(RuntimeError):

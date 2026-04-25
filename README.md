@@ -186,7 +186,6 @@ backend/
     session_manager.py
     storage.py
   data/
-  vendor/
 frontend/
   app.js
   index.html
@@ -204,9 +203,7 @@ Main responsibilities:
 - `backend/app/session_manager.py`: session lifecycle, orchestration, and API-facing session logic.
 - `backend/app/continuator_adapter.py`: bridge between web JSON payloads and the Continuator Python engine.
 - `backend/app/storage.py`: SQLite session and phrase logging.
-- `backend/vendor/`: vendored Continuator code used by the web wrapper.
-
-`backend/vendor/` contains the minimal Continuator modules needed for the web path, copied from the existing local `continuator` checkout and kept under the original license in `backend/vendor/LICENSE.continuator`.
+- `continuator`: installed Python package providing the Continuator engine.
 
 ## API Surface
 
@@ -273,7 +270,6 @@ Environment variables currently supported:
 - `CONTINUATOR_DB_PATH`: move the SQLite database to another location.
 - `CONTINUATOR_SEED_MIDI_FILE`: preload each new session with one MIDI file.
 - `CONTINUATOR_SEED_MIDI_FOLDER`: preload each new session with a folder of MIDI files.
-- `CONTINUATOR_SOURCE_DIR`: advanced development option to import Continuator from an external checkout instead of the vendored copy.
 
 Examples:
 
