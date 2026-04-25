@@ -80,6 +80,10 @@ class SessionConfiguration(BaseModel):
     markov_order: int = Field(default=4, ge=1, le=16)
     seeded: bool
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
+    midi_input_id: str | None = Field(default=None, max_length=256)
+    midi_input_name: str | None = Field(default=None, max_length=256)
+    playback_choice: str | None = Field(default=None, max_length=512)
+    playback_choice_name: str | None = Field(default=None, max_length=256)
 
 
 class CreateSessionResponse(BaseModel):
@@ -201,6 +205,19 @@ class UpdateSessionNameRequest(BaseModel):
 
 
 class UpdateSessionNameResponse(BaseModel):
+    session_id: str
+    updated_at: str
+    configuration: SessionConfiguration
+
+
+class UpdateSessionPreferencesRequest(BaseModel):
+    midi_input_id: str | None = Field(default=None, max_length=256)
+    midi_input_name: str | None = Field(default=None, max_length=256)
+    playback_choice: str | None = Field(default=None, max_length=512)
+    playback_choice_name: str | None = Field(default=None, max_length=256)
+
+
+class UpdateSessionPreferencesResponse(BaseModel):
     session_id: str
     updated_at: str
     configuration: SessionConfiguration

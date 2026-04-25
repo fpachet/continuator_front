@@ -33,6 +33,8 @@ from .schemas import (
     SessionMemoryResponse,
     UpdateSessionNameRequest,
     UpdateSessionNameResponse,
+    UpdateSessionPreferencesRequest,
+    UpdateSessionPreferencesResponse,
     UpdateSessionSettingsRequest,
     UpdateSessionSettingsResponse,
     UserSessionsResponse,
@@ -217,6 +219,26 @@ def update_session_name(
 ) -> UpdateSessionNameResponse:
     try:
         return session_manager.update_session_name(session_id, current_user.id, payload)
+    except UnknownSessionError as error:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+
+
+@app.patch(
+    "/api/sessions/{session_id}/preferences",
+    response_model=UpdateSessionPreferencesResponse,
+    tags=["session"],
+)
+def update_session_preferences(
+    session_id: str,
+    payload: UpdateSessionPreferencesRequest,
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+) -> UpdateSessionPreferencesResponse:
+    try:
+        return session_manager.update_session_preferences(
+            session_id,
+            None if current_user is None else current_user.id,
+            payload,
+        )
     except UnknownSessionError as error:
         raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
 

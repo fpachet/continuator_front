@@ -76,7 +76,6 @@ const elements = {
   phraseGapMeterBar: document.querySelector("#phrase-gap-meter-bar"),
   phraseGapMeterCopy: document.querySelector("#phrase-gap-meter-copy"),
   selectedInputName: document.querySelector("#selected-input-name"),
-  selectedOutputName: document.querySelector("#selected-output-name"),
   lastMidiEvent: document.querySelector("#last-midi-event"),
   capturedEventCount: document.querySelector("#captured-event-count"),
   capturedNoteCount: document.querySelector("#captured-note-count"),
@@ -1053,7 +1052,7 @@ function rendererHealthLabel() {
       return "Connect MIDI to inspect external outputs";
     }
     const output = midiOutputById(choice.targetId);
-    return output ? `External MIDI ready: ${output.name || output.id}` : "External MIDI output unavailable";
+    return output ? "External MIDI ready" : "External MIDI output unavailable";
   }
   if (choice.renderer instanceof FaustPolyRenderer) {
     return choice.renderer.lastError
@@ -1386,10 +1385,6 @@ function setSelectedInputName(label) {
   elements.selectedInputName.textContent = label;
 }
 
-function setSelectedOutputName(label) {
-  elements.selectedOutputName.textContent = label;
-}
-
 function setLastMidiEvent(label) {
   elements.lastMidiEvent.textContent = label;
 }
@@ -1631,6 +1626,34 @@ function describeSessionSettings(settings) {
   return [orderLabel, transposeLabel, memoryLabel, decayLabel];
 }
 
+function savedPlaybackPreferenceLabel(configuration) {
+  if (!configuration?.playback_choice) {
+    return null;
+  }
+  if (configuration.playback_choice_name) {
+    return configuration.playback_choice_name;
+  }
+
+  const { rendererId } = parsePlaybackChoice(configuration.playback_choice);
+  if (rendererId === WEB_MIDI_RENDERER_ID) {
+    return "External MIDI";
+  }
+  return playbackChoiceLabel(configuration.playback_choice);
+}
+
+function describeSessionPreferences(configuration) {
+  const labels = [];
+  const inputName = configuration?.midi_input_name || configuration?.midi_input_id;
+  const playbackName = savedPlaybackPreferenceLabel(configuration);
+  if (inputName) {
+    labels.push(`Input ${inputName}`);
+  }
+  if (playbackName) {
+    labels.push(`Playback ${playbackName}`);
+  }
+  return labels;
+}
+
 function renderSessionSettingsSummary() {
   const labels = describeSessionSettings(readSessionSettingsFromControls());
   elements.settingsSummary.innerHTML = labels
@@ -1777,6 +1800,8 @@ function createSavedSessionsMarkup(items) {
         ? ` · Reset ${formatTimestamp(item.last_reset_at)}`
         : "";
       const settingsLabel = describeSessionSettings(item.configuration).join(" · ");
+      const preferenceLabel = describeSessionPreferences(item.configuration).join(" · ");
+      const detailLabel = [settingsLabel, preferenceLabel].filter(Boolean).join(" · ");
       const displayName = sessionDisplayName(item);
       return `
         <div
@@ -1793,7 +1818,7 @@ function createSavedSessionsMarkup(items) {
               <strong>${displayName}</strong>
               <span>${activityLabel}</span>
               <span>Seen ${formatTimestamp(item.last_seen_at)}${resetLabel}</span>
-              <span>${settingsLabel}</span>
+              <span>${detailLabel}</span>
             </span>
           </button>
           <button
@@ -1864,8 +1889,12 @@ function renderSavedSessionPreview() {
     `${pluralize(item.active_learned_phrase_count, "learned phrase")} active`;
   elements.savedSessionPreviewHistory.textContent =
     `${pluralize(item.phrase_count, "logged phrase")} · ${pluralize(item.input_phrase_count, "input")}`;
-  elements.savedSessionPreviewSettings.textContent =
-    describeSessionSettings(item.configuration).join(" · ");
+  elements.savedSessionPreviewSettings.textContent = [
+    describeSessionSettings(item.configuration).join(" · "),
+    describeSessionPreferences(item.configuration).join(" · "),
+  ]
+    .filter(Boolean)
+    .join(" · ");
   elements.savedSessionPreviewSeen.textContent =
     `${formatTimestamp(item.last_seen_at)}${item.last_reset_at ? ` · Reset ${formatTimestamp(item.last_reset_at)}` : ""}`;
 }
@@ -1894,6 +1923,61 @@ async function renamePreviewedSession() {
   }
   renderSavedSessions(state.savedSessions);
   setAuthMessage(`Renamed session to ${sessionDisplayName(item)}.`);
+}
+
+function updateSavedSessionConfiguration(sessionId, configuration, updatedAt = null) {
+  const item = state.savedSessions.find((session) => session.session_id === sessionId);
+  if (!item) {
+    return;
+  }
+  item.configuration = configuration;
+  if (updatedAt) {
+    item.last_seen_at = updatedAt;
+  }
+  renderSavedSessions(state.savedSessions);
+}
+
+function currentInputPreference() {
+  if (!state.midiAccess || !state.activeInputId) {
+    return {};
+  }
+  const input = state.midiAccess.inputs.get(state.activeInputId);
+  if (!input) {
+    return {};
+  }
+  return {
+    midi_input_id: input.id,
+    midi_input_name: input.name || input.id,
+  };
+}
+
+function currentPlaybackPreference() {
+  return {
+    playback_choice: selectedPlaybackChoiceValue(),
+    playback_choice_name: playbackChoiceLabel(),
+  };
+}
+
+function currentSessionPreferences() {
+  return {
+    ...currentInputPreference(),
+    ...currentPlaybackPreference(),
+  };
+}
+
+async function saveSessionPreferences(preferences) {
+  if (!state.sessionId || !preferences || !Object.keys(preferences).length) {
+    return null;
+  }
+
+  const payload = await requestJson(`/api/sessions/${state.sessionId}/preferences`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(preferences),
+  });
+  state.sessionConfiguration = payload.configuration;
+  updateSavedSessionConfiguration(payload.session_id, payload.configuration, payload.updated_at);
+  return payload;
 }
 
 function attachSavedSessionEvents() {
@@ -2641,12 +2725,46 @@ async function refreshSavedSessions() {
   renderSavedSessions(payload.items || []);
 }
 
-function useSessionPayload(payload, { owned = Boolean(state.authUser) } = {}) {
+function selectPlaybackPreference(configuration) {
+  const preferredChoiceValue = configuration?.playback_choice;
+  if (!preferredChoiceValue) {
+    return false;
+  }
+
+  const options = new Set(
+    [...elements.midiOutputSelect.options].map((option) => option.value),
+  );
+  if (!options.has(preferredChoiceValue)) {
+    return false;
+  }
+
+  elements.midiOutputSelect.value = preferredChoiceValue;
+  updateSelectedOutput();
+  return true;
+}
+
+async function selectMidiInputPreference(configuration) {
+  const preferredInputId = configuration?.midi_input_id;
+  if (!state.midiAccess || !preferredInputId || !state.midiAccess.inputs.has(preferredInputId)) {
+    return false;
+  }
+
+  await attachInput(preferredInputId, { savePreference: false });
+  return true;
+}
+
+async function restoreSessionPreferences(configuration) {
+  selectPlaybackPreference(configuration);
+  await selectMidiInputPreference(configuration);
+}
+
+async function useSessionPayload(payload, { owned = Boolean(state.authUser) } = {}) {
   state.sessionId = payload.session_id;
   state.sessionIsOwned = owned;
   state.sessionConfiguration = payload.configuration;
   elements.sessionId.textContent = payload.session_id;
   syncSettingsControls(payload.configuration);
+  await restoreSessionPreferences(payload.configuration);
   updateSessionActionState();
   setSessionStatus("Ready");
   renderPerformanceState();
@@ -2661,7 +2779,7 @@ async function openSavedSession(sessionId) {
     method: "POST",
   });
   state.previewedSavedSessionId = sessionId;
-  useSessionPayload(payload, { owned: true });
+  await useSessionPayload(payload, { owned: true });
   setControlView("perform");
   clearPhraseBuffers();
   await refreshSessionActivity();
@@ -2681,7 +2799,8 @@ async function createSession({ preservePhraseBuffers = false, announce = true } 
     body: JSON.stringify(settings),
   });
 
-  useSessionPayload(payload, { owned: Boolean(state.authUser) });
+  await useSessionPayload(payload, { owned: Boolean(state.authUser) });
+  await saveSessionPreferences(currentSessionPreferences());
   setControlView("perform");
   if (!preservePhraseBuffers) {
     clearPhraseBuffers();
@@ -2988,7 +3107,7 @@ async function playTestNote() {
   const payload = createTestNotePayload();
   renderGeneratedStats(payload);
   await playPayload(payload);
-  setPhraseMessage(`Testing ${elements.selectedOutputName.textContent}.`);
+  setPhraseMessage(`Testing ${playbackChoiceLabel()}.`);
 }
 
 async function panicPlayback() {
@@ -4076,6 +4195,7 @@ async function startInfiniteMode() {
 function populatePlaybackChoices() {
   const outputs = state.midiAccess ? [...state.midiAccess.outputs.values()] : [];
   const previousChoiceValue = selectedPlaybackChoiceValue();
+  const preferredChoiceValue = state.sessionConfiguration?.playback_choice || null;
   const availableChoices = new Set([
     ...localPlaybackRenderers.map((renderer) => encodePlaybackChoice(renderer.id)),
     ...outputs.map((output) =>
@@ -4118,9 +4238,12 @@ function populatePlaybackChoices() {
   ]
     .filter(Boolean)
     .join("");
-  elements.midiOutputSelect.value = availableChoices.has(previousChoiceValue)
-    ? previousChoiceValue
-    : DEFAULT_PLAYBACK_CHOICE;
+  elements.midiOutputSelect.value =
+    preferredChoiceValue && availableChoices.has(preferredChoiceValue)
+      ? preferredChoiceValue
+      : availableChoices.has(previousChoiceValue)
+        ? previousChoiceValue
+        : DEFAULT_PLAYBACK_CHOICE;
   updateSelectedOutput();
 }
 
@@ -4144,10 +4267,14 @@ async function populateMidiSelectors() {
     : `<option value="">No MIDI inputs found</option>`;
 
   if (inputs.length) {
-    const inputId = state.midiAccess.inputs.has(previousInputId)
-      ? previousInputId
-      : inputs[0].id;
-    await attachInput(inputId);
+    const preferredInputId = state.sessionConfiguration?.midi_input_id || null;
+    const inputId =
+      preferredInputId && state.midiAccess.inputs.has(preferredInputId)
+        ? preferredInputId
+        : state.midiAccess.inputs.has(previousInputId)
+          ? previousInputId
+          : inputs[0].id;
+    await attachInput(inputId, { savePreference: false });
   } else {
     detachCurrentInput();
     setSelectedInputName("No MIDI input found");
@@ -4169,7 +4296,7 @@ function detachCurrentInput() {
   renderPerformanceState();
 }
 
-async function attachInput(inputId) {
+async function attachInput(inputId, { savePreference = false } = {}) {
   detachCurrentInput();
 
   if (!state.midiAccess || !inputId) {
@@ -4215,6 +4342,12 @@ async function attachInput(inputId) {
   setSelectedInputName(input.name || input.id);
   setMidiStatus(`Listening on ${input.name || input.id}`);
   renderPerformanceState();
+  if (savePreference) {
+    await saveSessionPreferences({
+      midi_input_id: input.id,
+      midi_input_name: input.name || input.id,
+    });
+  }
 }
 
 async function connectMidi() {
@@ -4234,7 +4367,6 @@ async function connectMidi() {
 }
 
 function updateSelectedOutput() {
-  setSelectedOutputName(playbackChoiceLabel());
   syncFaustRendererPanel();
   renderPerformanceState();
 }
@@ -4543,7 +4675,7 @@ function bindEvents() {
 
   elements.midiInputSelect.addEventListener("change", async (event) => {
     try {
-      await attachInput(event.target.value);
+      await attachInput(event.target.value, { savePreference: true });
       setPhraseMessage(`MIDI input changed to ${elements.selectedInputName.textContent}.`);
     } catch (error) {
       setPhraseMessage(error.message, true);
@@ -4571,7 +4703,8 @@ function bindEvents() {
           refreshCustomFaustControlState();
         }
       }
-      setPhraseMessage(`Playback renderer set to ${elements.selectedOutputName.textContent}.`);
+      await saveSessionPreferences(currentPlaybackPreference());
+      setPhraseMessage(`Playback renderer set to ${playbackChoiceLabel()}.`);
     } catch (error) {
       setPhraseMessage(error.message, true);
     } finally {

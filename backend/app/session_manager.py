@@ -27,6 +27,8 @@ from .schemas import (
     SessionMemorySummary,
     UpdateSessionNameRequest,
     UpdateSessionNameResponse,
+    UpdateSessionPreferencesRequest,
+    UpdateSessionPreferencesResponse,
     UpdateSessionSettingsRequest,
     UpdateSessionSettingsResponse,
     UserSessionListItem,
@@ -81,6 +83,10 @@ class SessionManager:
             markov_order=request.markov_order,
             seeded=self.seeded,
             display_name=None,
+            midi_input_id=None,
+            midi_input_name=None,
+            playback_choice=None,
+            playback_choice_name=None,
         )
 
     def _build_engine(self, configuration: SessionConfiguration) -> ContinuatorSessionEngine:
@@ -501,6 +507,38 @@ class SessionManager:
             last_seen_at=updated_at,
         )
         return UpdateSessionNameResponse(
+            session_id=session_id,
+            updated_at=updated_at,
+            configuration=state.configuration,
+        )
+
+    def update_session_preferences(
+        self,
+        session_id: str,
+        owner_user_id: str | None,
+        request: UpdateSessionPreferencesRequest,
+    ) -> UpdateSessionPreferencesResponse:
+        state = self._require_session(session_id, owner_user_id)
+        updated_at = utc_now_iso()
+
+        def normalize(value: str | None) -> str | None:
+            if value is None:
+                return None
+            normalized = " ".join(value.split())
+            return normalized or None
+
+        update_fields = request.model_dump(exclude_unset=True)
+        normalized_fields = {
+            key: normalize(value) for key, value in update_fields.items()
+        }
+        state.configuration = state.configuration.model_copy(update=normalized_fields)
+        state.last_seen_at = updated_at
+        self.storage.update_session_metadata(
+            session_id=session_id,
+            metadata=state.configuration.model_dump(),
+            last_seen_at=updated_at,
+        )
+        return UpdateSessionPreferencesResponse(
             session_id=session_id,
             updated_at=updated_at,
             configuration=state.configuration,
