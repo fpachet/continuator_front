@@ -524,6 +524,59 @@ button.ghost {
   color: var(--text);
 }
 
+.performance-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 10px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.readiness-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.readiness-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.readiness-step::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.readiness-step.is-ready {
+  color: var(--text);
+  border-color: rgba(109, 211, 206, 0.22);
+  background: rgba(109, 211, 206, 0.09);
+}
+
+.readiness-step.is-ready::before {
+  background: var(--secondary);
+}
+
+.global-panic-button {
+  flex-shrink: 0;
+  padding: 9px 13px;
+}
+
 .workspace-panel[hidden] {
   display: none;
 }
@@ -905,6 +958,61 @@ input[type="password"]:disabled {
   line-height: 1.55;
 }
 
+.session-save-note {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(244, 162, 97, 0.18);
+  background: rgba(244, 162, 97, 0.08);
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.timeline-card {
+  padding-bottom: 18px;
+}
+
+.phrase-timeline {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.timeline-segment {
+  display: grid;
+  gap: 6px;
+  min-height: 72px;
+  padding: 13px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.timeline-segment span {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.timeline-segment strong {
+  font-size: 0.94rem;
+}
+
+.timeline-segment.is-ready {
+  border-color: rgba(109, 211, 206, 0.2);
+  background: rgba(109, 211, 206, 0.08);
+}
+
+.timeline-segment.is-playing {
+  border-color: rgba(244, 162, 97, 0.28);
+  background: rgba(244, 162, 97, 0.11);
+}
+
+.timeline-segment.is-queued {
+  border-color: rgba(255, 245, 212, 0.22);
+  background: rgba(255, 245, 212, 0.08);
+}
+
 .generation-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1040,12 +1148,12 @@ input[type="password"]:disabled {
 }
 
 .memory-item {
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
 }
 
 .memory-preview-button {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(72px, 96px) 1fr;
   gap: 14px;
   align-items: center;
   min-width: 0;
@@ -1062,7 +1170,30 @@ input[type="password"]:disabled {
   transform: none;
 }
 
-.memory-play-button {
+.memory-thumbnail {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 42px;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+    rgba(255, 255, 255, 0.025);
+  background-size: 100% 14px;
+}
+
+.memory-thumbnail span {
+  position: absolute;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--secondary);
+  box-shadow: 0 0 10px rgba(109, 211, 206, 0.28);
+}
+
+.memory-play-button,
+.memory-seed-button {
   margin-left: 4px;
   padding: 9px 13px;
 }
@@ -1179,6 +1310,13 @@ input[type="password"]:disabled {
   .status-cluster {
     justify-content: flex-start;
   }
+
+  .performance-strip {
+    position: sticky;
+    top: 8px;
+    z-index: 5;
+    backdrop-filter: blur(16px);
+  }
 }
 
 @media (max-width: 640px) {
@@ -1208,8 +1346,35 @@ input[type="password"]:disabled {
     grid-template-columns: 1fr;
   }
 
+  .performance-strip {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .global-panic-button {
+    width: 100%;
+  }
+
+  .phrase-timeline {
+    grid-template-columns: 1fr;
+  }
+
   .panel-grid {
     grid-template-columns: 1fr;
+  }
+
+  .memory-item {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-preview-button {
+    grid-template-columns: 1fr;
+  }
+
+  .memory-play-button,
+  .memory-seed-button {
+    width: 100%;
+    margin-left: 0;
   }
 
   .section-head {

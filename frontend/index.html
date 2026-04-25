@@ -316,6 +316,18 @@
             </button>
           </div>
 
+          <div class="performance-strip">
+            <div class="readiness-steps" aria-label="Performance readiness">
+              <span id="ready-session-step" class="readiness-step">Session</span>
+              <span id="ready-midi-step" class="readiness-step">MIDI</span>
+              <span id="ready-phrase-step" class="readiness-step">Phrase</span>
+              <span id="ready-output-step" class="readiness-step">Output</span>
+            </div>
+            <button id="global-panic-button" class="ghost danger-button global-panic-button" type="button">
+              Stop / Panic
+            </button>
+          </div>
+
           <section
             id="control-perform-panel"
             class="workspace-panel"
@@ -480,6 +492,10 @@
                   <div>
                     <dt>Selected Renderer</dt>
                     <dd id="selected-output-name">Browser Triangle</dd>
+                  </div>
+                  <div>
+                    <dt>Renderer Health</dt>
+                    <dd id="renderer-health">Browser renderer ready</dd>
                   </div>
                 </dl>
                 <p class="field-hint">
@@ -760,6 +776,9 @@
                     </p>
                   </div>
                 </div>
+                <p id="session-save-note" class="session-save-note">
+                  Guest session: sign in before creating a new session if you want it saved and reopenable.
+                </p>
                 <div class="button-row">
                   <button id="create-session-button">Create Session</button>
                   <button id="reset-session-button" class="ghost">Reset Memory</button>
@@ -875,6 +894,27 @@
       </section>
 
       <section class="column wide-column">
+        <article class="card timeline-card">
+          <div class="card-head">
+            <h2>Phrase Timeline</h2>
+            <span id="timing-readout" class="small-copy">Waiting for first phrase</span>
+          </div>
+          <div id="phrase-timeline" class="phrase-timeline">
+            <div id="timeline-captured" class="timeline-segment">
+              <span>Captured</span>
+              <strong>empty</strong>
+            </div>
+            <div id="timeline-generated" class="timeline-segment">
+              <span>Current Reply</span>
+              <strong>empty</strong>
+            </div>
+            <div id="timeline-queued" class="timeline-segment">
+              <span>Next Queued</span>
+              <strong>none</strong>
+            </div>
+          </div>
+        </article>
+
         <article class="card roll-card">
           <div class="card-head">
             <h2>Captured Phrase</h2>

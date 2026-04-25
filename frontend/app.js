@@ -74,6 +74,17 @@ const elements = {
   generatedEventCount: document.querySelector("#generated-event-count"),
   generatedNoteCount: document.querySelector("#generated-note-count"),
   messageBox: document.querySelector("#message-box"),
+  globalPanicButton: document.querySelector("#global-panic-button"),
+  readySessionStep: document.querySelector("#ready-session-step"),
+  readyMidiStep: document.querySelector("#ready-midi-step"),
+  readyPhraseStep: document.querySelector("#ready-phrase-step"),
+  readyOutputStep: document.querySelector("#ready-output-step"),
+  rendererHealth: document.querySelector("#renderer-health"),
+  sessionSaveNote: document.querySelector("#session-save-note"),
+  timingReadout: document.querySelector("#timing-readout"),
+  timelineCaptured: document.querySelector("#timeline-captured"),
+  timelineGenerated: document.querySelector("#timeline-generated"),
+  timelineQueued: document.querySelector("#timeline-queued"),
   historyList: document.querySelector("#history-list"),
   memoryList: document.querySelector("#memory-list"),
   memorySummary: document.querySelector("#memory-summary"),
@@ -160,6 +171,10 @@ const state = {
   previewedMemoryIndex: null,
   previewPulseTimeoutId: null,
   activePlayback: null,
+  currentPlaybackPayload: null,
+  queuedPlaybackPayload: null,
+  lastGenerationMs: null,
+  lastCaptureDurationMs: null,
   phraseGapAnimationFrameId: null,
   playbackVisualizationFrameId: null,
   playbackVisualizationStartTimerId: null,
@@ -992,6 +1007,96 @@ function formatDurationSeconds(value) {
   return duration >= 10 ? `${duration.toFixed(0)}s` : `${duration.toFixed(1)}s`;
 }
 
+function timelineSummary(payloadOrEvents, emptyText) {
+  const noteCount = phraseNoteCount(payloadOrEvents);
+  if (!noteCount) {
+    return emptyText;
+  }
+  const durationMs = phraseDurationMs(payloadOrEvents);
+  return `${pluralize(noteCount, "note")} / ${formatMilliseconds(durationMs)}`;
+}
+
+function setTimelineSegment(element, stateClass, value) {
+  if (!element) {
+    return;
+  }
+  element.classList.remove("is-ready", "is-playing", "is-queued");
+  if (stateClass) {
+    element.classList.add(stateClass);
+  }
+  const strong = element.querySelector("strong");
+  if (strong) {
+    strong.textContent = value;
+  }
+}
+
+function rendererHealthLabel() {
+  const choice = selectedPlaybackChoice();
+  if (choice.rendererId === WEB_MIDI_RENDERER_ID) {
+    if (!state.midiAccess) {
+      return "Connect MIDI to inspect external outputs";
+    }
+    const output = midiOutputById(choice.targetId);
+    return output ? `External MIDI ready: ${output.name || output.id}` : "External MIDI output unavailable";
+  }
+  if (choice.renderer instanceof FaustPolyRenderer) {
+    return choice.renderer.lastError
+      ? `Faust error: ${choice.renderer.lastError.message}`
+      : `Faust ${choice.renderer.status.toLowerCase()}`;
+  }
+  return "Browser renderer ready";
+}
+
+function renderTimingReadout() {
+  if (!elements.timingReadout) {
+    return;
+  }
+  const parts = [];
+  if (state.lastCaptureDurationMs != null) {
+    parts.push(`capture ${formatMilliseconds(state.lastCaptureDurationMs)}`);
+  }
+  if (state.lastGenerationMs != null) {
+    parts.push(`generation ${formatMilliseconds(state.lastGenerationMs)}`);
+  }
+  parts.push(`renderer ${playbackChoiceLabel()}`);
+  elements.timingReadout.textContent = parts.length
+    ? parts.join(" · ")
+    : "Waiting for first phrase";
+}
+
+function renderPerformanceState() {
+  setReadinessStep(elements.readySessionStep, Boolean(state.sessionId), "Session");
+  setReadinessStep(elements.readyMidiStep, Boolean(state.activeInputId), "MIDI");
+  setReadinessStep(elements.readyPhraseStep, hasLoopSeedPhrase(), "Phrase");
+  setReadinessStep(elements.readyOutputStep, Boolean(selectedPlaybackChoice().renderer), "Output");
+
+  if (elements.rendererHealth) {
+    elements.rendererHealth.textContent = rendererHealthLabel();
+  }
+  if (elements.sessionSaveNote) {
+    elements.sessionSaveNote.textContent = state.authUser
+      ? "Signed-in session: new sessions are saved under your account."
+      : "Guest session: sign in before creating a new session if you want it saved and reopenable.";
+  }
+
+  setTimelineSegment(
+    elements.timelineCaptured,
+    state.lastCapturedPhrase.length ? "is-ready" : null,
+    timelineSummary(state.lastCapturedPhrase, "empty"),
+  );
+  setTimelineSegment(
+    elements.timelineGenerated,
+    state.currentPlaybackPayload ? "is-playing" : state.lastGeneratedPhrase ? "is-ready" : null,
+    timelineSummary(state.currentPlaybackPayload || state.lastGeneratedPhrase, "empty"),
+  );
+  setTimelineSegment(
+    elements.timelineQueued,
+    state.queuedPlaybackPayload ? "is-queued" : null,
+    timelineSummary(state.queuedPlaybackPayload, "none"),
+  );
+  renderTimingReadout();
+}
+
 function stopPhraseGapCountdown() {
   if (state.phraseGapAnimationFrameId) {
     window.cancelAnimationFrame(state.phraseGapAnimationFrameId);
@@ -1051,15 +1156,52 @@ function pluralize(value, singular, plural = `${singular}s`) {
   return `${value} ${value === 1 ? singular : plural}`;
 }
 
+function phraseNoteCount(payloadOrEvents) {
+  if (Array.isArray(payloadOrEvents)) {
+    return eventsToNotes(payloadOrEvents).length;
+  }
+  return Number(payloadOrEvents?.note_count || payloadOrEvents?.notes?.length || 0);
+}
+
+function phraseDurationMs(payloadOrEvents) {
+  if (Array.isArray(payloadOrEvents)) {
+    return continuationDurationMs({ events: payloadOrEvents });
+  }
+  return continuationDurationMs(payloadOrEvents);
+}
+
+function formatMilliseconds(ms) {
+  if (!Number.isFinite(Number(ms))) {
+    return "n/a";
+  }
+  const value = Math.max(0, Number(ms));
+  return value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`;
+}
+
+function setReadinessStep(element, active, label = null) {
+  if (!element) {
+    return;
+  }
+  element.classList.toggle("is-ready", Boolean(active));
+  if (label) {
+    element.textContent = label;
+  }
+}
+
 function rememberCapturedPhrase(events) {
   state.lastCapturedPhrase = Array.isArray(events) ? events : [];
   state.lastCapturedAt = Date.now();
+  state.lastCaptureDurationMs = state.lastCapturedPhrase.length
+    ? phraseDurationMs(state.lastCapturedPhrase)
+    : null;
+  renderPerformanceState();
   updateInfiniteActionState();
 }
 
 function rememberGeneratedPhrase(payload) {
   state.lastGeneratedPhrase = payload || null;
   state.lastGeneratedAt = Date.now();
+  renderPerformanceState();
   updateInfiniteActionState();
 }
 
@@ -1068,6 +1210,11 @@ function clearRememberedPhrases() {
   state.lastGeneratedPhrase = null;
   state.lastCapturedAt = 0;
   state.lastGeneratedAt = 0;
+  state.currentPlaybackPayload = null;
+  state.queuedPlaybackPayload = null;
+  state.lastGenerationMs = null;
+  state.lastCaptureDurationMs = null;
+  renderPerformanceState();
   updateInfiniteActionState();
 }
 
@@ -1586,6 +1733,7 @@ function syncAuthUI() {
       ? `Signed in as ${user.username}. New sessions will be saved under this account.`
       : "Guest mode is ready. Sign in only if you want saved sessions.",
   );
+  renderPerformanceState();
   updateAuthActionState();
   updateSessionActionState();
 }
@@ -1789,6 +1937,7 @@ function createMemoryMarkup(items) {
         <div class="history-item memory-item" data-memory-index="${item.slot - 1}">
           <button class="memory-preview-button" data-memory-preview-index="${item.slot - 1}" type="button">
             <span class="history-kind">${itemLabel} #${item.slot}</span>
+            ${createMemoryThumbnailMarkup(item)}
             <span class="history-meta">
               <strong>${item.note_count} notes / ${formatDurationSeconds(item.duration_seconds)}</strong>
               <span>Active phrase ${item.slot} in the current style memory</span>
@@ -1797,10 +1946,40 @@ function createMemoryMarkup(items) {
           <button class="ghost memory-play-button" data-memory-play-index="${item.slot - 1}" type="button">
             Play
           </button>
+          <button class="ghost memory-seed-button" data-memory-seed-index="${item.slot - 1}" type="button">
+            Use as Seed
+          </button>
         </div>
       `;
     })
     .join("");
+}
+
+function createMemoryThumbnailMarkup(item) {
+  const notes = item?.payload?.notes?.length
+    ? item.payload.notes
+    : eventsToNotes(item?.payload?.events || []);
+  if (!notes.length) {
+    return `<span class="memory-thumbnail" aria-hidden="true"></span>`;
+  }
+
+  const minPitch = Math.min(...notes.map((note) => note.pitch));
+  const maxPitch = Math.max(...notes.map((note) => note.pitch));
+  const pitchRange = Math.max(1, maxPitch - minPitch);
+  const duration = Math.max(
+    0.1,
+    ...notes.map((note) => note.end_seconds || note.start_seconds + note.duration_seconds),
+  );
+  const bars = notes
+    .slice(0, 18)
+    .map((note) => {
+      const start = Math.max(0, Math.min(96, (note.start_seconds / duration) * 100));
+      const width = Math.max(7, Math.min(100 - start, (Math.max(0.05, note.duration_seconds) / duration) * 100));
+      const y = 74 - ((note.pitch - minPitch) / pitchRange) * 58;
+      return `<span style="left:${roundNumber(start)}%;top:${roundNumber(y)}%;width:${roundNumber(width)}%;"></span>`;
+    })
+    .join("");
+  return `<span class="memory-thumbnail" aria-hidden="true">${bars}</span>`;
 }
 
 function attachMemoryEvents() {
@@ -1837,6 +2016,24 @@ function attachMemoryEvents() {
     }
   };
 
+  const seedMemoryIndex = (rawIndex) => {
+    const memoryIndex = Number(rawIndex);
+    const item = state.memoryItems[memoryIndex];
+    if (!item?.payload?.events?.length) {
+      setPhraseMessage("That memory phrase has no seedable events.", true);
+      return;
+    }
+    previewMemoryIndex(rawIndex);
+    state.lastGeneratedPhrase = null;
+    state.lastGeneratedAt = 0;
+    state.queuedPlaybackPayload = null;
+    state.currentPlaybackPayload = null;
+    renderGeneratedStats(null);
+    updateInfiniteActionState();
+    renderPerformanceState();
+    setPhraseMessage(`Using ${item.source} memory slot ${item.slot} as the infinite-mode seed.`);
+  };
+
   elements.memoryList.querySelectorAll("[data-memory-preview-index]").forEach((node) => {
     node.addEventListener("click", () => {
       previewMemoryIndex(node.dataset.memoryPreviewIndex);
@@ -1846,6 +2043,12 @@ function attachMemoryEvents() {
   elements.memoryList.querySelectorAll("[data-memory-play-index]").forEach((node) => {
     node.addEventListener("click", () => {
       void playMemoryIndex(node.dataset.memoryPlayIndex);
+    });
+  });
+
+  elements.memoryList.querySelectorAll("[data-memory-seed-index]").forEach((node) => {
+    node.addEventListener("click", () => {
+      seedMemoryIndex(node.dataset.memorySeedIndex);
     });
   });
 
@@ -2123,6 +2326,7 @@ function useSessionPayload(payload, { owned = Boolean(state.authUser) } = {}) {
   syncSettingsControls(payload.configuration);
   updateSessionActionState();
   setSessionStatus("Ready");
+  renderPerformanceState();
 }
 
 async function openSavedSession(sessionId) {
@@ -2185,7 +2389,10 @@ async function resetSession() {
   });
 
   state.lastGeneratedPhrase = null;
+  state.currentPlaybackPayload = null;
+  state.queuedPlaybackPayload = null;
   renderGeneratedStats(null);
+  renderPerformanceState();
   updateInfiniteActionState();
   syncSettingsControls(payload.configuration);
   setPhraseMessage("Session memory cleared and the current settings were preserved.");
@@ -2282,16 +2489,20 @@ function defaultContinuationMessage(payload, continuationNoteCount) {
   );
 }
 
-function applyContinuationPayload(payload) {
+function applyContinuationPayload(payload, { renderGenerated = true } = {}) {
   rememberCapturedPhrase(payload.input_phrase.events);
   renderCapturedStats(payload.input_phrase.events, payload.input_phrase.notes, true);
   rememberGeneratedPhrase(payload.generated_phrase);
-  renderGeneratedStats(payload.generated_phrase);
+  if (renderGenerated) {
+    renderGeneratedStats(payload.generated_phrase);
+  }
 }
 
-function applyGeneratedPhrasePayload(payload) {
+function applyGeneratedPhrasePayload(payload, { renderGenerated = true } = {}) {
   rememberGeneratedPhrase(payload);
-  renderGeneratedStats(payload);
+  if (renderGenerated) {
+    renderGeneratedStats(payload);
+  }
 }
 
 function defaultMidiImportMessage(payload) {
@@ -2345,7 +2556,10 @@ async function requestContinuationFromEvents(
     enforceEndConstraint,
     handoffViewpoint,
   );
+  const requestStartedAt = window.performance.now();
   const payload = await requestJson("/api/continue", fetchOptions);
+  state.lastGenerationMs = window.performance.now() - requestStartedAt;
+  renderPerformanceState();
   return { payload, continuationNoteCount };
 }
 
@@ -2363,12 +2577,15 @@ async function requestMemoryGeneration(
     note_count: noteCount,
     enforce_end_constraint: enforceEndConstraint,
   };
+  const requestStartedAt = window.performance.now();
   const payload = await requestJson(`/api/sessions/${state.sessionId}/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(requestBody),
     signal,
   });
+  state.lastGenerationMs = window.performance.now() - requestStartedAt;
+  renderPerformanceState();
   return { payload, noteCount };
 }
 
@@ -2913,6 +3130,7 @@ function syncFaustRendererPanel() {
   elements.faustCustomResetButton.disabled = customFaustRenderer.status === "Loading";
   elements.faustCustomDirtyState.textContent = customFaustDirtyCopy();
   syncCustomFaustControls();
+  renderPerformanceState();
 }
 
 async function createPlaybackSession(choiceValue = selectedPlaybackChoiceValue()) {
@@ -3004,6 +3222,9 @@ function stopPlaybackVisualization({ redraw = true } = {}) {
   if (redraw) {
     renderGeneratedStats(state.lastGeneratedPhrase);
   }
+  state.currentPlaybackPayload = null;
+  state.queuedPlaybackPayload = null;
+  renderPerformanceState();
 }
 
 function startPlaybackVisualization(payload, startAtMs, durationMs) {
@@ -3017,6 +3238,8 @@ function startPlaybackVisualization(payload, startAtMs, durationMs) {
     if (state.playbackVisualizationStartTimerId) {
       window.clearTimeout(state.playbackVisualizationStartTimerId);
     }
+    state.queuedPlaybackPayload = payload;
+    renderPerformanceState();
     state.playbackVisualizationStartTimerId = window.setTimeout(() => {
       state.playbackVisualizationStartTimerId = null;
       startPlaybackVisualization(payload, startAtMs, durationMs);
@@ -3025,6 +3248,12 @@ function startPlaybackVisualization(payload, startAtMs, durationMs) {
   }
 
   stopPlaybackVisualization({ redraw: false });
+  state.currentPlaybackPayload = payload;
+  if (state.queuedPlaybackPayload === payload) {
+    state.queuedPlaybackPayload = null;
+  }
+  renderGeneratedStats(payload);
+  renderPerformanceState();
   const token = ++state.playbackVisualizationToken;
   const totalDurationSeconds = Math.max(
     0.001,
@@ -3052,6 +3281,8 @@ function startPlaybackVisualization(payload, startAtMs, durationMs) {
       state.playbackVisualizationFrameId = null;
       window.setTimeout(() => {
         if (token === state.playbackVisualizationToken) {
+          state.currentPlaybackPayload = null;
+          renderPerformanceState();
           renderGeneratedStats(state.lastGeneratedPhrase);
         }
       }, 180);
@@ -3253,7 +3484,10 @@ async function runInfiniteStep(prefixPayload, runId) {
       throw new Error("the memory fallback returned an empty phrase");
     }
 
-    applyGeneratedPhrasePayload(generatedPhrase);
+    const willQueueAfterCurrentPlayback = Boolean(state.activePlayback);
+    applyGeneratedPhrasePayload(generatedPhrase, {
+      renderGenerated: !willQueueAfterCurrentPlayback,
+    });
     const startDelayMs = state.activePlayback
       ? Math.max(0, state.activePlayback.handoffAtMs - performance.now())
       : PLAYBACK_START_DELAY_MS;
@@ -3289,9 +3523,12 @@ async function runInfiniteStep(prefixPayload, runId) {
     }
 
     const generatedPhrase = payload.generated_phrase;
+    const willQueueAfterCurrentPlayback = Boolean(state.activePlayback);
     applyContinuationPayload({
       ...payload,
       generated_phrase: generatedPhrase,
+    }, {
+      renderGenerated: !willQueueAfterCurrentPlayback,
     });
     if (!generatedPhrase.event_count) {
       await continueInfiniteFromMemory("the latest continuation was empty");
@@ -3533,6 +3770,7 @@ function detachCurrentInput() {
     void current.close().catch(() => {});
   }
   state.activeInputId = null;
+  renderPerformanceState();
 }
 
 async function attachInput(inputId) {
@@ -3580,6 +3818,7 @@ async function attachInput(inputId) {
   elements.midiInputSelect.value = inputId;
   setSelectedInputName(input.name || input.id);
   setMidiStatus(`Listening on ${input.name || input.id}`);
+  renderPerformanceState();
 }
 
 async function connectMidi() {
@@ -3601,6 +3840,7 @@ async function connectMidi() {
 function updateSelectedOutput() {
   setSelectedOutputName(playbackChoiceLabel());
   syncFaustRendererPanel();
+  renderPerformanceState();
 }
 
 async function compileCustomFaustFromEditor() {
@@ -3785,6 +4025,15 @@ function bindEvents() {
   elements.generateMemoryButton.addEventListener("click", async () => {
     try {
       await generateFreshPhrase();
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+      setPhraseStatus("Error");
+    }
+  });
+
+  elements.globalPanicButton.addEventListener("click", async () => {
+    try {
+      await panicPlayback();
     } catch (error) {
       setPhraseMessage(error.message, true);
       setPhraseStatus("Error");
@@ -4019,6 +4268,7 @@ async function initialize() {
   renderSessionSettingsSummary();
   updateSessionActionState();
   updateInfiniteActionState();
+  renderPerformanceState();
   try {
     await checkServer();
   } catch (error) {
