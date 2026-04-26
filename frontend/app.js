@@ -5051,6 +5051,7 @@ async function populateMidiSelectors() {
   populatePlaybackChoices();
   const inputs = state.midiAccess ? [...state.midiAccess.inputs.values()] : [];
   const previousInputId = elements.midiInputSelect.value;
+  const currentInputId = state.activeInputId || previousInputId;
   const preferredInputId = state.sessionConfiguration?.midi_input_id || null;
   const physicalInputIds = new Set(inputs.map((input) => input.id));
 
@@ -5065,10 +5066,10 @@ async function populateMidiSelectors() {
   ].join("");
 
   const inputId =
-    isVirtualMidiInputId(preferredInputId) || physicalInputIds.has(preferredInputId)
+    isVirtualMidiInputId(currentInputId) || physicalInputIds.has(currentInputId)
+      ? currentInputId
+      : isVirtualMidiInputId(preferredInputId) || physicalInputIds.has(preferredInputId)
       ? preferredInputId
-      : isVirtualMidiInputId(previousInputId) || physicalInputIds.has(previousInputId)
-      ? previousInputId
       : inputs.length
         ? inputs[0].id
         : "";
