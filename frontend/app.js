@@ -41,6 +41,8 @@ const FAUST_CUSTOM_TEMPLATE_DSP_URL = "/assets/faust/custom-poly-template.dsp";
 const PHRASE_TIMEOUT_STORAGE_KEY = "continuator.phrase.timeout.ms";
 const FAUST_CUSTOM_SOURCE_STORAGE_KEY = "continuator.faust.custom.source";
 const FAUST_CUSTOM_VALUES_STORAGE_KEY = "continuator.faust.custom.values";
+const PLAYBACK_PREFERENCE_STORAGE_PREFIX = "continuator.playback.preference";
+const AUDIO_OUTPUT_PREFERENCE_STORAGE_PREFIX = "continuator.audio.output.preference";
 const FAUST_UI_CONTROL_TYPES = new Set([
   "hslider",
   "vslider",
@@ -133,6 +135,7 @@ const elements = {
   midiInputSelect: document.querySelector("#midi-input-select"),
   phraseTimeoutInput: document.querySelector("#phrase-timeout-input"),
   midiOutputSelect: document.querySelector("#midi-output-select"),
+  audioOutputSelect: document.querySelector("#audio-output-select"),
   faustRendererPanel: document.querySelector("#faust-renderer-panel"),
   faustClavierPanel: document.querySelector("#faust-clavier-panel"),
   faustCustomPanel: document.querySelector("#faust-custom-panel"),
@@ -253,6 +256,9 @@ const state = {
   liveMonitorPlaybackPromise: null,
   liveMonitorChoiceValue: null,
   liveMonitorToken: 0,
+  userPlaybackPreference: null,
+  userAudioOutputPreference: null,
+  audioOutputDevices: [],
 };
 
 function midiToFrequency(note) {
@@ -351,10 +357,15 @@ class BrowserAudioRenderer {
       this.context = new window.AudioContext();
       this.master = new GainNode(this.context, { gain: this.masterGain });
       this.master.connect(this.context.destination);
+      await applyAudioOutputToContext(this.context);
     }
     if (this.context.state === "suspended") {
       await this.context.resume();
     }
+  }
+
+  async applyAudioOutputPreference() {
+    return applyAudioOutputToContext(this.context);
   }
 
   async createPlaybackSession() {
@@ -474,6 +485,212 @@ function safeLocalStorageSet(key, value) {
   }
 }
 
+function playbackPreferenceStorageKey() {
+  const userId = state.authUser?.id || "guest";
+  return `${PLAYBACK_PREFERENCE_STORAGE_PREFIX}.${userId}`;
+}
+
+function audioOutputPreferenceStorageKey() {
+  const userId = state.authUser?.id || "guest";
+  return `${AUDIO_OUTPUT_PREFERENCE_STORAGE_PREFIX}.${userId}`;
+}
+
+function parseStoredPlaybackPreference(value) {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    const playbackChoice = String(parsed?.playback_choice || "").trim();
+    if (!playbackChoice) {
+      return null;
+    }
+    const playbackName = String(parsed?.playback_choice_name || "").trim();
+    return {
+      playback_choice: playbackChoice,
+      playback_choice_name: playbackName || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function loadStoredPlaybackPreference() {
+  return parseStoredPlaybackPreference(safeLocalStorageGet(playbackPreferenceStorageKey()));
+}
+
+function rememberPlaybackPreference(preference) {
+  const playbackChoice = String(preference?.playback_choice || "").trim();
+  if (!playbackChoice) {
+    return;
+  }
+  const playbackName = String(preference?.playback_choice_name || "").trim();
+  state.userPlaybackPreference = {
+    playback_choice: playbackChoice,
+    playback_choice_name: playbackName || null,
+  };
+  safeLocalStorageSet(
+    playbackPreferenceStorageKey(),
+    JSON.stringify(state.userPlaybackPreference),
+  );
+}
+
+function latestSavedPlaybackPreference(items = state.savedSessions) {
+  const item =
+    items.find((candidate) => {
+      const choice = candidate?.configuration?.playback_choice;
+      return parsePlaybackChoice(choice).rendererId === WEB_MIDI_RENDERER_ID;
+    }) ||
+    items.find((candidate) => candidate?.configuration?.playback_choice);
+  if (!item) {
+    return null;
+  }
+  return {
+    playback_choice: item.configuration.playback_choice,
+    playback_choice_name: item.configuration.playback_choice_name || null,
+  };
+}
+
+function refreshUserPlaybackPreferenceFromSavedSessions(items = state.savedSessions) {
+  const storedPreference = loadStoredPlaybackPreference();
+  const savedPreference = latestSavedPlaybackPreference(items);
+  const storedRendererId = parsePlaybackChoice(storedPreference?.playback_choice).rendererId;
+  const savedRendererId = parsePlaybackChoice(savedPreference?.playback_choice).rendererId;
+  if (
+    savedPreference &&
+    storedRendererId !== WEB_MIDI_RENDERER_ID &&
+    savedRendererId === WEB_MIDI_RENDERER_ID
+  ) {
+    rememberPlaybackPreference(savedPreference);
+    return;
+  }
+  if (storedPreference) {
+    state.userPlaybackPreference = storedPreference;
+    return;
+  }
+  if (savedPreference) {
+    rememberPlaybackPreference(savedPreference);
+  }
+}
+
+function parseStoredAudioOutputPreference(value) {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    const deviceId = String(parsed?.device_id || "").trim();
+    const deviceName = String(parsed?.device_name || "").trim();
+    if (!deviceId) {
+      return null;
+    }
+    return {
+      device_id: deviceId,
+      device_name: deviceName || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function loadStoredAudioOutputPreference() {
+  return parseStoredAudioOutputPreference(
+    safeLocalStorageGet(audioOutputPreferenceStorageKey()),
+  );
+}
+
+function rememberAudioOutputPreference(preference) {
+  const deviceId = String(preference?.device_id || "").trim();
+  if (!deviceId) {
+    return;
+  }
+  const deviceName = String(preference?.device_name || "").trim();
+  state.userAudioOutputPreference = {
+    device_id: deviceId,
+    device_name: deviceName || null,
+  };
+  safeLocalStorageSet(
+    audioOutputPreferenceStorageKey(),
+    JSON.stringify(state.userAudioOutputPreference),
+  );
+}
+
+function preferredAudioOutputDeviceId() {
+  return state.userAudioOutputPreference?.device_id || "default";
+}
+
+function audioOutputIsSupported() {
+  return (
+    Boolean(navigator.mediaDevices?.enumerateDevices) &&
+    typeof window.AudioContext?.prototype?.setSinkId === "function"
+  );
+}
+
+async function applyAudioOutputToContext(context) {
+  if (!context || typeof context.setSinkId !== "function") {
+    return false;
+  }
+  await context.setSinkId(preferredAudioOutputDeviceId());
+  return true;
+}
+
+async function applyPreferredAudioOutput() {
+  const renderers = [...localPlaybackRenderers, faustClavierRenderer, customFaustRenderer];
+  await Promise.all(
+    renderers.map((renderer) =>
+      renderer.applyAudioOutputPreference?.().catch((error) => {
+        setPhraseMessage(error.message, true);
+      }),
+    ),
+  );
+}
+
+function populateAudioOutputChoices() {
+  const supported = audioOutputIsSupported();
+  const preferredDeviceId = preferredAudioOutputDeviceId();
+  const devices = state.audioOutputDevices || [];
+  const choices = [
+    { deviceId: "default", label: "System default" },
+    ...devices
+      .filter((device) => device.deviceId && device.deviceId !== "default")
+      .map((device, index) => ({
+        deviceId: device.deviceId,
+        label: device.label || `Sound output ${index + 1}`,
+      })),
+  ];
+  const availableDeviceIds = new Set(choices.map((choice) => choice.deviceId));
+
+  elements.audioOutputSelect.disabled = !supported;
+  elements.audioOutputSelect.replaceChildren(
+    ...choices.map((choice) => {
+      const option = document.createElement("option");
+      option.value = choice.deviceId;
+      option.textContent = choice.label;
+      return option;
+    }),
+  );
+  elements.audioOutputSelect.value = availableDeviceIds.has(preferredDeviceId)
+    ? preferredDeviceId
+    : "default";
+  if (!supported) {
+    elements.audioOutputSelect.title =
+      "This browser does not expose app-level audio output selection.";
+  } else {
+    elements.audioOutputSelect.title = "";
+  }
+}
+
+async function refreshAudioOutputDevices() {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    state.audioOutputDevices = [];
+    populateAudioOutputChoices();
+    return;
+  }
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  state.audioOutputDevices = devices.filter((device) => device.kind === "audiooutput");
+  populateAudioOutputChoices();
+}
+
 function createFaustParamPathMap(ui) {
   const paramPaths = new Map();
   walkFaustUi(ui, (item) => {
@@ -576,10 +793,15 @@ class FaustPolyRenderer {
   async ensureContext() {
     if (!this.context) {
       this.context = new window.AudioContext();
+      await applyAudioOutputToContext(this.context);
     }
     if (this.context.state === "suspended") {
       await this.context.resume();
     }
+  }
+
+  async applyAudioOutputPreference() {
+    return applyAudioOutputToContext(this.context);
   }
 
   async loadCode(forceRefresh = false) {
@@ -2392,6 +2614,9 @@ function currentSessionPreferences() {
 }
 
 async function saveSessionPreferences(preferences) {
+  if (preferences?.playback_choice) {
+    rememberPlaybackPreference(preferences);
+  }
   if (!state.sessionId || !preferences || !Object.keys(preferences).length) {
     return null;
   }
@@ -2426,6 +2651,9 @@ function attachSavedSessionEvents() {
 
 function renderSavedSessions(items) {
   state.savedSessions = items;
+  if (state.authUser) {
+    refreshUserPlaybackPreferenceFromSavedSessions(items);
+  }
   if (
     state.previewedSavedSessionId &&
     !items.some((item) => item.session_id === state.previewedSavedSessionId)
@@ -2947,10 +3175,7 @@ function drawPianoRoll(canvas, notes, accent, emptyLabel, options = {}) {
 
   const minPitch = Math.max(24, Math.min(...notes.map((note) => note.pitch)) - 2);
   const maxPitch = Math.min(108, Math.max(...notes.map((note) => note.pitch)) + 2);
-  const totalDuration = Math.max(
-    2,
-    ...notes.map((note) => note.end_seconds || note.start_seconds + note.duration_seconds),
-  );
+  const totalDuration = pianoRollDurationSeconds(notes);
   const pitchRange = Math.max(1, maxPitch - minPitch + 1);
 
   const playbackSeconds =
@@ -2978,8 +3203,11 @@ function drawPianoRoll(canvas, notes, accent, emptyLabel, options = {}) {
 
   ctx.shadowBlur = 0;
 
-  if (Number.isFinite(Number(options.progressRatio))) {
-    const progressRatio = Math.min(1, Math.max(0, Number(options.progressRatio)));
+  const playbackProgressRatio = Number.isFinite(Number(playbackSeconds))
+    ? playbackSeconds / totalDuration
+    : Number(options.progressRatio);
+  if (Number.isFinite(playbackProgressRatio)) {
+    const progressRatio = Math.min(1, Math.max(0, playbackProgressRatio));
     const x = Math.round(progressRatio * width) + 0.5;
     ctx.strokeStyle = "rgba(255, 245, 212, 0.86)";
     ctx.lineWidth = 2;
@@ -2995,6 +3223,13 @@ function drawPianoRoll(canvas, notes, accent, emptyLabel, options = {}) {
     ctx.closePath();
     ctx.fill();
   }
+}
+
+function pianoRollDurationSeconds(notes) {
+  return Math.max(
+    2,
+    ...notes.map((note) => note.end_seconds || note.start_seconds + note.duration_seconds),
+  );
 }
 
 function payloadNotes(payload) {
@@ -3071,6 +3306,9 @@ function eventsToNotes(events) {
 async function refreshAuthState() {
   const payload = await requestJson("/api/auth/me");
   state.authUser = payload?.user || null;
+  state.userAudioOutputPreference = loadStoredAudioOutputPreference();
+  populateAudioOutputChoices();
+  await applyPreferredAudioOutput();
   syncAuthUI();
   if (state.authUser) {
     await refreshSavedSessions();
@@ -3080,6 +3318,7 @@ async function refreshAuthState() {
     return;
   }
 
+  state.userPlaybackPreference = loadStoredPlaybackPreference();
   renderSavedSessions([]);
   if (!state.sessionId) {
     clearCurrentSessionState(
@@ -3111,6 +3350,9 @@ async function submitAuth(mode) {
   });
 
   state.authUser = payload.user;
+  state.userAudioOutputPreference = loadStoredAudioOutputPreference();
+  populateAudioOutputChoices();
+  await applyPreferredAudioOutput();
   elements.authUsernameInput.value = payload.user.username;
   syncAuthUI();
   await refreshSavedSessions();
@@ -3143,6 +3385,10 @@ async function submitAuth(mode) {
 async function logoutUser() {
   await requestJson("/api/auth/logout", { method: "POST" });
   state.authUser = null;
+  state.userPlaybackPreference = loadStoredPlaybackPreference();
+  state.userAudioOutputPreference = loadStoredAudioOutputPreference();
+  populateAudioOutputChoices();
+  await applyPreferredAudioOutput();
   syncAuthUI();
   renderSavedSessions([]);
   setAccountPanelOpen(false);
@@ -3165,7 +3411,10 @@ async function refreshSavedSessions() {
 }
 
 function selectPlaybackPreference(configuration) {
-  const preferredChoiceValue = configuration?.playback_choice;
+  const preferredChoiceValue = resolveAvailablePlaybackPreference(
+    configuration,
+    state.midiAccess ? [...state.midiAccess.outputs.values()] : [],
+  );
   if (!preferredChoiceValue) {
     return false;
   }
@@ -3179,7 +3428,94 @@ function selectPlaybackPreference(configuration) {
 
   elements.midiOutputSelect.value = preferredChoiceValue;
   updateSelectedOutput();
+  rememberPlaybackPreference({
+    playback_choice: preferredChoiceValue,
+    playback_choice_name:
+      configuration?.playback_choice_name || playbackChoiceLabel(preferredChoiceValue),
+  });
   return true;
+}
+
+function pendingPlaybackPreference() {
+  const sessionPreference = state.sessionConfiguration?.playback_choice
+    ? {
+        playback_choice: state.sessionConfiguration.playback_choice,
+        playback_choice_name: state.sessionConfiguration.playback_choice_name || null,
+      }
+    : null;
+  const userRendererId = parsePlaybackChoice(state.userPlaybackPreference?.playback_choice)
+    .rendererId;
+  const sessionRendererId = parsePlaybackChoice(sessionPreference?.playback_choice).rendererId;
+  if (
+    state.userPlaybackPreference &&
+    userRendererId === WEB_MIDI_RENDERER_ID &&
+    sessionRendererId !== WEB_MIDI_RENDERER_ID
+  ) {
+    return state.userPlaybackPreference;
+  }
+  return state.sessionConfiguration?.playback_choice
+    ? sessionPreference
+    : state.userPlaybackPreference;
+}
+
+function selectedPlaybackRestoresPendingPreference() {
+  const preference = pendingPlaybackPreference();
+  if (!preference?.playback_choice) {
+    return false;
+  }
+  const selectedChoiceValue = selectedPlaybackChoiceValue();
+  if (selectedChoiceValue === preference.playback_choice) {
+    return true;
+  }
+  const selectedChoice = parsePlaybackChoice(selectedChoiceValue);
+  const preferredChoice = parsePlaybackChoice(preference.playback_choice);
+  return (
+    selectedChoice.rendererId === WEB_MIDI_RENDERER_ID &&
+    preferredChoice.rendererId === WEB_MIDI_RENDERER_ID &&
+    normalizedDeviceName(playbackChoiceLabel(selectedChoiceValue)) ===
+      normalizedDeviceName(preference.playback_choice_name)
+  );
+}
+
+function normalizedDeviceName(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function resolveAvailablePlaybackPreference(preference, outputs = []) {
+  const preferredChoiceValue = preference?.playback_choice || null;
+  if (!preferredChoiceValue) {
+    return null;
+  }
+
+  const availableChoices = new Set([
+    ...localPlaybackRenderers.map((renderer) => encodePlaybackChoice(renderer.id)),
+    ...outputs.map((output) =>
+      encodePlaybackChoice(WEB_MIDI_RENDERER_ID, output.id),
+    ),
+  ]);
+  if (availableChoices.has(preferredChoiceValue)) {
+    return preferredChoiceValue;
+  }
+
+  const { rendererId } = parsePlaybackChoice(preferredChoiceValue);
+  if (rendererId !== WEB_MIDI_RENDERER_ID) {
+    return null;
+  }
+
+  const preferredName = normalizedDeviceName(preference.playback_choice_name);
+  if (!preferredName) {
+    return null;
+  }
+  const matchedOutput = outputs.find((output) => {
+    const outputName = normalizedDeviceName(output.name || output.id);
+    return outputName === preferredName;
+  });
+  return matchedOutput
+    ? encodePlaybackChoice(WEB_MIDI_RENDERER_ID, matchedOutput.id)
+    : null;
 }
 
 async function selectMidiInputPreference(configuration) {
@@ -3246,7 +3582,13 @@ async function createSession({ preservePhraseBuffers = false, announce = true } 
   });
 
   await useSessionPayload(payload, { owned: Boolean(state.authUser) });
-  await saveSessionPreferences(currentSessionPreferences());
+  const restoredPlaybackPreference = selectPlaybackPreference(state.userPlaybackPreference);
+  await saveSessionPreferences({
+    ...currentInputPreference(),
+    ...(restoredPlaybackPreference || !state.userPlaybackPreference?.playback_choice
+      ? currentPlaybackPreference()
+      : {}),
+  });
   setControlView("perform");
   if (!preservePhraseBuffers) {
     clearPhraseBuffers();
@@ -4189,11 +4531,12 @@ function startPlaybackVisualization(
   renderPerformanceState();
   const token = ++state.playbackVisualizationToken;
   const startedAtMs = window.performance.now();
-  const totalDurationSeconds = Math.max(
+  const playbackDurationSeconds = Math.max(
     0.001,
     ...notes.map((note) => note.end_seconds || note.start_seconds + note.duration_seconds),
   );
-  const safeDurationMs = Math.max(1, Number(durationMs) || totalDurationSeconds * 1000);
+  const rollDurationSeconds = pianoRollDurationSeconds(notes);
+  const safeDurationMs = Math.max(1, Number(durationMs) || playbackDurationSeconds * 1000);
   state.playbackVisualizationDisplayEndsAtMs = startedAtMs + safeDurationMs;
   elements.outputPlayhead.hidden = rollKind !== "output";
 
@@ -4203,10 +4546,12 @@ function startPlaybackVisualization(
     }
     const elapsedMs = Math.max(0, window.performance.now() - startedAtMs);
     const progressRatio = Math.min(1, elapsedMs / safeDurationMs);
+    const playbackSeconds = progressRatio * playbackDurationSeconds;
+    const rollProgressRatio = Math.min(1, playbackSeconds / rollDurationSeconds);
     if (rollKind === "output") {
       elements.outputPlayhead.hidden = false;
       elements.outputPlayhead.style.transform = `translateX(${Math.round(
-        progressRatio * outputPlayheadMaxX(),
+        rollProgressRatio * outputPlayheadMaxX(),
       )}px)`;
     }
     drawPianoRoll(
@@ -4215,8 +4560,8 @@ function startPlaybackVisualization(
       accent,
       emptyLabel,
       {
-        progressRatio,
-        playbackSeconds: progressRatio * totalDurationSeconds,
+        progressRatio: rollProgressRatio,
+        playbackSeconds,
       },
     );
     if (progressRatio >= 1) {
@@ -4647,7 +4992,10 @@ async function startInfiniteMode() {
 function populatePlaybackChoices() {
   const outputs = state.midiAccess ? [...state.midiAccess.outputs.values()] : [];
   const previousChoiceValue = selectedPlaybackChoiceValue();
-  const preferredChoiceValue = state.sessionConfiguration?.playback_choice || null;
+  const preferredChoiceValue = resolveAvailablePlaybackPreference(
+    pendingPlaybackPreference(),
+    outputs,
+  );
   const availableChoices = new Set([
     ...localPlaybackRenderers.map((renderer) => encodePlaybackChoice(renderer.id)),
     ...outputs.map((output) =>
@@ -4808,10 +5156,20 @@ async function connectMidi() {
   }
 
   state.midiAccess = await navigator.requestMIDIAccess({ sysex: false });
-  state.midiAccess.onstatechange = () => {
-    void populateMidiSelectors();
+  state.midiAccess.onstatechange = async () => {
+    try {
+      await populateMidiSelectors();
+      if (selectedPlaybackRestoresPendingPreference()) {
+        await saveSessionPreferences(currentPlaybackPreference());
+      }
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
   };
   await populateMidiSelectors();
+  if (selectedPlaybackRestoresPendingPreference()) {
+    await saveSessionPreferences(currentPlaybackPreference());
+  }
   if (!state.activeInputId) {
     setMidiStatus("Connected / choose input");
   }
@@ -5249,6 +5607,25 @@ function bindEvents() {
     }
   });
 
+  elements.audioOutputSelect.addEventListener("change", async () => {
+    const selectedDeviceId = elements.audioOutputSelect.value || "default";
+    const device = state.audioOutputDevices.find(
+      (candidate) => candidate.deviceId === selectedDeviceId,
+    );
+    rememberAudioOutputPreference({
+      device_id: selectedDeviceId,
+      device_name: device?.label || "System default",
+    });
+    try {
+      await applyPreferredAudioOutput();
+      setPhraseMessage(
+        `Sound output set to ${device?.label || "System default"}.`,
+      );
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
+  });
+
   faustClavierControls.forEach((control) => {
     control.input.addEventListener("input", () => {
       faustClavierRenderer.setControlValue(control.key, control.input.value);
@@ -5397,6 +5774,7 @@ function bindEvents() {
 
 async function initialize() {
   bindEvents();
+  state.userAudioOutputPreference = loadStoredAudioOutputPreference();
   try {
     await initializeCustomFaustSource();
   } catch (error) {
@@ -5408,6 +5786,16 @@ async function initialize() {
   renderSavedSessions([]);
   clearCurrentSessionState();
   setControlView("perform");
+  try {
+    await refreshAudioOutputDevices();
+  } catch {
+    populateAudioOutputChoices();
+  }
+  if (navigator.mediaDevices?.addEventListener) {
+    navigator.mediaDevices.addEventListener("devicechange", () => {
+      void refreshAudioOutputDevices().catch(() => populateAudioOutputChoices());
+    });
+  }
   setSelectedInputName("No MIDI input selected");
   updateSelectedOutput();
   syncFaustRendererPanel();
