@@ -464,6 +464,11 @@ body.sheet-open {
   margin-bottom: 18px;
 }
 
+.compact-button {
+  padding: 8px 11px;
+  font-size: 0.82rem;
+}
+
 button,
 select,
 input {
@@ -716,6 +721,166 @@ input[type="password"]:disabled {
 
 .toggle input {
   accent-color: var(--accent);
+}
+
+.compact-toggle {
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.virtual-keyboard-panel {
+  display: grid;
+  gap: 10px;
+  margin: 6px 0 16px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 16px;
+  background:
+    linear-gradient(135deg, rgba(109, 211, 206, 0.07), rgba(244, 162, 97, 0.04)),
+    rgba(255, 255, 255, 0.026);
+}
+
+.virtual-keyboard-panel[hidden] {
+  display: none;
+}
+
+.virtual-keyboard-head,
+.virtual-keyboard-controls,
+.virtual-keyboard-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.virtual-keyboard-head strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.94rem;
+}
+
+.virtual-keyboard-head span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 2px;
+}
+
+.virtual-octave-controls {
+  display: flex;
+  gap: 8px;
+}
+
+.velocity-control {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr) 3ch;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 210px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.velocity-control output {
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.virtual-keyboard {
+  --white-key-count: 14;
+  position: relative;
+  height: 108px;
+  touch-action: none;
+  user-select: none;
+}
+
+.white-key-row {
+  display: grid;
+  grid-template-columns: repeat(var(--white-key-count), minmax(0, 1fr));
+  height: 100%;
+  gap: 2px;
+}
+
+.virtual-key {
+  position: relative;
+  min-width: 0;
+  border-radius: 7px;
+  padding: 0;
+  box-shadow: none;
+  touch-action: none;
+  transition: background 90ms ease, border-color 90ms ease, transform 90ms ease;
+}
+
+.virtual-key span {
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  transform: translateX(-50%);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  pointer-events: none;
+}
+
+.white-key {
+  height: 100%;
+  border: 1px solid rgba(8, 17, 24, 0.28);
+  background: linear-gradient(180deg, #fffaf0, #d9edf0);
+  color: #101820;
+}
+
+.white-key.is-active {
+  background: linear-gradient(180deg, #f4a261, #6dd3ce);
+  border-color: rgba(255, 245, 212, 0.8);
+  transform: translateY(1px);
+}
+
+.black-key-row {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.black-key {
+  position: absolute;
+  left: var(--key-left);
+  top: 0;
+  width: calc((100% / var(--white-key-count)) * 0.62);
+  height: 62%;
+  transform: translateX(-50%);
+  z-index: 2;
+  pointer-events: auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: linear-gradient(180deg, #26333d, #081118);
+  color: #f7fbff;
+}
+
+.black-key.is-active {
+  background: linear-gradient(180deg, #6dd3ce, #ef7f58);
+  border-color: rgba(255, 245, 212, 0.74);
+}
+
+.black-key span {
+  display: none;
+}
+
+.virtual-key.is-latched::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #fff5d4;
+  box-shadow: 0 0 9px rgba(255, 245, 212, 0.88);
+  transform: translateX(-50%);
+}
+
+.virtual-keyboard-actions {
+  justify-content: flex-end;
 }
 
 .settings-compact {

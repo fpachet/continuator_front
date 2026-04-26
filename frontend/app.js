@@ -7,6 +7,31 @@ const PHRASE_TIMEOUT_MS = 1000;
 const PLAYBACK_START_DELAY_MS = 80;
 const INFINITE_MIN_LOOKAHEAD_MS = 600;
 const INFINITE_MAX_LOOKAHEAD_MS = 2200;
+const VIRTUAL_MIDI_INPUT_ID = "__virtual_keyboard__";
+const VIRTUAL_MIDI_INPUT_NAME = "Virtual MIDI Keyboard";
+const VIRTUAL_KEYBOARD_OCTAVES = 2;
+const VIRTUAL_KEYBOARD_DEFAULT_BASE_NOTE = 60;
+const VIRTUAL_KEYBOARD_MIN_BASE_NOTE = 24;
+const VIRTUAL_KEYBOARD_MAX_BASE_NOTE = 96;
+const VIRTUAL_CHORD_QUANTIZE_MS = 20;
+const VIRTUAL_KEYBOARD_CHANNEL = 0;
+const COMPUTER_KEYBOARD_OFFSETS = new Map([
+  ["KeyA", 0],
+  ["KeyW", 1],
+  ["KeyS", 2],
+  ["KeyE", 3],
+  ["KeyD", 4],
+  ["KeyF", 5],
+  ["KeyT", 6],
+  ["KeyG", 7],
+  ["KeyY", 8],
+  ["KeyH", 9],
+  ["KeyU", 10],
+  ["KeyJ", 11],
+  ["KeyK", 12],
+]);
+const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+const BLACK_KEY_OFFSETS = new Set([1, 3, 6, 8, 10]);
 const FAUST_WASM_ESM_URL = "/assets/vendor/faustwasm/esm/index.js";
 const FAUST_WASM_JS_URL = "/assets/vendor/faustwasm/libfaust-wasm/libfaust-wasm.js";
 const FAUST_WASM_DATA_URL = "/assets/vendor/faustwasm/libfaust-wasm/libfaust-wasm.data";
@@ -154,6 +179,17 @@ const elements = {
   midiFolderImportInput: document.querySelector("#midi-folder-import-input"),
   connectMidiButton: document.querySelector("#connect-midi-button"),
   refreshMidiButton: document.querySelector("#refresh-midi-button"),
+  virtualKeyboardPanel: document.querySelector("#virtual-keyboard-panel"),
+  virtualKeyboard: document.querySelector("#virtual-keyboard"),
+  virtualOctaveLabel: document.querySelector("#virtual-octave-label"),
+  virtualOctaveDownButton: document.querySelector("#virtual-octave-down-button"),
+  virtualOctaveUpButton: document.querySelector("#virtual-octave-up-button"),
+  virtualVelocityInput: document.querySelector("#virtual-velocity-input"),
+  virtualVelocityValue: document.querySelector("#virtual-velocity-value"),
+  virtualSustainToggle: document.querySelector("#virtual-sustain-toggle"),
+  virtualLatchToggle: document.querySelector("#virtual-latch-toggle"),
+  virtualClearLatchButton: document.querySelector("#virtual-clear-latch-button"),
+  virtualPanicButton: document.querySelector("#virtual-panic-button"),
   sendPhraseButton: document.querySelector("#send-phrase-button"),
   generateMemoryButton: document.querySelector("#generate-memory-button"),
   replayGeneratedButton: document.querySelector("#replay-generated-button"),
@@ -204,6 +240,19 @@ const state = {
   customFaustTemplateSource: "",
   customFaustControlDescriptors: [],
   customFaustControlBindings: [],
+  virtualKeyboardBaseNote: VIRTUAL_KEYBOARD_DEFAULT_BASE_NOTE,
+  virtualHeldSourcesByNote: new Map(),
+  virtualSustainedNotes: new Set(),
+  virtualLatchedNotes: new Set(),
+  virtualActivePointers: new Map(),
+  virtualActiveComputerKeys: new Map(),
+  virtualQuantizedTimestamp: null,
+  virtualQuantizedAt: 0,
+  activeVisualMidiNotes: new Set(),
+  liveMonitorPlayback: null,
+  liveMonitorPlaybackPromise: null,
+  liveMonitorChoiceValue: null,
+  liveMonitorToken: 0,
 };
 
 function midiToFrequency(note) {
@@ -1012,6 +1061,377 @@ const recorder = new PhraseRecorder(
   },
   updatePhraseGapCountdown,
 );
+
+function midiNoteName(note) {
+  return `${NOTE_NAMES[note % 12]}${Math.floor(note / 12) - 1}`;
+}
+
+function isVirtualMidiInputId(inputId) {
+  return inputId === VIRTUAL_MIDI_INPUT_ID;
+}
+
+function isVirtualMidiInputSelected() {
+  return isVirtualMidiInputId(state.activeInputId);
+}
+
+function syncVirtualKeyboardVisibility() {
+  elements.virtualKeyboardPanel.hidden = !isVirtualMidiInputSelected();
+}
+
+function normalizeMidiNote(note) {
+  return Math.max(0, Math.min(127, Number(note) || 0));
+}
+
+function virtualKeyboardRangeLabel() {
+  const first = state.virtualKeyboardBaseNote;
+  const last = first + VIRTUAL_KEYBOARD_OCTAVES * 12 - 1;
+  return `${midiNoteName(first)}-${midiNoteName(last)}`;
+}
+
+function getVirtualVelocity() {
+  return Math.max(1, Math.min(127, Number(elements.virtualVelocityInput.value) || 100));
+}
+
+function makeMidiMessageEvent(data, receivedTime = window.performance.now()) {
+  return {
+    data: Uint8Array.from(data),
+    receivedTime,
+  };
+}
+
+function midiMessageToEvent(messageEvent) {
+  const [statusByte, note, rawVelocity = 0] = [...messageEvent.data];
+  const status = statusByte & 0xf0;
+  const channel = statusByte & 0x0f;
+  if (status === 0x90 && rawVelocity > 0) {
+    return {
+      type: "note_on",
+      note,
+      velocity: rawVelocity,
+      channel,
+      delta_seconds: 0,
+    };
+  }
+  if (status === 0x80 || (status === 0x90 && rawVelocity === 0)) {
+    return {
+      type: "note_off",
+      note,
+      velocity: 0,
+      channel,
+      delta_seconds: 0,
+    };
+  }
+  return null;
+}
+
+function getVirtualNoteTimestamp(type) {
+  const now = window.performance.now();
+  if (type !== "note_on") {
+    return now;
+  }
+  if (
+    state.virtualQuantizedTimestamp == null ||
+    now - state.virtualQuantizedAt > VIRTUAL_CHORD_QUANTIZE_MS
+  ) {
+    state.virtualQuantizedTimestamp = now;
+    state.virtualQuantizedAt = now;
+  }
+  return state.virtualQuantizedTimestamp;
+}
+
+function updateVisualMidiState(messageEvent) {
+  const [statusByte, note, velocity = 0] = [...messageEvent.data];
+  const status = statusByte & 0xf0;
+  if (status === 0x90 && velocity > 0) {
+    state.activeVisualMidiNotes.add(note);
+  } else if (status === 0x80 || (status === 0x90 && velocity === 0)) {
+    state.activeVisualMidiNotes.delete(note);
+  } else {
+    return;
+  }
+  renderVirtualKeyboardActiveNotes();
+}
+
+async function ensureLiveMonitorPlayback() {
+  const choice = selectedPlaybackChoice();
+  if (!choice.renderer) {
+    return null;
+  }
+  if (
+    state.liveMonitorPlayback &&
+    state.liveMonitorChoiceValue === choice.value
+  ) {
+    return state.liveMonitorPlayback;
+  }
+  if (
+    state.liveMonitorPlaybackPromise &&
+    state.liveMonitorChoiceValue === choice.value
+  ) {
+    return state.liveMonitorPlaybackPromise;
+  }
+
+  stopLiveMonitorPlayback();
+  state.liveMonitorChoiceValue = choice.value;
+  const token = ++state.liveMonitorToken;
+  state.liveMonitorPlaybackPromise = createPlaybackSession(choice.value)
+    .then((playback) => {
+      if (token !== state.liveMonitorToken) {
+        playback.renderer?.stopPlayback?.(playback);
+        return null;
+      }
+      state.liveMonitorPlayback = playback;
+      return playback;
+    })
+    .catch((error) => {
+      state.liveMonitorChoiceValue = null;
+      setPhraseMessage(`Virtual keyboard monitor unavailable: ${error.message}`, true);
+      return null;
+    })
+    .finally(() => {
+      state.liveMonitorPlaybackPromise = null;
+    });
+  return state.liveMonitorPlaybackPromise;
+}
+
+function stopLiveMonitorPlayback() {
+  const playback = state.liveMonitorPlayback;
+  if (playback?.renderer?.stopPlayback) {
+    playback.renderer.stopPlayback(playback);
+  }
+  state.liveMonitorPlayback = null;
+  state.liveMonitorPlaybackPromise = null;
+  state.liveMonitorChoiceValue = null;
+  state.liveMonitorToken += 1;
+}
+
+async function monitorVirtualMidiMessage(messageEvent) {
+  const event = midiMessageToEvent(messageEvent);
+  if (!event) {
+    return;
+  }
+  const playback = await ensureLiveMonitorPlayback();
+  if (!playback) {
+    return;
+  }
+  dispatchPlaybackEvent(playback, event);
+}
+
+function handleUnifiedMidiMessage(messageEvent, sourceLabel, { monitor = false } = {}) {
+  const [statusByte, note, velocity = 0] = [...messageEvent.data];
+  const status = statusByte & 0xf0;
+  const type =
+    status === 0x90 && velocity > 0
+      ? "note_on"
+      : status === 0x80 || (status === 0x90 && velocity === 0)
+        ? "note_off"
+        : "message";
+
+  updateVisualMidiState(messageEvent);
+
+  const interruptedPlayback =
+    type === "note_on"
+      ? stopLoopAndPlayback(
+          `Stopped the current continuation and switched to live MIDI from ${sourceLabel}.`,
+        )
+      : false;
+
+  recorder.handleMessage(messageEvent);
+  if (monitor) {
+    void monitorVirtualMidiMessage(messageEvent);
+  }
+  setLastMidiEvent(`${type} ${note} v${velocity}`);
+  setPhraseMessage(
+    interruptedPlayback
+      ? `Stopped the current continuation and switched to live MIDI from ${sourceLabel}.`
+      : `Receiving MIDI from ${sourceLabel}. Waiting for phrase end...`,
+  );
+}
+
+function emitVirtualMidiNote(note, type) {
+  const midiNote = normalizeMidiNote(note);
+  const status = type === "note_on" ? 0x90 : 0x80;
+  const velocity = type === "note_on" ? getVirtualVelocity() : 0;
+  const timestamp = getVirtualNoteTimestamp(type);
+  handleUnifiedMidiMessage(
+    makeMidiMessageEvent([status | VIRTUAL_KEYBOARD_CHANNEL, midiNote, velocity], timestamp),
+    "Virtual Keyboard",
+    { monitor: true },
+  );
+}
+
+function virtualHeldSources(note) {
+  const midiNote = normalizeMidiNote(note);
+  let sources = state.virtualHeldSourcesByNote.get(midiNote);
+  if (!sources) {
+    sources = new Set();
+    state.virtualHeldSourcesByNote.set(midiNote, sources);
+  }
+  return sources;
+}
+
+function pressVirtualNote(note, sourceId) {
+  const midiNote = normalizeMidiNote(note);
+  const sources = virtualHeldSources(midiNote);
+  if (sources.has(sourceId) || state.virtualLatchedNotes.has(midiNote)) {
+    return;
+  }
+  const wasInactive = sources.size === 0 && !state.virtualSustainedNotes.has(midiNote);
+  sources.add(sourceId);
+  state.virtualSustainedNotes.delete(midiNote);
+  if (wasInactive) {
+    emitVirtualMidiNote(midiNote, "note_on");
+  }
+}
+
+function releaseVirtualNote(note, sourceId) {
+  const midiNote = normalizeMidiNote(note);
+  const sources = state.virtualHeldSourcesByNote.get(midiNote);
+  if (!sources?.has(sourceId)) {
+    return;
+  }
+  sources.delete(sourceId);
+  if (!sources.size) {
+    state.virtualHeldSourcesByNote.delete(midiNote);
+  }
+  if (sources?.size || state.virtualLatchedNotes.has(midiNote)) {
+    return;
+  }
+  if (elements.virtualSustainToggle.checked) {
+    state.virtualSustainedNotes.add(midiNote);
+    return;
+  }
+  emitVirtualMidiNote(midiNote, "note_off");
+}
+
+function toggleLatchedVirtualNote(note) {
+  const midiNote = normalizeMidiNote(note);
+  if (state.virtualLatchedNotes.has(midiNote)) {
+    state.virtualLatchedNotes.delete(midiNote);
+    if (!state.virtualHeldSourcesByNote.has(midiNote)) {
+      emitVirtualMidiNote(midiNote, "note_off");
+    }
+    return;
+  }
+  const wasInactive =
+    !state.virtualHeldSourcesByNote.has(midiNote) && !state.virtualSustainedNotes.has(midiNote);
+  state.virtualLatchedNotes.add(midiNote);
+  state.virtualSustainedNotes.delete(midiNote);
+  if (wasInactive) {
+    emitVirtualMidiNote(midiNote, "note_on");
+  }
+}
+
+function releaseSustainedVirtualNotes() {
+  for (const note of [...state.virtualSustainedNotes]) {
+    if (!state.virtualHeldSourcesByNote.has(note) && !state.virtualLatchedNotes.has(note)) {
+      emitVirtualMidiNote(note, "note_off");
+      state.virtualSustainedNotes.delete(note);
+    }
+  }
+}
+
+function allVirtualNotesOff({ clearLatch = true } = {}) {
+  const notes = new Set([
+    ...state.virtualHeldSourcesByNote.keys(),
+    ...state.virtualSustainedNotes,
+    ...state.virtualLatchedNotes,
+  ]);
+  state.virtualHeldSourcesByNote.clear();
+  state.virtualSustainedNotes.clear();
+  state.virtualActivePointers.clear();
+  state.virtualActiveComputerKeys.clear();
+  if (clearLatch) {
+    state.virtualLatchedNotes.clear();
+  }
+  for (const note of notes) {
+    emitVirtualMidiNote(note, "note_off");
+  }
+  renderVirtualKeyboardActiveNotes();
+}
+
+function clearLatchedVirtualChord() {
+  const notes = [...state.virtualLatchedNotes];
+  state.virtualLatchedNotes.clear();
+  for (const note of notes) {
+    if (!state.virtualHeldSourcesByNote.has(note)) {
+      emitVirtualMidiNote(note, "note_off");
+    }
+  }
+  renderVirtualKeyboardActiveNotes();
+}
+
+function renderVirtualKeyboardActiveNotes() {
+  elements.virtualKeyboard
+    .querySelectorAll("[data-midi-note]")
+    .forEach((key) => {
+      const note = Number(key.dataset.midiNote);
+      key.classList.toggle("is-active", state.activeVisualMidiNotes.has(note));
+      key.classList.toggle("is-latched", state.virtualLatchedNotes.has(note));
+    });
+}
+
+function renderVirtualKeyboard() {
+  const base = state.virtualKeyboardBaseNote;
+  const noteCount = VIRTUAL_KEYBOARD_OCTAVES * 12;
+  const whiteNotes = [];
+  const blackNotes = [];
+
+  for (let offset = 0; offset < noteCount; offset += 1) {
+    const note = base + offset;
+    const noteOffset = note % 12;
+    if (BLACK_KEY_OFFSETS.has(noteOffset)) {
+      blackNotes.push({ note, offset, whiteIndex: whiteNotes.length - 1 });
+    } else {
+      whiteNotes.push({ note, offset });
+    }
+  }
+
+  const whiteMarkup = whiteNotes
+    .map(
+      ({ note }) => `
+        <button
+          class="virtual-key white-key"
+          type="button"
+          data-midi-note="${note}"
+          aria-label="${midiNoteName(note)}"
+        ><span>${midiNoteName(note)}</span></button>`,
+    )
+    .join("");
+  const blackMarkup = blackNotes
+    .map(
+      ({ note, whiteIndex }) => `
+        <button
+          class="virtual-key black-key"
+          type="button"
+          data-midi-note="${note}"
+          aria-label="${midiNoteName(note)}"
+          style="--key-left: ${((whiteIndex + 1) / whiteNotes.length) * 100}%"
+        ><span>${midiNoteName(note)}</span></button>`,
+    )
+    .join("");
+
+  elements.virtualKeyboard.style.setProperty("--white-key-count", whiteNotes.length);
+  elements.virtualKeyboard.innerHTML = `
+    <div class="white-key-row">${whiteMarkup}</div>
+    <div class="black-key-row" aria-hidden="false">${blackMarkup}</div>
+  `;
+  elements.virtualOctaveLabel.textContent = virtualKeyboardRangeLabel();
+  renderVirtualKeyboardActiveNotes();
+}
+
+function setVirtualKeyboardBaseNote(nextBaseNote) {
+  allVirtualNotesOff();
+  state.virtualKeyboardBaseNote = Math.max(
+    VIRTUAL_KEYBOARD_MIN_BASE_NOTE,
+    Math.min(VIRTUAL_KEYBOARD_MAX_BASE_NOTE, nextBaseNote),
+  );
+  renderVirtualKeyboard();
+}
+
+function virtualNoteFromComputerKey(code) {
+  const offset = COMPUTER_KEYBOARD_OFFSETS.get(code);
+  return offset == null ? null : state.virtualKeyboardBaseNote + offset;
+}
 
 function roundNumber(value) {
   return Math.round(value * 1_000_000) / 1_000_000;
@@ -1938,6 +2358,12 @@ function updateSavedSessionConfiguration(sessionId, configuration, updatedAt = n
 }
 
 function currentInputPreference() {
+  if (isVirtualMidiInputSelected()) {
+    return {
+      midi_input_id: VIRTUAL_MIDI_INPUT_ID,
+      midi_input_name: VIRTUAL_MIDI_INPUT_NAME,
+    };
+  }
   if (!state.midiAccess || !state.activeInputId) {
     return {};
   }
@@ -2758,7 +3184,14 @@ function selectPlaybackPreference(configuration) {
 
 async function selectMidiInputPreference(configuration) {
   const preferredInputId = configuration?.midi_input_id;
-  if (!state.midiAccess || !preferredInputId || !state.midiAccess.inputs.has(preferredInputId)) {
+  if (!preferredInputId) {
+    return false;
+  }
+  if (isVirtualMidiInputId(preferredInputId)) {
+    await attachInput(VIRTUAL_MIDI_INPUT_ID, { savePreference: false });
+    return true;
+  }
+  if (!state.midiAccess || !state.midiAccess.inputs.has(preferredInputId)) {
     return false;
   }
 
@@ -3646,10 +4079,16 @@ function sendMidiPanicToOutput(output) {
 async function sendPlaybackPanic() {
   let sent = false;
   const activePlayback = state.activePlayback;
+  const liveMonitorPlayback = state.liveMonitorPlayback;
 
   if (activePlayback?.renderer?.panicPlayback) {
     sent = (await activePlayback.renderer.panicPlayback(activePlayback)) || sent;
   }
+  if (liveMonitorPlayback?.renderer?.panicPlayback) {
+    sent =
+      (await liveMonitorPlayback.renderer.panicPlayback(liveMonitorPlayback)) || sent;
+  }
+  stopLiveMonitorPlayback();
 
   for (const renderer of localPlaybackRenderers) {
     if (activePlayback?.renderer === renderer) {
@@ -4262,98 +4701,98 @@ function populatePlaybackChoices() {
 
 async function populateMidiSelectors() {
   populatePlaybackChoices();
-  if (!state.midiAccess) {
-    return;
-  }
-
-  const inputs = [...state.midiAccess.inputs.values()];
+  const inputs = state.midiAccess ? [...state.midiAccess.inputs.values()] : [];
   const previousInputId = elements.midiInputSelect.value;
+  const preferredInputId = state.sessionConfiguration?.midi_input_id || null;
+  const physicalInputIds = new Set(inputs.map((input) => input.id));
 
   elements.midiInputSelect.disabled = false;
-  elements.midiInputSelect.innerHTML = inputs.length
-    ? inputs
-        .map(
-          (input) =>
-            `<option value="${input.id}">${input.name || input.id}</option>`,
-        )
-        .join("")
-    : `<option value="">No MIDI inputs found</option>`;
+  elements.midiInputSelect.innerHTML = [
+    `<option value="">Choose input source</option>`,
+    `<option value="${VIRTUAL_MIDI_INPUT_ID}">${VIRTUAL_MIDI_INPUT_NAME}</option>`,
+    ...inputs.map(
+      (input) =>
+        `<option value="${input.id}">${input.name || input.id}</option>`,
+    ),
+  ].join("");
 
-  if (inputs.length) {
-    const preferredInputId = state.sessionConfiguration?.midi_input_id || null;
-    const inputId =
-      preferredInputId && state.midiAccess.inputs.has(preferredInputId)
-        ? preferredInputId
-        : state.midiAccess.inputs.has(previousInputId)
-          ? previousInputId
-          : inputs[0].id;
-    await attachInput(inputId, { savePreference: false });
-  } else {
-    detachCurrentInput();
-    setSelectedInputName("No MIDI input found");
-    setMidiStatus("No inputs");
-    setLastMidiEvent("None yet");
-  }
+  const inputId =
+    isVirtualMidiInputId(preferredInputId) || physicalInputIds.has(preferredInputId)
+      ? preferredInputId
+      : isVirtualMidiInputId(previousInputId) || physicalInputIds.has(previousInputId)
+      ? previousInputId
+      : inputs.length
+        ? inputs[0].id
+        : "";
+  await attachInput(inputId, { savePreference: false });
 }
 
 function detachCurrentInput() {
-  if (!state.midiAccess || !state.activeInputId) {
+  if (!state.activeInputId) {
     return;
   }
-  const current = state.midiAccess.inputs.get(state.activeInputId);
-  if (current) {
-    current.onmidimessage = null;
-    void current.close().catch(() => {});
+  if (isVirtualMidiInputSelected()) {
+    allVirtualNotesOff();
+    stopLiveMonitorPlayback();
+  } else if (state.midiAccess) {
+    const current = state.midiAccess.inputs.get(state.activeInputId);
+    if (current) {
+      current.onmidimessage = null;
+      void current.close().catch(() => {});
+    }
   }
   state.activeInputId = null;
+  syncVirtualKeyboardVisibility();
   renderPerformanceState();
 }
 
 async function attachInput(inputId, { savePreference = false } = {}) {
   detachCurrentInput();
 
+  if (isVirtualMidiInputId(inputId)) {
+    state.activeInputId = VIRTUAL_MIDI_INPUT_ID;
+    elements.midiInputSelect.value = VIRTUAL_MIDI_INPUT_ID;
+    setSelectedInputName(VIRTUAL_MIDI_INPUT_NAME);
+    setMidiStatus("Using virtual input");
+    setPhraseStatus("Listening");
+    syncVirtualKeyboardVisibility();
+    renderPerformanceState();
+    if (savePreference) {
+      await saveSessionPreferences({
+        midi_input_id: VIRTUAL_MIDI_INPUT_ID,
+        midi_input_name: VIRTUAL_MIDI_INPUT_NAME,
+      });
+    }
+    return;
+  }
+
   if (!state.midiAccess || !inputId) {
     state.activeInputId = null;
+    elements.midiInputSelect.value = "";
     setSelectedInputName("No MIDI input selected");
+    syncVirtualKeyboardVisibility();
+    renderPerformanceState();
     return;
   }
 
   const input = state.midiAccess.inputs.get(inputId);
   if (!input) {
     setSelectedInputName("Selected input is unavailable");
+    syncVirtualKeyboardVisibility();
+    renderPerformanceState();
     return;
   }
 
   await input.open();
   input.onmidimessage = (messageEvent) => {
-    const [statusByte, note, velocity = 0] = [...messageEvent.data];
-    const status = statusByte & 0xf0;
-    const interruptedPlayback =
-      status === 0x90 && velocity > 0
-        ? stopLoopAndPlayback(
-            `Stopped the current continuation and switched to live MIDI from ${input.name || input.id}.`,
-          )
-        : false;
-
-    recorder.handleMessage(messageEvent);
-    const type =
-      status === 0x90 && velocity > 0
-        ? "note_on"
-        : status === 0x80 || (status === 0x90 && velocity === 0)
-          ? "note_off"
-          : "message";
-    setLastMidiEvent(`${type} ${note} v${velocity}`);
-    setPhraseMessage(
-      interruptedPlayback
-        ? `Stopped the current continuation and switched to live MIDI from ${input.name || input.id}.`
-        : `Receiving MIDI from ${input.name || input.id}. Waiting for phrase end…`,
-    );
+    handleUnifiedMidiMessage(messageEvent, input.name || input.id);
   };
 
   state.activeInputId = inputId;
   elements.midiInputSelect.value = inputId;
   setSelectedInputName(input.name || input.id);
   setMidiStatus(`Listening on ${input.name || input.id}`);
+  syncVirtualKeyboardVisibility();
   renderPerformanceState();
   if (savePreference) {
     await saveSessionPreferences({
@@ -4380,6 +4819,7 @@ async function connectMidi() {
 }
 
 function updateSelectedOutput() {
+  stopLiveMonitorPlayback();
   syncFaustRendererPanel();
   renderPerformanceState();
 }
@@ -4581,6 +5021,90 @@ function bindEvents() {
       }
       await populateMidiSelectors();
       setPhraseMessage("MIDI ports refreshed.");
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
+  });
+
+  elements.virtualKeyboard.addEventListener("pointerdown", (event) => {
+    if (!isVirtualMidiInputSelected()) {
+      return;
+    }
+    if (!(event.target instanceof Element)) {
+      return;
+    }
+    const key = event.target.closest("[data-midi-note]");
+    if (!key) {
+      return;
+    }
+    event.preventDefault();
+    const note = Number(key.dataset.midiNote);
+    if (elements.virtualLatchToggle.checked) {
+      toggleLatchedVirtualNote(note);
+      return;
+    }
+    const sourceId = `pointer:${event.pointerId}`;
+    state.virtualActivePointers.set(event.pointerId, note);
+    key.setPointerCapture?.(event.pointerId);
+    pressVirtualNote(note, sourceId);
+  });
+
+  elements.virtualKeyboard.addEventListener("pointerup", (event) => {
+    const note = state.virtualActivePointers.get(event.pointerId);
+    if (note == null) {
+      return;
+    }
+    state.virtualActivePointers.delete(event.pointerId);
+    releaseVirtualNote(note, `pointer:${event.pointerId}`);
+  });
+
+  elements.virtualKeyboard.addEventListener("pointercancel", (event) => {
+    const note = state.virtualActivePointers.get(event.pointerId);
+    if (note == null) {
+      return;
+    }
+    state.virtualActivePointers.delete(event.pointerId);
+    releaseVirtualNote(note, `pointer:${event.pointerId}`);
+  });
+
+  elements.virtualKeyboard.addEventListener("pointerleave", () => {
+    for (const [pointerId, note] of [...state.virtualActivePointers]) {
+      releaseVirtualNote(note, `pointer:${pointerId}`);
+      state.virtualActivePointers.delete(pointerId);
+    }
+  });
+
+  elements.virtualOctaveDownButton.addEventListener("click", () => {
+    setVirtualKeyboardBaseNote(state.virtualKeyboardBaseNote - 12);
+  });
+
+  elements.virtualOctaveUpButton.addEventListener("click", () => {
+    setVirtualKeyboardBaseNote(state.virtualKeyboardBaseNote + 12);
+  });
+
+  elements.virtualVelocityInput.addEventListener("input", () => {
+    elements.virtualVelocityValue.textContent = String(getVirtualVelocity());
+  });
+
+  elements.virtualSustainToggle.addEventListener("change", () => {
+    if (!elements.virtualSustainToggle.checked) {
+      releaseSustainedVirtualNotes();
+    }
+  });
+
+  elements.virtualLatchToggle.addEventListener("change", () => {
+    allVirtualNotesOff();
+  });
+
+  elements.virtualClearLatchButton.addEventListener("click", () => {
+    clearLatchedVirtualChord();
+  });
+
+  elements.virtualPanicButton.addEventListener("click", async () => {
+    allVirtualNotesOff();
+    try {
+      await sendPlaybackPanic();
+      setPhraseMessage("All virtual and playback notes were stopped.");
     } catch (error) {
       setPhraseMessage(error.message, true);
     }
@@ -4826,6 +5350,40 @@ function bindEvents() {
     }
   });
 
+  document.addEventListener("keydown", (event) => {
+    if (!isVirtualMidiInputSelected()) {
+      return;
+    }
+    const note = virtualNoteFromComputerKey(event.code);
+    if (note == null || event.repeat) {
+      return;
+    }
+    if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea")) {
+      return;
+    }
+    event.preventDefault();
+    if (elements.virtualLatchToggle.checked) {
+      toggleLatchedVirtualNote(note);
+      return;
+    }
+    state.virtualActiveComputerKeys.set(event.code, note);
+    pressVirtualNote(note, `key:${event.code}`);
+  });
+
+  document.addEventListener("keyup", (event) => {
+    const note = state.virtualActiveComputerKeys.get(event.code);
+    if (note == null) {
+      return;
+    }
+    event.preventDefault();
+    state.virtualActiveComputerKeys.delete(event.code);
+    releaseVirtualNote(note, `key:${event.code}`);
+  });
+
+  window.addEventListener("blur", () => {
+    allVirtualNotesOff();
+  });
+
   window.addEventListener("resize", () => {
     drawPianoRoll(
       elements.inputRoll,
@@ -4854,6 +5412,9 @@ async function initialize() {
   updateSelectedOutput();
   syncFaustRendererPanel();
   setLastMidiEvent("None yet");
+  renderVirtualKeyboard();
+  elements.virtualVelocityValue.textContent = String(getVirtualVelocity());
+  await populateMidiSelectors();
   updateKeepLastFieldState();
   renderSessionSettingsSummary();
   updateSessionActionState();

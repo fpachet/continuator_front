@@ -355,6 +355,61 @@
                     <option>Connect MIDI first</option>
                   </select>
                 </div>
+                <div
+                  id="virtual-keyboard-panel"
+                  class="virtual-keyboard-panel"
+                  aria-label="Virtual MIDI keyboard"
+                  hidden
+                >
+                  <div class="virtual-keyboard-head">
+                    <div>
+                      <strong>Virtual MIDI Keyboard</strong>
+                      <span id="virtual-octave-label">C4-B5</span>
+                    </div>
+                    <div class="virtual-octave-controls" aria-label="Octave controls">
+                      <button id="virtual-octave-down-button" class="ghost compact-button" type="button">
+                        Oct -
+                      </button>
+                      <button id="virtual-octave-up-button" class="ghost compact-button" type="button">
+                        Oct +
+                      </button>
+                    </div>
+                  </div>
+                  <div class="virtual-keyboard-controls">
+                    <label class="velocity-control" for="virtual-velocity-input">
+                      <span>Velocity</span>
+                      <input
+                        id="virtual-velocity-input"
+                        type="range"
+                        min="1"
+                        max="127"
+                        value="100"
+                      />
+                      <output id="virtual-velocity-value" for="virtual-velocity-input">100</output>
+                    </label>
+                    <label class="toggle compact-toggle">
+                      <input id="virtual-sustain-toggle" type="checkbox" />
+                      <span>Sustain</span>
+                    </label>
+                    <label class="toggle compact-toggle">
+                      <input id="virtual-latch-toggle" type="checkbox" />
+                      <span>Latch chord</span>
+                    </label>
+                  </div>
+                  <div
+                    id="virtual-keyboard"
+                    class="virtual-keyboard"
+                    aria-label="Playable piano keyboard"
+                  ></div>
+                  <div class="virtual-keyboard-actions">
+                    <button id="virtual-clear-latch-button" class="ghost compact-button" type="button">
+                      Clear latched chord
+                    </button>
+                    <button id="virtual-panic-button" class="ghost danger-button compact-button" type="button">
+                      All notes off
+                    </button>
+                  </div>
+                </div>
                 <div class="field">
                   <label for="phrase-timeout-input">Phrase gap (seconds)</label>
                   <input
