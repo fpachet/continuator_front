@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Web Continuator</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260425-playback-ux" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260427-mobile-keyboard-10" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -396,17 +396,29 @@
                       <span>Latch chord</span>
                     </label>
                   </div>
-                  <div
-                    id="virtual-keyboard"
-                    class="virtual-keyboard"
-                    aria-label="Playable piano keyboard"
-                  ></div>
+                  <div class="virtual-keyboard-viewport">
+                    <div
+                      id="virtual-keyboard"
+                      class="virtual-keyboard"
+                      aria-label="Playable piano keyboard"
+                    ></div>
+                  </div>
                   <div class="virtual-keyboard-actions">
-                    <button id="virtual-clear-latch-button" class="ghost compact-button" type="button">
-                      Clear latched chord
+                    <button
+                      id="virtual-clear-latch-button"
+                      class="ghost compact-button"
+                      type="button"
+                      aria-label="Clear latched chord"
+                    >
+                      Clear chord
                     </button>
-                    <button id="virtual-panic-button" class="ghost danger-button compact-button" type="button">
-                      All notes off
+                    <button
+                      id="virtual-panic-button"
+                      class="ghost danger-button compact-button"
+                      type="button"
+                      aria-label="All notes off"
+                    >
+                      Panic
                     </button>
                   </div>
                 </div>
@@ -1067,6 +1079,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20260426-audio-output"></script>
+    <script type="module" src="/assets/app.js?v=20260427-mobile-keyboard-10"></script>
   </body>
 </html>

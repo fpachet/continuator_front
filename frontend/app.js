@@ -9,7 +9,9 @@ const INFINITE_MIN_LOOKAHEAD_MS = 600;
 const INFINITE_MAX_LOOKAHEAD_MS = 2200;
 const VIRTUAL_MIDI_INPUT_ID = "__virtual_keyboard__";
 const VIRTUAL_MIDI_INPUT_NAME = "Virtual MIDI Keyboard";
-const VIRTUAL_KEYBOARD_OCTAVES = 2;
+const VIRTUAL_KEYBOARD_DESKTOP_OCTAVES = 2;
+const VIRTUAL_KEYBOARD_PHONE_OCTAVES = 1;
+const VIRTUAL_KEYBOARD_PHONE_MEDIA_QUERY = "(max-width: 640px)";
 const VIRTUAL_KEYBOARD_DEFAULT_BASE_NOTE = 60;
 const VIRTUAL_KEYBOARD_MIN_BASE_NOTE = 24;
 const VIRTUAL_KEYBOARD_MAX_BASE_NOTE = 96;
@@ -1306,8 +1308,14 @@ function normalizeMidiNote(note) {
 
 function virtualKeyboardRangeLabel() {
   const first = state.virtualKeyboardBaseNote;
-  const last = first + VIRTUAL_KEYBOARD_OCTAVES * 12 - 1;
+  const last = first + virtualKeyboardOctaves() * 12 - 1;
   return `${midiNoteName(first)}-${midiNoteName(last)}`;
+}
+
+function virtualKeyboardOctaves() {
+  return window.matchMedia?.(VIRTUAL_KEYBOARD_PHONE_MEDIA_QUERY).matches
+    ? VIRTUAL_KEYBOARD_PHONE_OCTAVES
+    : VIRTUAL_KEYBOARD_DESKTOP_OCTAVES;
 }
 
 function getVirtualVelocity() {
@@ -1594,7 +1602,7 @@ function renderVirtualKeyboardActiveNotes() {
 
 function renderVirtualKeyboard() {
   const base = state.virtualKeyboardBaseNote;
-  const noteCount = VIRTUAL_KEYBOARD_OCTAVES * 12;
+  const noteCount = virtualKeyboardOctaves() * 12;
   const whiteNotes = [];
   const blackNotes = [];
 
@@ -1611,24 +1619,26 @@ function renderVirtualKeyboard() {
   const whiteMarkup = whiteNotes
     .map(
       ({ note }) => `
-        <button
+        <div
           class="virtual-key white-key"
-          type="button"
+          role="button"
+          tabindex="-1"
           data-midi-note="${note}"
           aria-label="${midiNoteName(note)}"
-        ><span>${midiNoteName(note)}</span></button>`,
+        ><span>${midiNoteName(note)}</span></div>`,
     )
     .join("");
   const blackMarkup = blackNotes
     .map(
       ({ note, whiteIndex }) => `
-        <button
+        <div
           class="virtual-key black-key"
-          type="button"
+          role="button"
+          tabindex="-1"
           data-midi-note="${note}"
           aria-label="${midiNoteName(note)}"
           style="--key-left: ${((whiteIndex + 1) / whiteNotes.length) * 100}%"
-        ><span>${midiNoteName(note)}</span></button>`,
+        ><span>${midiNoteName(note)}</span></div>`,
     )
     .join("");
 
@@ -5763,6 +5773,7 @@ function bindEvents() {
   });
 
   window.addEventListener("resize", () => {
+    renderVirtualKeyboard();
     drawPianoRoll(
       elements.inputRoll,
       eventsToNotes(state.lastCapturedPhrase),
