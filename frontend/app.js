@@ -1840,8 +1840,23 @@ function constraintPillClass(state) {
   return "constraint-pill";
 }
 
-function generationTracePillText(trace) {
+function activeEngineKind() {
+  return normalizedEngineKind(
+    state.sessionConfiguration?.engine_kind ||
+      elements.engineKindSelect?.value ||
+      DEFAULT_ENGINE_KIND,
+  );
+}
+
+function hasGenerationTrace(trace) {
+  return Array.isArray(trace) && trace.length > 0;
+}
+
+function generationTracePillText(trace, engineKind) {
   if (!Array.isArray(trace) || !trace.length) {
+    if (engineKind === "context_bp") {
+      return "Trace: not returned";
+    }
     return null;
   }
   const orders = trace
@@ -1859,8 +1874,11 @@ function generationTracePillText(trace) {
   return `Trace: ${orders}${suffix}${skipped}`;
 }
 
-function generationTraceTitle(trace) {
+function generationTraceTitle(trace, engineKind) {
   if (!Array.isArray(trace) || !trace.length) {
+    if (engineKind === "context_bp") {
+      return "Context BP is active, but this response did not include generation_trace.";
+    }
     return "";
   }
   return trace
@@ -1883,11 +1901,17 @@ function renderConstraintStatus(constraints, generationTrace = null) {
     return;
   }
   elements.constraintStatus.replaceChildren();
-  const traceText = generationTracePillText(generationTrace);
+  const engineKind = activeEngineKind();
+  const traceText = generationTracePillText(generationTrace, engineKind);
   if (!constraints && !traceText) {
     elements.constraintStatus.hidden = true;
     return;
   }
+
+  const enginePill = document.createElement("span");
+  enginePill.className = "constraint-pill is-off";
+  enginePill.textContent = `Engine: ${engineKindLabel(engineKind)}`;
+  elements.constraintStatus.append(enginePill);
 
   if (constraints) {
     [
@@ -1905,9 +1929,11 @@ function renderConstraintStatus(constraints, generationTrace = null) {
   }
   if (traceText) {
     const pill = document.createElement("span");
-    pill.className = "constraint-pill is-off";
+    pill.className = hasGenerationTrace(generationTrace)
+      ? "constraint-pill"
+      : "constraint-pill is-relaxed";
     pill.textContent = traceText;
-    pill.title = generationTraceTitle(generationTrace);
+    pill.title = generationTraceTitle(generationTrace, engineKind);
     elements.constraintStatus.append(pill);
   }
   elements.constraintStatus.hidden = false;
