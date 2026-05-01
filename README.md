@@ -214,6 +214,7 @@ Current API endpoints:
 - `POST /api/session`: create a new session and its isolated Continuator engine.
 - `PATCH /api/sessions/{session_id}/settings`: update live session settings.
 - `POST /api/continue`: send one phrase and request a continuation.
+- `POST /api/sessions/{session_id}/generate`: generate a phrase directly from memory.
 - `GET /api/sessions/{session_id}/history`: retrieve recent logged phrase history.
 - `GET /api/sessions/{session_id}/memory`: retrieve the active memory snapshot for the live engine.
 - `POST /api/sessions/{session_id}/reset`: clear the live engine memory while preserving session settings.
@@ -222,6 +223,7 @@ API payloads use JSON and expose both:
 
 - event-level timing data for playback
 - note-level timing data for visualization
+- constraint status, plus optional per-step `generation_trace` diagnostics for engines that expose it
 
 ## Local Development
 

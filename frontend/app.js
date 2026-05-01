@@ -1840,28 +1840,76 @@ function constraintPillClass(state) {
   return "constraint-pill";
 }
 
-function renderConstraintStatus(constraints) {
+function generationTracePillText(trace) {
+  if (!Array.isArray(trace) || !trace.length) {
+    return null;
+  }
+  const orders = trace
+    .slice(0, 12)
+    .map((step) => `K${Number(step?.effective_order ?? step?.order ?? 0)}`)
+    .join(" ");
+  const skippedCount = trace.reduce(
+    (total, step) => (
+      total + (Array.isArray(step?.skipped_orders) ? step.skipped_orders.length : 0)
+    ),
+    0,
+  );
+  const suffix = trace.length > 12 ? ` … +${trace.length - 12}` : "";
+  const skipped = skippedCount ? ` · ${skippedCount} skips` : "";
+  return `Trace: ${orders}${suffix}${skipped}`;
+}
+
+function generationTraceTitle(trace) {
+  if (!Array.isArray(trace) || !trace.length) {
+    return "";
+  }
+  return trace
+    .map((step) => {
+      const order = Number(step?.effective_order ?? step?.order ?? 0);
+      const symbol = Array.isArray(step?.symbol)
+        ? step.symbol.join(",")
+        : String(step?.symbol ?? "");
+      const skipped =
+        Array.isArray(step?.skipped_orders) && step.skipped_orders.length
+          ? ` skipped ${step.skipped_orders.join("/")}`
+          : "";
+      return `pos ${step?.position}: K${order} ${symbol}${skipped}`;
+    })
+    .join("\n");
+}
+
+function renderConstraintStatus(constraints, generationTrace = null) {
   if (!elements.constraintStatus) {
     return;
   }
   elements.constraintStatus.replaceChildren();
-  if (!constraints) {
+  const traceText = generationTracePillText(generationTrace);
+  if (!constraints && !traceText) {
     elements.constraintStatus.hidden = true;
     return;
   }
 
-  [
-    ["Start", constraints.start],
-    ["End", constraints.end],
-  ].forEach(([label, value]) => {
+  if (constraints) {
+    [
+      ["Start", constraints.start],
+      ["End", constraints.end],
+    ].forEach(([label, value]) => {
+      const pill = document.createElement("span");
+      pill.className = constraintPillClass(value);
+      pill.textContent = constraintPillText(label, value);
+      if (value?.reason) {
+        pill.title = value.reason;
+      }
+      elements.constraintStatus.append(pill);
+    });
+  }
+  if (traceText) {
     const pill = document.createElement("span");
-    pill.className = constraintPillClass(value);
-    pill.textContent = constraintPillText(label, value);
-    if (value?.reason) {
-      pill.title = value.reason;
-    }
+    pill.className = "constraint-pill is-off";
+    pill.textContent = traceText;
+    pill.title = generationTraceTitle(generationTrace);
     elements.constraintStatus.append(pill);
-  });
+  }
   elements.constraintStatus.hidden = false;
 }
 
@@ -3755,7 +3803,7 @@ function applyContinuationPayload(payload, { renderGenerated = true } = {}) {
   rememberCapturedPhrase(payload.input_phrase.events);
   renderCapturedStats(payload.input_phrase.events, payload.input_phrase.notes, true);
   rememberGeneratedPhrase(payload.generated_phrase);
-  renderConstraintStatus(payload.constraints);
+  renderConstraintStatus(payload.constraints, payload.generation_trace);
   if (renderGenerated) {
     renderGeneratedStats(payload.generated_phrase);
   }
@@ -3765,7 +3813,7 @@ function applyGeneratedPhrasePayload(payload, { renderGenerated = true } = {}) {
   const generatedPhrase = payload?.generated_phrase || payload;
   rememberGeneratedPhrase(generatedPhrase);
   if (payload?.generated_phrase) {
-    renderConstraintStatus(payload.constraints);
+    renderConstraintStatus(payload.constraints, payload.generation_trace);
   }
   if (renderGenerated) {
     renderGeneratedStats(generatedPhrase);

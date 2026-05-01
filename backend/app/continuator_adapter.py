@@ -23,6 +23,7 @@ from .schemas import (
     EngineKind,
     GenerationConstraintsStatus,
     GenerationConstraintState,
+    GenerationTraceStep,
     MidiEvent,
     PhraseNote,
     PhrasePayload,
@@ -334,6 +335,15 @@ class ContinuatorSessionEngine:
 
         return self._continuator.set_timing(note_addresses)
 
+    def _last_generation_trace(self) -> list[GenerationTraceStep] | None:
+        get_trace = getattr(self._continuator, "get_last_generation_trace", None)
+        if get_trace is None:
+            return None
+        trace = get_trace()
+        if not trace:
+            return None
+        return [GenerationTraceStep.model_validate(step) for step in trace]
+
     def apply_settings(
         self,
         *,
@@ -475,7 +485,12 @@ class ContinuatorSessionEngine:
         self,
         note_count: int | None = None,
         enforce_end_constraint: bool = True,
-    ) -> tuple[PhrasePayload, GenerationConstraintsStatus, str | None]:
+    ) -> tuple[
+        PhrasePayload,
+        GenerationConstraintsStatus,
+        list[GenerationTraceStep] | None,
+        str | None,
+    ]:
         with self._lock:
             if not getattr(self._continuator.vom, "input_sequences", []):
                 raise NoContinuationAvailable(
@@ -546,7 +561,12 @@ class ContinuatorSessionEngine:
                 rendered_vp_sequence,
                 force_ending_realization=ends_with_end_marker,
             )
-            return _build_phrase_payload(rendered_sequence), constraints_status, status_message
+            return (
+                _build_phrase_payload(rendered_sequence),
+                constraints_status,
+                self._last_generation_trace(),
+                status_message,
+            )
 
     def continue_phrase(
         self,
@@ -555,12 +575,20 @@ class ContinuatorSessionEngine:
         continuation_note_count: int | None = None,
         enforce_end_constraint: bool = True,
         handoff_viewpoint: ViewpointSeed | None = None,
-    ) -> tuple[PhrasePayload, PhrasePayload, GenerationConstraintsStatus, str | None]:
+    ) -> tuple[
+        PhrasePayload,
+        PhrasePayload,
+        GenerationConstraintsStatus,
+        list[GenerationTraceStep] | None,
+        str | None,
+    ]:
         with self._lock:
             messages = [_event_to_mido_message(event) for event in phrase_events]
             input_phrase = self._continuator.get_phrase_from_mido(messages)
             if not input_phrase:
-                raise NoContinuationAvailable("The incoming phrase did not contain any complete notes.")
+                raise NoContinuationAvailable(
+                    "The incoming phrase did not contain any complete notes."
+                )
 
             should_learn = self._default_learn_input if learn_input is None else learn_input
             input_payload = _build_phrase_payload(input_phrase)
@@ -704,5 +732,6 @@ class ContinuatorSessionEngine:
                 input_payload,
                 _build_phrase_payload(rendered_sequence),
                 constraints_status,
+                self._last_generation_trace(),
                 status_message,
             )

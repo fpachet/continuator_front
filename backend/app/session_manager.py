@@ -279,7 +279,13 @@ class SessionManager:
             if request.learn_input is None
             else request.learn_input
         )
-        input_phrase, generated_phrase, constraints, status_message = state.engine.continue_phrase(
+        (
+            input_phrase,
+            generated_phrase,
+            constraints,
+            generation_trace,
+            status_message,
+        ) = state.engine.continue_phrase(
             request.phrase,
             learn_input=should_learn,
             continuation_note_count=request.continuation_note_count,
@@ -316,6 +322,7 @@ class SessionManager:
             input_phrase=input_phrase,
             generated_phrase=generated_phrase,
             constraints=constraints,
+            generation_trace=generation_trace,
             status_message=status_message,
         )
 
@@ -329,7 +336,12 @@ class SessionManager:
         state = self._require_session(session_id, owner_user_id)
         created_at = utc_now_iso()
         request_id = uuid.uuid4().hex
-        generated_phrase, constraints, status_message = state.engine.generate_phrase(
+        (
+            generated_phrase,
+            constraints,
+            generation_trace,
+            status_message,
+        ) = state.engine.generate_phrase(
             note_count=note_count,
             enforce_end_constraint=enforce_end_constraint,
         )
@@ -352,6 +364,7 @@ class SessionManager:
             created_at=created_at,
             generated_phrase=generated_phrase,
             constraints=constraints,
+            generation_trace=generation_trace,
             status_message=status_message,
         )
 

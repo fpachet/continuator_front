@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -63,6 +63,21 @@ class GenerationConstraintsStatus(BaseModel):
     end: GenerationConstraintState
 
 
+class GenerationTraceStep(BaseModel):
+    position: int = Field(ge=0)
+    symbol: Any | None = None
+    order: int
+    effective_order: int
+    context: list[Any] = Field(default_factory=list)
+    policy: str | None = None
+    candidate_orders: list[int] = Field(default_factory=list)
+    candidate_counts: list[int] = Field(default_factory=list)
+    skipped_orders: list[int] = Field(default_factory=list)
+    skipped_symbol: Any | None = None
+    accepted_singleton: bool = False
+    suppressed_skipped_symbol: bool = False
+
+
 class CreateSessionRequest(BaseModel):
     learn_input: bool = True
     transposition: bool = False
@@ -111,6 +126,7 @@ class ContinueResponse(BaseModel):
     input_phrase: PhrasePayload
     generated_phrase: PhrasePayload
     constraints: GenerationConstraintsStatus | None = None
+    generation_trace: list[GenerationTraceStep] | None = None
     status_message: str | None = None
 
 
@@ -125,6 +141,7 @@ class GeneratePhraseResponse(BaseModel):
     created_at: str
     generated_phrase: PhrasePayload
     constraints: GenerationConstraintsStatus | None = None
+    generation_trace: list[GenerationTraceStep] | None = None
     status_message: str | None = None
 
 
