@@ -4,11 +4,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import threading
+from typing import Any, get_args
 
 import mido
-from ctor.continuator import Continuator2
+
+try:
+    from ctor.classic import ClassicContinuator
+except ImportError:
+    from ctor.continuator import Continuator2 as ClassicContinuator
+
+try:
+    from ctor.context_bp import ContextBPContinuator
+except ImportError:
+    ContextBPContinuator = None
 
 from .schemas import (
+    EngineKind,
     GenerationConstraintsStatus,
     GenerationConstraintState,
     MidiEvent,
@@ -25,6 +36,9 @@ class NoContinuationAvailable(RuntimeError):
 
 class MidiImportError(RuntimeError):
     """Raised when uploaded MIDI files cannot be imported."""
+
+
+ENGINE_KINDS: set[str] = set(get_args(EngineKind))
 
 
 @dataclass(frozen=True)
@@ -226,15 +240,19 @@ class ContinuatorSessionEngine:
         forget_past: bool = False,
         keep_last_inputs: int = 20,
         decay_mode: str = "full",
+        engine_kind: EngineKind = "classic",
         markov_order: int = 4,
         seed_midi_file: Path | None = None,
         seed_midi_folder: Path | None = None,
     ) -> None:
+        if engine_kind not in ENGINE_KINDS:
+            raise ValueError(f"Unknown Continuator engine kind: {engine_kind}")
         self._default_learn_input = learn_input
         self._transposition = transposition
         self._forget_past = forget_past
         self._keep_last_inputs = keep_last_inputs
         self._decay_mode = decay_mode
+        self._engine_kind = engine_kind
         self._markov_order = markov_order
         self._seed_midi_file = seed_midi_file
         self._seed_midi_folder = seed_midi_folder
@@ -242,12 +260,24 @@ class ContinuatorSessionEngine:
         self._lock = threading.RLock()
         self._continuator = self._create_engine()
 
-    def _create_engine(self, *, load_seed_material: bool = True) -> Continuator2:
+    def _engine_class(self) -> type[Any]:
+        if self._engine_kind == "classic":
+            return ClassicContinuator
+        if self._engine_kind == "context_bp":
+            if ContextBPContinuator is None:
+                raise RuntimeError(
+                    "ContextBPContinuator is not available. Install a continuator "
+                    "package revision that includes ctor.context_bp."
+                )
+            return ContextBPContinuator
+        raise ValueError(f"Unknown Continuator engine kind: {self._engine_kind}")
+
+    def _create_engine(self, *, load_seed_material: bool = True) -> Any:
         midi_file = None
         if load_seed_material and self._seed_midi_file:
             midi_file = str(self._seed_midi_file)
 
-        engine = Continuator2(
+        engine = self._engine_class()(
             midi_file=midi_file,
             kmax=self._markov_order,
             transposition=self._transposition,
@@ -272,10 +302,16 @@ class ContinuatorSessionEngine:
         forget_past: bool | None = None,
         keep_last_inputs: int | None = None,
         decay_mode: str | None = None,
+        engine_kind: EngineKind | None = None,
         markov_order: int | None = None,
     ) -> None:
         with self._lock:
-            rebuild_required = markov_order is not None and markov_order != self._markov_order
+            if engine_kind is not None and engine_kind not in ENGINE_KINDS:
+                raise ValueError(f"Unknown Continuator engine kind: {engine_kind}")
+            rebuild_required = (
+                (markov_order is not None and markov_order != self._markov_order)
+                or (engine_kind is not None and engine_kind != self._engine_kind)
+            )
             preserved_payloads: list[PhrasePayload] = []
             preserved_seed_count = self._seed_sequence_count
             if rebuild_required:
@@ -291,6 +327,8 @@ class ContinuatorSessionEngine:
                 self._keep_last_inputs = keep_last_inputs
             if decay_mode is not None:
                 self._decay_mode = decay_mode
+            if engine_kind is not None:
+                self._engine_kind = engine_kind
             if markov_order is not None:
                 self._markov_order = markov_order
 

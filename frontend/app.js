@@ -45,6 +45,11 @@ const FAUST_CUSTOM_SOURCE_STORAGE_KEY = "continuator.faust.custom.source";
 const FAUST_CUSTOM_VALUES_STORAGE_KEY = "continuator.faust.custom.values";
 const PLAYBACK_PREFERENCE_STORAGE_PREFIX = "continuator.playback.preference";
 const AUDIO_OUTPUT_PREFERENCE_STORAGE_PREFIX = "continuator.audio.output.preference";
+const DEFAULT_ENGINE_KIND = "classic";
+const ENGINE_KIND_LABELS = new Map([
+  ["classic", "Classic"],
+  ["context_bp", "Context BP"],
+]);
 const FAUST_UI_CONTROL_TYPES = new Set([
   "hslider",
   "vslider",
@@ -163,6 +168,7 @@ const elements = {
   faustCustomControlsHint: document.querySelector("#faust-custom-controls-hint"),
   learnInputToggle: document.querySelector("#learn-input-toggle"),
   autoSendToggle: document.querySelector("#auto-send-toggle"),
+  engineKindSelect: document.querySelector("#engine-kind-select"),
   transposeToggle: document.querySelector("#transpose-toggle"),
   forgetToggle: document.querySelector("#forget-toggle"),
   markovOrderInput: document.querySelector("#markov-order-input"),
@@ -2097,6 +2103,14 @@ function normalizedMarkovOrder(value) {
   return Math.min(16, Math.max(1, Math.round(parsed)));
 }
 
+function normalizedEngineKind(value) {
+  return value === "context_bp" ? "context_bp" : DEFAULT_ENGINE_KIND;
+}
+
+function engineKindLabel(value) {
+  return ENGINE_KIND_LABELS.get(normalizedEngineKind(value)) || "Classic";
+}
+
 function normalizedContinuationNoteCount(value) {
   if (value == null || value === "") {
     return null;
@@ -2262,6 +2276,7 @@ function readSessionSettingsFromControls() {
     learn_input: elements.learnInputToggle.checked,
     transposition: elements.transposeToggle.checked,
     forget_past: elements.forgetToggle.checked,
+    engine_kind: normalizedEngineKind(elements.engineKindSelect.value),
     markov_order: normalizedMarkovOrder(elements.markovOrderInput.value),
     keep_last_inputs: normalizedKeepLastInputs(elements.keepLastInput.value),
     decay_mode: elements.decayModeSelect.value,
@@ -2269,13 +2284,14 @@ function readSessionSettingsFromControls() {
 }
 
 function describeSessionSettings(settings) {
-  const orderLabel = `K=${settings.markov_order}`;
-  const transposeLabel = settings.transposition ? "Transpose on" : "Transpose off";
-  const memoryLabel = settings.forget_past
-    ? `Keep last ${settings.keep_last_inputs} phrases`
+  const engineLabel = engineKindLabel(settings?.engine_kind);
+  const orderLabel = `K=${normalizedMarkovOrder(settings?.markov_order)}`;
+  const transposeLabel = settings?.transposition ? "Transpose on" : "Transpose off";
+  const memoryLabel = settings?.forget_past
+    ? `Keep last ${normalizedKeepLastInputs(settings?.keep_last_inputs)} phrases`
     : "Keep full memory";
-  const decayLabel = `Decay ${settings.decay_mode}`;
-  return [orderLabel, transposeLabel, memoryLabel, decayLabel];
+  const decayLabel = `Decay ${settings?.decay_mode || "full"}`;
+  return [engineLabel, orderLabel, transposeLabel, memoryLabel, decayLabel];
 }
 
 function savedPlaybackPreferenceLabel(configuration) {
@@ -2325,6 +2341,7 @@ function syncSettingsControls(configuration) {
 
   state.sessionConfiguration = configuration;
   elements.learnInputToggle.checked = configuration.learn_input;
+  elements.engineKindSelect.value = normalizedEngineKind(configuration.engine_kind);
   elements.transposeToggle.checked = configuration.transposition;
   elements.forgetToggle.checked = configuration.forget_past;
   elements.markovOrderInput.value = String(
@@ -2383,7 +2400,9 @@ function formatShortTimestamp(value) {
 
 function generatedSessionName(item) {
   const settings = item?.configuration || {};
-  const kLabel = `K${settings.markov_order || 4}`;
+  const kLabel = `${engineKindLabel(settings.engine_kind)} K${normalizedMarkovOrder(
+    settings.markov_order,
+  )}`;
   const timeLabel = formatShortTimestamp(item?.created_at || item?.last_seen_at);
   const learnedCount = Number(item?.active_learned_phrase_count || 0);
   const phraseCount = Number(item?.phrase_count || 0);
@@ -2935,6 +2954,7 @@ function createMemorySummaryMarkup(memory) {
   if (memory.summary.seeded_phrase_count) {
     chips.push(`${memory.summary.seeded_phrase_count} seed`);
   }
+  chips.push(engineKindLabel(memory.configuration.engine_kind));
   chips.push(`K=${memory.configuration.markov_order}`);
   chips.push(memory.configuration.transposition ? "Transpose on" : "Transpose off");
   chips.push(
@@ -5670,6 +5690,13 @@ function bindEvents() {
   });
 
   elements.learnInputToggle.addEventListener("change", () => {
+    renderSessionSettingsSummary();
+  });
+
+  elements.engineKindSelect.addEventListener("change", () => {
+    elements.engineKindSelect.value = normalizedEngineKind(
+      elements.engineKindSelect.value,
+    );
     renderSessionSettingsSummary();
   });
 

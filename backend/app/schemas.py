@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 
 DecayMode = Literal["full", "late", "middle", "early"]
+EngineKind = Literal["classic", "context_bp"]
 MemoryPhraseSource = Literal["seed", "live"]
 USERNAME_PATTERN = r"^[A-Za-z0-9_.-]{2,32}$"
 
@@ -68,6 +69,7 @@ class CreateSessionRequest(BaseModel):
     forget_past: bool = False
     keep_last_inputs: int = Field(default=20, ge=1, le=500)
     decay_mode: DecayMode = "full"
+    engine_kind: EngineKind = "classic"
     markov_order: int = Field(default=4, ge=1, le=16)
 
 
@@ -77,6 +79,7 @@ class SessionConfiguration(BaseModel):
     forget_past: bool
     keep_last_inputs: int = Field(ge=1, le=500)
     decay_mode: DecayMode
+    engine_kind: EngineKind = "classic"
     markov_order: int = Field(default=4, ge=1, le=16)
     seeded: bool
     display_name: str | None = Field(default=None, min_length=1, max_length=80)
@@ -191,6 +194,7 @@ class UpdateSessionSettingsRequest(BaseModel):
     forget_past: bool | None = None
     keep_last_inputs: int | None = Field(default=None, ge=1, le=500)
     decay_mode: DecayMode | None = None
+    engine_kind: EngineKind | None = None
     markov_order: int | None = Field(default=None, ge=1, le=16)
 
 
