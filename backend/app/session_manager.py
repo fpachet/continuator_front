@@ -279,14 +279,11 @@ class SessionManager:
             if request.learn_input is None
             else request.learn_input
         )
-        enforce_end_constraint = (
-            request.enforce_end_constraint and state.continuation_request_count > 0
-        )
         input_phrase, generated_phrase, constraints, status_message = state.engine.continue_phrase(
             request.phrase,
             learn_input=should_learn,
             continuation_note_count=request.continuation_note_count,
-            enforce_end_constraint=enforce_end_constraint,
+            enforce_end_constraint=request.enforce_end_constraint,
             handoff_viewpoint=request.handoff_viewpoint,
         )
 

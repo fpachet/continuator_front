@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import random
 from tempfile import TemporaryDirectory
 import threading
 from typing import Any, get_args
@@ -294,6 +295,45 @@ class ContinuatorSessionEngine:
         )
         return engine
 
+    def _is_input_sequence_end_address(self, note_address: object) -> bool:
+        try:
+            sequence_index, note_index = note_address
+            sequences = getattr(self._continuator.vom, "input_sequences", [])
+            sequence = sequences[int(sequence_index)]
+        except (AttributeError, IndexError, TypeError, ValueError):
+            return False
+        return bool(sequence) and int(note_index) == len(sequence) - 1
+
+    def _realize_vp_sequence(
+        self,
+        vp_sequence: list[object],
+        *,
+        force_ending_realization: bool = False,
+    ) -> list[object]:
+        if not force_ending_realization or not vp_sequence:
+            return self._continuator.realize_vp_sequence(vp_sequence)
+
+        realizations_by_viewpoint = getattr(self._continuator.vom, "viewpoints_realizations", {})
+        note_addresses = []
+        for index, viewpoint in enumerate(vp_sequence):
+            realizations = list(realizations_by_viewpoint.get(viewpoint, []))
+            if not realizations:
+                return self._continuator.realize_vp_sequence(vp_sequence)
+
+            if index == len(vp_sequence) - 1:
+                ending_realizations = [
+                    address
+                    for address in realizations
+                    if self._is_input_sequence_end_address(address)
+                ]
+                if ending_realizations:
+                    note_addresses.append(random.choice(ending_realizations))
+                    continue
+
+            note_addresses.append(random.choice(realizations))
+
+        return self._continuator.set_timing(note_addresses)
+
     def apply_settings(
         self,
         *,
@@ -490,7 +530,11 @@ class ContinuatorSessionEngine:
                 )
 
             rendered_vp_sequence = generated_sequence
-            if rendered_vp_sequence and rendered_vp_sequence[-1] == self._continuator.get_end_vp():
+            ends_with_end_marker = bool(
+                rendered_vp_sequence
+                and rendered_vp_sequence[-1] == self._continuator.get_end_vp()
+            )
+            if ends_with_end_marker:
                 rendered_vp_sequence = rendered_vp_sequence[:-1]
 
             if not rendered_vp_sequence:
@@ -498,7 +542,10 @@ class ContinuatorSessionEngine:
                     "The Continuator returned an empty phrase from the current memory."
                 )
 
-            rendered_sequence = self._continuator.realize_vp_sequence(rendered_vp_sequence)
+            rendered_sequence = self._realize_vp_sequence(
+                rendered_vp_sequence,
+                force_ending_realization=ends_with_end_marker,
+            )
             return _build_phrase_payload(rendered_sequence), constraints_status, status_message
 
     def continue_phrase(
@@ -607,8 +654,20 @@ class ContinuatorSessionEngine:
                     target_note_count + 1,
                     constraints,
                 )
+                if generated_sequence is None and constraints_status.start.applied:
+                    relax_start_constraint(
+                        "The requested handoff had no exact-ending continuation."
+                    )
+                    generated_sequence = sample_with_relaxed_start(
+                        target_note_count + 1,
+                        constraints,
+                    )
                 if generated_sequence is None:
-                    generated_sequence = sample_with_current_start(target_note_count, {})
+                    generated_sequence = (
+                        sample_with_current_start(target_note_count, {})
+                        if constraints_status.start.applied
+                        else sample_with_relaxed_start(target_note_count, {})
+                    )
                     status_messages.append(
                         "Used a same-length continuation without the hard end constraint "
                         "because the exact-ending version had no solution."
@@ -629,10 +688,17 @@ class ContinuatorSessionEngine:
                 raise NoContinuationAvailable("The Continuator could not find a valid continuation.")
 
             rendered_vp_sequence = generated_sequence
-            if rendered_vp_sequence and rendered_vp_sequence[-1] == self._continuator.get_end_vp():
+            ends_with_end_marker = bool(
+                rendered_vp_sequence
+                and rendered_vp_sequence[-1] == self._continuator.get_end_vp()
+            )
+            if ends_with_end_marker:
                 rendered_vp_sequence = rendered_vp_sequence[:-1]
 
-            rendered_sequence = self._continuator.realize_vp_sequence(rendered_vp_sequence)
+            rendered_sequence = self._realize_vp_sequence(
+                rendered_vp_sequence,
+                force_ending_realization=ends_with_end_marker,
+            )
             status_message = " ".join(status_messages) or None
             return (
                 input_payload,
