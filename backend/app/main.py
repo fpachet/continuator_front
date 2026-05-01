@@ -13,6 +13,7 @@ from .auth import (
     UsernameTakenError,
 )
 from .config import load_settings
+from .continuator_runtime import continuator_runtime_info
 from .schemas import (
     AuthStatusResponse,
     AuthUser,
@@ -106,18 +107,25 @@ def read_index() -> FileResponse:
 
 @app.get("/health", tags=["system"])
 def healthcheck() -> dict[str, object]:
+    continuator = continuator_runtime_info()
     return {
         "ok": True,
         "app_name": settings.app_name,
         "seeded": session_manager.seeded,
+        "continuator": continuator.model_dump(),
     }
 
 
 @app.get("/api/config", response_model=PublicConfigResponse, tags=["system"])
 def public_config() -> PublicConfigResponse:
+    continuator = continuator_runtime_info()
     return PublicConfigResponse(
         app_name=settings.app_name,
         seeded=session_manager.seeded,
+        continuator_version=continuator.version,
+        continuator_package_version=continuator.package_version,
+        continuator_commit=continuator.commit,
+        continuator_source_url=continuator.source_url,
     )
 
 

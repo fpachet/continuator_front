@@ -68,6 +68,7 @@ const FAUST_POLY_RESERVED_SUFFIXES = [
 
 const elements = {
   serverStatus: document.querySelector("#server-status"),
+  continuatorVersion: document.querySelector("#continuator-version"),
   controlWorkspace: document.querySelector(".control-workspace"),
   openReadmeButton: document.querySelector("#open-readme-button"),
   closeReadmeButton: document.querySelector("#close-readme-button"),
@@ -3974,6 +3975,28 @@ async function importSelectedMidiFiles(fileList, selectionLabel = "selection") {
   setPhraseMessage(defaultMidiImportMessage(payload));
 }
 
+function shortCommit(commit) {
+  return typeof commit === "string" && commit.length > 7
+    ? commit.slice(0, 7)
+    : commit;
+}
+
+function describeContinuatorRuntime(info) {
+  if (!info) {
+    return "Unknown";
+  }
+  const labels = [];
+  if (info.version) {
+    labels.push(`v${info.version}`);
+  } else if (info.package_version) {
+    labels.push(`pkg ${info.package_version}`);
+  }
+  if (info.commit) {
+    labels.push(shortCommit(info.commit));
+  }
+  return labels.length ? labels.join(" · ") : "Unknown";
+}
+
 async function checkServer() {
   const payload = await requestJson("/health");
   elements.serverStatus.textContent = payload.ok
@@ -3981,6 +4004,12 @@ async function checkServer() {
       ? "Healthy / seeded"
       : "Healthy / empty memory"
     : "Unavailable";
+  elements.continuatorVersion.textContent = describeContinuatorRuntime(
+    payload.continuator,
+  );
+  if (payload.continuator?.commit) {
+    elements.continuatorVersion.title = payload.continuator.commit;
+  }
 }
 
 function midiOutputById(outputId) {
@@ -5851,6 +5880,7 @@ async function initialize() {
     await checkServer();
   } catch (error) {
     elements.serverStatus.textContent = "Offline";
+    elements.continuatorVersion.textContent = "Unknown";
     setPhraseMessage(error.message, true);
   }
   try {

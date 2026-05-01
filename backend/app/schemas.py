@@ -230,6 +230,10 @@ class UpdateSessionPreferencesResponse(BaseModel):
 class PublicConfigResponse(BaseModel):
     app_name: str
     seeded: bool
+    continuator_version: str | None = None
+    continuator_package_version: str | None = None
+    continuator_commit: str | None = None
+    continuator_source_url: str | None = None
 
 
 class AuthUser(BaseModel):
