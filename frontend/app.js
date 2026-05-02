@@ -17,6 +17,12 @@ const VIRTUAL_KEYBOARD_MIN_BASE_NOTE = 24;
 const VIRTUAL_KEYBOARD_MAX_BASE_NOTE = 96;
 const VIRTUAL_CHORD_QUANTIZE_MS = 20;
 const VIRTUAL_KEYBOARD_CHANNEL = 0;
+const ROLL_NOTE_HIT_PADDING_PX = 6;
+const ROLL_NOTE_AUDITION_MIN_SECONDS = 0.12;
+const ROLL_NOTE_AUDITION_MAX_SECONDS = 2;
+const ROLL_END_MARGIN_RATIO = 0.08;
+const ROLL_END_MARGIN_MIN_SECONDS = 0.18;
+const ROLL_END_MARGIN_MAX_SECONDS = 1.2;
 const COMPUTER_KEYBOARD_OFFSETS = new Map([
   ["KeyA", 0],
   ["KeyW", 1],
@@ -232,6 +238,7 @@ const state = {
   activePlayback: null,
   activeMemoryPlaybackIndex: null,
   activeRollPlaybackKind: null,
+  activeRollAudition: null,
   currentPlaybackPayload: null,
   queuedPlaybackPayload: null,
   lastGenerationMs: null,
@@ -641,7 +648,11 @@ async function applyAudioOutputToContext(context) {
   if (!context || typeof context.setSinkId !== "function") {
     return false;
   }
-  await context.setSinkId(preferredAudioOutputDeviceId());
+  const deviceId = preferredAudioOutputDeviceId();
+  if (!deviceId || deviceId === "default") {
+    return false;
+  }
+  await context.setSinkId(deviceId);
   return true;
 }
 
@@ -2093,6 +2104,7 @@ function clearRememberedPhrases() {
   state.queuedPlaybackPayload = null;
   state.activeMemoryPlaybackIndex = null;
   state.activeRollPlaybackKind = null;
+  stopRollAudition({ redraw: false, releaseNote: true });
   state.lastGenerationMs = null;
   state.lastCaptureDurationMs = null;
   renderConstraintStatus(null);
@@ -3032,6 +3044,91 @@ function rollPayload(kind) {
   return kind === "input" ? capturedRollPayload() : state.lastGeneratedPhrase;
 }
 
+function rollCanvas(kind) {
+  return kind === "input" ? elements.inputRoll : elements.outputRoll;
+}
+
+function rollSourceLabel(kind) {
+  return kind === "input" ? "captured phrase" : "generated continuation";
+}
+
+function rollAccent(kind) {
+  return kind === "input" ? "#6dd3ce" : "#f4a261";
+}
+
+function rollEmptyLabel(kind) {
+  return kind === "input" ? "Input phrase" : "Generated continuation";
+}
+
+function rollAuditionOptions(kind) {
+  const audition = state.activeRollAudition;
+  if (!audition || audition.kind !== kind) {
+    return {};
+  }
+  return {
+    highlightedNoteIndex: audition.noteIndex,
+    noteProgressRatio: audition.progressRatio,
+  };
+}
+
+function renderRollCanvas(kind, options = {}) {
+  drawPianoRoll(
+    rollCanvas(kind),
+    payloadNotes(rollPayload(kind)),
+    rollAccent(kind),
+    rollEmptyLabel(kind),
+    {
+      ...rollAuditionOptions(kind),
+      ...options,
+    },
+  );
+}
+
+function rollDefaultTitle(kind) {
+  if (state.activeRollPlaybackKind === kind) {
+    return `Click to stop the ${rollSourceLabel(kind)}`;
+  }
+  if (!rollPayload(kind)?.events?.length) {
+    return kind === "input"
+      ? "No captured phrase is available yet"
+      : "No generated continuation is available yet";
+  }
+  return `Click a note to audition it, or click empty space to play the ${rollSourceLabel(kind)}`;
+}
+
+function pianoRollNoteHitFromEvent(kind, event) {
+  const payload = rollPayload(kind);
+  const notes = payloadNotes(payload);
+  if (!notes.length) {
+    return null;
+  }
+
+  const canvas = rollCanvas(kind);
+  const point = pianoRollEventPoint(canvas, event);
+  if (!point) {
+    return null;
+  }
+
+  const noteRects = pianoRollNoteRects(point.width, point.height, notes);
+  for (let index = noteRects.length - 1; index >= 0; index -= 1) {
+    const noteRect = noteRects[index];
+    const left = noteRect.x - ROLL_NOTE_HIT_PADDING_PX;
+    const right = noteRect.x + noteRect.width + ROLL_NOTE_HIT_PADDING_PX;
+    const top = noteRect.y - ROLL_NOTE_HIT_PADDING_PX;
+    const bottom = noteRect.y + noteRect.height + ROLL_NOTE_HIT_PADDING_PX;
+    if (
+      point.x >= left &&
+      point.x <= right &&
+      point.y >= top &&
+      point.y <= bottom
+    ) {
+      return noteRect;
+    }
+  }
+
+  return null;
+}
+
 function syncRollPlaybackState() {
   elements.inputRoll.classList.toggle(
     "is-roll-playing",
@@ -3041,12 +3138,16 @@ function syncRollPlaybackState() {
     "is-roll-playing",
     state.activeRollPlaybackKind === "output",
   );
-  elements.inputRoll.title = state.activeRollPlaybackKind === "input"
-    ? "Click to stop the captured phrase"
-    : "Click to play the captured phrase";
-  elements.outputRoll.title = state.activeRollPlaybackKind === "output"
-    ? "Click to stop the generated continuation"
-    : "Click to play the generated continuation";
+  elements.inputRoll.title = rollDefaultTitle("input");
+  elements.outputRoll.title = rollDefaultTitle("output");
+  elements.inputRoll.setAttribute(
+    "aria-pressed",
+    String(state.activeRollPlaybackKind === "input"),
+  );
+  elements.outputRoll.setAttribute(
+    "aria-pressed",
+    String(state.activeRollPlaybackKind === "output"),
+  );
 }
 
 async function toggleRollPlayback(kind) {
@@ -3083,6 +3184,41 @@ async function toggleRollPlayback(kind) {
       ? "Playing the captured phrase from the piano roll."
       : "Playing the generated continuation from the piano roll.",
   );
+}
+
+async function handleRollClick(kind, event) {
+  const noteHit = pianoRollNoteHitFromEvent(kind, event);
+  if (noteHit) {
+    await auditionRollNote(kind, noteHit);
+    return;
+  }
+
+  if (state.activeRollPlaybackKind === kind) {
+    await toggleRollPlayback(kind);
+    return;
+  }
+
+  await toggleRollPlayback(kind);
+}
+
+function updateRollPointerTitle(kind, event) {
+  if (state.activeRollPlaybackKind === kind) {
+    rollCanvas(kind).title = rollDefaultTitle(kind);
+    return;
+  }
+
+  const noteHit = pianoRollNoteHitFromEvent(kind, event);
+  rollCanvas(kind).title = noteHit
+    ? `Click to audition ${midiNoteName(noteHit.note.pitch)} from the ${rollSourceLabel(kind)}`
+    : rollDefaultTitle(kind);
+}
+
+async function handleRollKeydown(kind, event) {
+  if (event.key !== "Enter" && event.key !== " ") {
+    return;
+  }
+  event.preventDefault();
+  await toggleRollPlayback(kind);
 }
 
 function createHistoryMarkup(items) {
@@ -3352,11 +3488,63 @@ function renderMemory(memory) {
   syncPreviewSelection();
 }
 
-function drawPianoRoll(canvas, notes, accent, emptyLabel, options = {}) {
+function pianoRollCanvasSize(canvas) {
   const rect = canvas.getBoundingClientRect();
+  return {
+    rect,
+    width: Math.max(320, Math.floor(rect.width || 640)),
+    height: Math.max(180, Math.floor(rect.height || 244)),
+  };
+}
+
+function pianoRollNoteRects(width, height, notes) {
+  if (!notes?.length) {
+    return [];
+  }
+
+  const minPitch = Math.max(24, Math.min(...notes.map((note) => note.pitch)) - 2);
+  const maxPitch = Math.min(108, Math.max(...notes.map((note) => note.pitch)) + 2);
+  const totalDuration = pianoRollDurationSeconds(notes);
+  const pitchRange = Math.max(1, maxPitch - minPitch + 1);
+
+  return notes.map((note, index) => {
+    const noteEndSeconds = note.end_seconds || note.start_seconds + note.duration_seconds;
+    const x = (note.start_seconds / totalDuration) * width;
+    const noteWidth = Math.max(
+      8,
+      (Math.max(0.05, note.duration_seconds) / totalDuration) * width,
+    );
+    const y =
+      height - ((note.pitch - minPitch + 1) / pitchRange) * (height - 24) - 10;
+    const noteHeight = Math.max(10, (height - 34) / pitchRange + 4);
+    return {
+      index,
+      note,
+      noteEndSeconds,
+      x: x + 2,
+      y,
+      width: noteWidth,
+      height: noteHeight,
+    };
+  });
+}
+
+function pianoRollEventPoint(canvas, event) {
+  const { rect, width, height } = pianoRollCanvasSize(canvas);
+  if (!rect.width || !rect.height) {
+    return null;
+  }
+  return {
+    x: ((event.clientX - rect.left) / rect.width) * width,
+    y: ((event.clientY - rect.top) / rect.height) * height,
+    width,
+    height,
+  };
+}
+
+function drawPianoRoll(canvas, notes, accent, emptyLabel, options = {}) {
+  const { width, height } = pianoRollCanvasSize(canvas);
   const dpr = window.devicePixelRatio || 1;
-  const width = Math.max(320, Math.floor(rect.width || 640));
-  const height = Math.max(180, Math.floor(rect.height || 244));
   canvas.width = width * dpr;
   canvas.height = height * dpr;
 
@@ -3394,35 +3582,75 @@ function drawPianoRoll(canvas, notes, accent, emptyLabel, options = {}) {
     return;
   }
 
-  const minPitch = Math.max(24, Math.min(...notes.map((note) => note.pitch)) - 2);
-  const maxPitch = Math.min(108, Math.max(...notes.map((note) => note.pitch)) + 2);
   const totalDuration = pianoRollDurationSeconds(notes);
-  const pitchRange = Math.max(1, maxPitch - minPitch + 1);
+  const noteRects = pianoRollNoteRects(width, height, notes);
 
   const playbackSeconds =
     Number.isFinite(Number(options.playbackSeconds)) ? Number(options.playbackSeconds) : null;
+  let highlightedNoteRect = null;
 
-  for (const note of notes) {
-    const noteEndSeconds = note.end_seconds || note.start_seconds + note.duration_seconds;
+  for (const noteRect of noteRects) {
+    const { note, noteEndSeconds } = noteRect;
     const isPlaying =
       playbackSeconds != null &&
       playbackSeconds >= note.start_seconds &&
       playbackSeconds <= noteEndSeconds;
-    const x = (note.start_seconds / totalDuration) * width;
-    const noteWidth = Math.max(
+    const isHighlighted = noteRect.index === options.highlightedNoteIndex;
+    if (isHighlighted) {
+      highlightedNoteRect = noteRect;
+    }
+    ctx.fillStyle = isPlaying ? "#fff5d4" : isHighlighted ? "#f9dcc4" : accent;
+    ctx.shadowBlur = isPlaying ? 26 : isHighlighted ? 24 : 18;
+    ctx.shadowColor = isPlaying
+      ? "rgba(255, 245, 212, 0.82)"
+      : isHighlighted
+        ? "rgba(249, 220, 196, 0.72)"
+        : accent;
+    roundRect(
+      ctx,
+      noteRect.x,
+      noteRect.y,
+      noteRect.width,
+      noteRect.height,
       8,
-      (Math.max(0.05, note.duration_seconds) / totalDuration) * width,
+      true,
     );
-    const y =
-      height - ((note.pitch - minPitch + 1) / pitchRange) * (height - 24) - 10;
-    const noteHeight = Math.max(10, (height - 34) / pitchRange + 4);
-    ctx.fillStyle = isPlaying ? "#fff5d4" : accent;
-    ctx.shadowBlur = isPlaying ? 26 : 18;
-    ctx.shadowColor = isPlaying ? "rgba(255, 245, 212, 0.82)" : accent;
-    roundRect(ctx, x + 2, y, noteWidth, noteHeight, 8, true);
+    if (isHighlighted && !isPlaying) {
+      ctx.shadowBlur = 0;
+      ctx.strokeStyle = "rgba(255, 255, 255, 0.66)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
   }
 
   ctx.shadowBlur = 0;
+
+  if (
+    highlightedNoteRect &&
+    Number.isFinite(Number(options.noteProgressRatio))
+  ) {
+    const progressRatio = Math.min(
+      1,
+      Math.max(0, Number(options.noteProgressRatio)),
+    );
+    const cursorX = highlightedNoteRect.x + highlightedNoteRect.width * progressRatio;
+    ctx.strokeStyle = "rgba(255, 245, 212, 0.95)";
+    ctx.lineWidth = 2;
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = "rgba(255, 245, 212, 0.62)";
+    ctx.beginPath();
+    ctx.moveTo(cursorX, highlightedNoteRect.y - 7);
+    ctx.lineTo(
+      cursorX,
+      highlightedNoteRect.y + highlightedNoteRect.height + 7,
+    );
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "rgba(255, 245, 212, 0.98)";
+    ctx.beginPath();
+    ctx.arc(cursorX, highlightedNoteRect.y - 7, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   const playbackProgressRatio = Number.isFinite(Number(playbackSeconds))
     ? playbackSeconds / totalDuration
@@ -3447,10 +3675,18 @@ function drawPianoRoll(canvas, notes, accent, emptyLabel, options = {}) {
 }
 
 function pianoRollDurationSeconds(notes) {
-  return Math.max(
-    2,
+  const phraseDurationSeconds = Math.max(
+    0,
     ...notes.map((note) => note.end_seconds || note.start_seconds + note.duration_seconds),
   );
+  const endMarginSeconds = Math.min(
+    ROLL_END_MARGIN_MAX_SECONDS,
+    Math.max(
+      ROLL_END_MARGIN_MIN_SECONDS,
+      phraseDurationSeconds * ROLL_END_MARGIN_RATIO,
+    ),
+  );
+  return Math.max(2, phraseDurationSeconds + endMarginSeconds);
 }
 
 function payloadNotes(payload) {
@@ -3492,6 +3728,7 @@ function eventsToNotes(events) {
       const stack = pending.get(key) || [];
       stack.push({
         note: event.note,
+        channel: event.channel,
         velocity: event.velocity,
         start_seconds: currentTime,
       });
@@ -3507,6 +3744,7 @@ function eventsToNotes(events) {
     const noteOn = stack.shift();
     notes.push({
       pitch: noteOn.note,
+      channel: noteOn.channel,
       velocity: noteOn.velocity,
       start_seconds: roundNumber(noteOn.start_seconds),
       duration_seconds: roundNumber(Math.max(0, currentTime - noteOn.start_seconds)),
@@ -4119,12 +4357,165 @@ function createTestNotePayload() {
   };
 }
 
+function createNoteAuditionPayload(note) {
+  const pitch = Math.min(127, Math.max(0, Math.round(Number(note?.pitch) || 60)));
+  const channel = Math.min(15, Math.max(0, Math.round(Number(note?.channel) || 0)));
+  const velocity = Math.min(
+    127,
+    Math.max(1, Math.round(Number(note?.velocity) || 92)),
+  );
+  const durationSeconds = Math.min(
+    ROLL_NOTE_AUDITION_MAX_SECONDS,
+    Math.max(
+      ROLL_NOTE_AUDITION_MIN_SECONDS,
+      Number(note?.duration_seconds) || 0.7,
+    ),
+  );
+  const duration = roundNumber(durationSeconds);
+
+  return {
+    event_count: 2,
+    note_count: 1,
+    duration_seconds: duration,
+    events: [
+      {
+        type: "note_on",
+        note: pitch,
+        velocity,
+        channel,
+        delta_seconds: 0,
+      },
+      {
+        type: "note_off",
+        note: pitch,
+        velocity: 0,
+        channel,
+        delta_seconds: duration,
+      },
+    ],
+    notes: [
+      {
+        pitch,
+        channel,
+        velocity,
+        start_seconds: 0,
+        duration_seconds: duration,
+        end_seconds: duration,
+      },
+    ],
+  };
+}
+
 async function playTestNote() {
   stopInfiniteMode({ stopPlayback: true, silent: true });
   const payload = createTestNotePayload();
   renderGeneratedStats(payload);
   await playPayload(payload);
   setPhraseMessage(`Testing ${playbackChoiceLabel()}.`);
+}
+
+function releaseRollAuditionNote(audition) {
+  if (!audition || audition.released || !audition.noteOffEvent) {
+    return;
+  }
+  dispatchPlaybackEvent(audition, audition.noteOffEvent);
+  audition.released = true;
+}
+
+function clearRollAuditionTimers(audition) {
+  audition?.timerIds?.forEach((timerId) => {
+    window.clearTimeout(timerId);
+  });
+  audition?.timerIds?.clear();
+  if (audition?.animationFrameId != null) {
+    window.cancelAnimationFrame(audition.animationFrameId);
+    audition.animationFrameId = null;
+  }
+}
+
+function stopRollAudition({ redraw = true, releaseNote = true } = {}) {
+  const audition = state.activeRollAudition;
+  if (!audition) {
+    return false;
+  }
+  clearRollAuditionTimers(audition);
+  if (releaseNote) {
+    releaseRollAuditionNote(audition);
+  }
+  state.activeRollAudition = null;
+  if (redraw) {
+    renderRollCanvas(audition.kind);
+  }
+  return true;
+}
+
+function scheduleRollAuditionTimeout(audition, callback, delayMs) {
+  const timerId = window.setTimeout(() => {
+    audition.timerIds.delete(timerId);
+    callback();
+  }, Math.max(0, delayMs));
+  audition.timerIds.add(timerId);
+  return timerId;
+}
+
+function startRollAuditionAnimation(audition, durationMs) {
+  const startedAtMs = window.performance.now();
+  const safeDurationMs = Math.max(1, durationMs);
+
+  const tick = () => {
+    if (state.activeRollAudition !== audition) {
+      return;
+    }
+    const elapsedMs = Math.max(0, window.performance.now() - startedAtMs);
+    const progressRatio = Math.min(1, elapsedMs / safeDurationMs);
+    audition.progressRatio = progressRatio;
+    renderRollCanvas(audition.kind, {
+      highlightedNoteIndex: audition.noteIndex,
+      noteProgressRatio: progressRatio,
+    });
+    if (progressRatio >= 1) {
+      audition.animationFrameId = null;
+      return;
+    }
+    audition.animationFrameId = window.requestAnimationFrame(tick);
+  };
+
+  tick();
+}
+
+async function auditionRollNote(kind, noteHit) {
+  stopRollAudition({ redraw: true, releaseNote: true });
+  const payload = createNoteAuditionPayload(noteHit.note);
+  const durationMs = Math.max(1, payload.duration_seconds * 1000);
+  const playback = await createPlaybackSession();
+  const audition = {
+    ...playback,
+    kind,
+    noteIndex: noteHit.index,
+    noteOffEvent: payload.events[1],
+    released: false,
+    animationFrameId: null,
+    progressRatio: 0,
+  };
+  state.activeRollAudition = audition;
+  dispatchPlaybackEvent(audition, payload.events[0]);
+  startRollAuditionAnimation(audition, durationMs);
+  scheduleRollAuditionTimeout(audition, () => {
+    if (state.activeRollAudition === audition) {
+      releaseRollAuditionNote(audition);
+    }
+  }, durationMs);
+  scheduleRollAuditionTimeout(audition, () => {
+    if (state.activeRollAudition !== audition) {
+      return;
+    }
+    clearRollAuditionTimers(audition);
+    state.activeRollAudition = null;
+    renderRollCanvas(kind);
+  }, durationMs + 160);
+  setPhraseMessage(
+    `Auditioning ${midiNoteName(payload.notes[0].pitch)} from the ${rollSourceLabel(kind)}.`,
+  );
 }
 
 async function panicPlayback() {
@@ -4679,9 +5070,15 @@ async function sendPlaybackPanic() {
   let sent = false;
   const activePlayback = state.activePlayback;
   const liveMonitorPlayback = state.liveMonitorPlayback;
+  const activeRollAudition = state.activeRollAudition;
 
   if (activePlayback?.renderer?.panicPlayback) {
     sent = (await activePlayback.renderer.panicPlayback(activePlayback)) || sent;
+  }
+  if (activeRollAudition) {
+    releaseRollAuditionNote(activeRollAudition);
+    stopRollAudition({ redraw: true, releaseNote: false });
+    sent = true;
   }
   if (liveMonitorPlayback?.renderer?.panicPlayback) {
     sent =
@@ -4784,7 +5181,7 @@ function startPlaybackVisualization(
   if (state.queuedPlaybackPayload === payload) {
     state.queuedPlaybackPayload = null;
   }
-  drawPianoRoll(targetRoll, notes, accent, emptyLabel);
+  drawPianoRoll(targetRoll, notes, accent, emptyLabel, rollAuditionOptions(rollKind));
   renderPerformanceState();
   const token = ++state.playbackVisualizationToken;
   const startedAtMs = window.performance.now();
@@ -4817,6 +5214,7 @@ function startPlaybackVisualization(
       accent,
       emptyLabel,
       {
+        ...rollAuditionOptions(rollKind),
         progressRatio: rollProgressRatio,
         playbackSeconds,
       },
@@ -4889,6 +5287,7 @@ async function playPayload(
 
   let playback = state.activePlayback;
   if (!append || !playback) {
+    stopRollAudition({ redraw: false, releaseNote: true });
     stopActivePlayback();
     playback = await createPlaybackSession();
     state.activePlayback = playback;
@@ -5803,20 +6202,48 @@ function bindEvents() {
     clearPhrases();
   });
 
-  elements.inputRoll.addEventListener("click", async () => {
+  elements.inputRoll.addEventListener("click", async (event) => {
     try {
-      await toggleRollPlayback("input");
+      await handleRollClick("input", event);
     } catch (error) {
       setPhraseMessage(error.message, true);
     }
   });
 
-  elements.outputRoll.addEventListener("click", async () => {
+  elements.outputRoll.addEventListener("click", async (event) => {
     try {
-      await toggleRollPlayback("output");
+      await handleRollClick("output", event);
     } catch (error) {
       setPhraseMessage(error.message, true);
     }
+  });
+
+  elements.inputRoll.addEventListener("pointermove", (event) => {
+    updateRollPointerTitle("input", event);
+  });
+
+  elements.outputRoll.addEventListener("pointermove", (event) => {
+    updateRollPointerTitle("output", event);
+  });
+
+  elements.inputRoll.addEventListener("pointerleave", () => {
+    syncRollPlaybackState();
+  });
+
+  elements.outputRoll.addEventListener("pointerleave", () => {
+    syncRollPlaybackState();
+  });
+
+  elements.inputRoll.addEventListener("keydown", (event) => {
+    void handleRollKeydown("input", event).catch((error) => {
+      setPhraseMessage(error.message, true);
+    });
+  });
+
+  elements.outputRoll.addEventListener("keydown", (event) => {
+    void handleRollKeydown("output", event).catch((error) => {
+      setPhraseMessage(error.message, true);
+    });
   });
 
   elements.applySettingsButton.addEventListener("click", async () => {

@@ -1436,6 +1436,11 @@ input[type="password"]:disabled {
   border-color: rgba(109, 211, 206, 0.24);
 }
 
+.piano-roll:focus-visible {
+  outline: 2px solid rgba(109, 211, 206, 0.68);
+  outline-offset: 4px;
+}
+
 .piano-roll.is-roll-playing {
   border-color: rgba(255, 245, 212, 0.42);
   box-shadow: 0 0 0 1px rgba(255, 245, 212, 0.16), 0 0 22px rgba(255, 245, 212, 0.1);
