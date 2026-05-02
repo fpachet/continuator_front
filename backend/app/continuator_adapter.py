@@ -290,16 +290,56 @@ class ContinuatorSessionEngine:
         engine.set_transpose(self._transposition)
         engine.set_forget(self._forget_past)
         engine.set_keep_last(self._keep_last_inputs)
-        engine.set_decay_mode(self._decay_mode)
+        set_decay_mode = getattr(engine, "set_decay_mode", None)
+        if callable(set_decay_mode):
+            set_decay_mode(self._decay_mode)
+        midi_store = self._engine_midi_store(engine)
         self._seed_sequence_count = (
-            len(getattr(engine.vom, "input_sequences", [])) if load_seed_material else 0
+            len(getattr(midi_store, "input_sequences", [])) if load_seed_material else 0
         )
         return engine
+
+    @staticmethod
+    def _engine_midi_store(engine: object) -> object | None:
+        store_for_engine = getattr(engine, "_midi_store", None)
+        if callable(store_for_engine):
+            try:
+                return store_for_engine()
+            except AttributeError:
+                pass
+        store = getattr(engine, "realization_store", None)
+        if store is not None:
+            return store
+        return getattr(engine, "vom", None)
+
+    def _midi_store(self) -> object | None:
+        return self._engine_midi_store(self._continuator)
+
+    def _input_sequences(self) -> list[object]:
+        store = self._midi_store()
+        if store is None:
+            return []
+        return list(getattr(store, "input_sequences", []))
+
+    def _viewpoint_realizations(self) -> object:
+        store = self._midi_store()
+        if store is None:
+            return {}
+        return getattr(store, "viewpoints_realizations", {})
+
+    def _has_viewpoint(self, viewpoint: object) -> bool:
+        store = self._midi_store()
+        if store is None:
+            return False
+        has_viewpoint = getattr(store, "has_viewpoint", None)
+        if callable(has_viewpoint):
+            return bool(has_viewpoint(viewpoint))
+        return viewpoint in getattr(store, "viewpoints_realizations", {})
 
     def _is_input_sequence_end_address(self, note_address: object) -> bool:
         try:
             sequence_index, note_index = note_address
-            sequences = getattr(self._continuator.vom, "input_sequences", [])
+            sequences = self._input_sequences()
             sequence = sequences[int(sequence_index)]
         except (AttributeError, IndexError, TypeError, ValueError):
             return False
@@ -314,7 +354,7 @@ class ContinuatorSessionEngine:
         if not force_ending_realization or not vp_sequence:
             return self._continuator.realize_vp_sequence(vp_sequence)
 
-        realizations_by_viewpoint = getattr(self._continuator.vom, "viewpoints_realizations", {})
+        realizations_by_viewpoint = self._viewpoint_realizations()
         note_addresses = []
         for index, viewpoint in enumerate(vp_sequence):
             realizations = list(realizations_by_viewpoint.get(viewpoint, []))
@@ -432,7 +472,9 @@ class ContinuatorSessionEngine:
             if keep_last_inputs is not None:
                 self._continuator.set_keep_last(keep_last_inputs)
             if decay_mode is not None:
-                self._continuator.set_decay_mode(decay_mode)
+                set_decay_mode = getattr(self._continuator, "set_decay_mode", None)
+                if callable(set_decay_mode):
+                    set_decay_mode(decay_mode)
 
     def reset(self) -> None:
         with self._lock:
@@ -440,7 +482,7 @@ class ContinuatorSessionEngine:
 
     def get_memory_snapshot(self) -> tuple[list[PhrasePayload], int]:
         with self._lock:
-            sequences = list(getattr(self._continuator.vom, "input_sequences", []))
+            sequences = self._input_sequences()
             payloads = [_build_phrase_payload(sequence) for sequence in sequences]
             seed_count = min(self._seed_sequence_count, len(payloads))
             return payloads, seed_count
@@ -523,7 +565,7 @@ class ContinuatorSessionEngine:
         str | None,
     ]:
         with self._lock:
-            if not getattr(self._continuator.vom, "input_sequences", []):
+            if not self._input_sequences():
                 raise NoContinuationAvailable(
                     "The Continuator memory is empty. Load MIDI or learn a phrase first."
                 )
@@ -684,7 +726,7 @@ class ContinuatorSessionEngine:
                 ),
             )
             if requested_handoff_viewpoint is not None:
-                if self._continuator.vom.has_viewpoint(requested_handoff_viewpoint):
+                if self._has_viewpoint(requested_handoff_viewpoint):
                     prefix_for_generation = None
                     start_viewpoint = requested_handoff_viewpoint
                 else:
@@ -699,7 +741,7 @@ class ContinuatorSessionEngine:
                     )
 
             if start_viewpoint is None:
-                if not self._continuator.vom.has_viewpoint(input_handoff_viewpoint):
+                if not self._has_viewpoint(input_handoff_viewpoint):
                     prefix_for_generation = None
                     constraints_status.start.applied = False
                     constraints_status.start.relaxed = True
