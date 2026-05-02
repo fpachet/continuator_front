@@ -132,6 +132,7 @@ class ContinueResponse(BaseModel):
 
 class GeneratePhraseRequest(BaseModel):
     note_count: int | None = Field(default=None, ge=1, le=512)
+    enforce_start_constraint: bool = True
     enforce_end_constraint: bool = True
 
 

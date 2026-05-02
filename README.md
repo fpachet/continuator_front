@@ -126,6 +126,8 @@ Each session contains:
 - Logged phrase history in SQLite.
 - A live memory view derived from the engine state.
 
+Changing engine/model controls in the browser stages them until `Apply Settings` is pressed. Switching engine or Markov order `K` requires Apply Settings because the backend rebuilds the live session engine, then restores the existing session memory into the rebuilt engine.
+
 Important distinction:
 
 - `History` is everything that was logged for the session.
@@ -224,6 +226,11 @@ API payloads use JSON and expose both:
 - event-level timing data for playback
 - note-level timing data for visualization
 - constraint status, plus optional per-step `generation_trace` diagnostics for engines that expose it
+
+`Generate From Memory` requests both beginning and ending constraints by default
+and reports when either constraint has to be relaxed. Infinite-mode chaining uses
+the continuation endpoint with the previous phrase as context; its memory
+re-seed fallback disables the beginning constraint.
 
 ## Local Development
 

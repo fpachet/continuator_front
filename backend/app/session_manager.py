@@ -331,6 +331,7 @@ class SessionManager:
         session_id: str,
         owner_user_id: str | None,
         note_count: int | None = None,
+        enforce_start_constraint: bool = True,
         enforce_end_constraint: bool = True,
     ) -> GeneratePhraseResponse:
         state = self._require_session(session_id, owner_user_id)
@@ -343,6 +344,7 @@ class SessionManager:
             status_message,
         ) = state.engine.generate_phrase(
             note_count=note_count,
+            enforce_start_constraint=enforce_start_constraint,
             enforce_end_constraint=enforce_end_constraint,
         )
 

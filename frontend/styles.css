@@ -508,6 +508,13 @@ button.ghost {
   border: 1px solid var(--border);
 }
 
+button.ghost.is-pending {
+  border-color: rgba(244, 162, 97, 0.56);
+  background: linear-gradient(135deg, #f4a261, #ef7f58);
+  color: #081118;
+  box-shadow: 0 12px 30px rgba(239, 127, 88, 0.24);
+}
+
 .workspace-tabs {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -944,6 +951,13 @@ input[type="password"]:disabled {
   gap: 10px;
 }
 
+.settings-summary.is-pending {
+  padding: 10px;
+  border-radius: 18px;
+  border: 1px solid rgba(244, 162, 97, 0.24);
+  background: rgba(244, 162, 97, 0.08);
+}
+
 .settings-chip {
   display: inline-flex;
   align-items: center;
@@ -954,6 +968,17 @@ input[type="password"]:disabled {
   background: rgba(255, 255, 255, 0.04);
   color: var(--muted);
   font-size: 0.88rem;
+}
+
+.settings-chip.is-active {
+  color: var(--text);
+}
+
+.settings-chip.is-warning,
+.settings-chip.is-pending {
+  border-color: rgba(244, 162, 97, 0.36);
+  background: rgba(244, 162, 97, 0.16);
+  color: #fff5d4;
 }
 
 .settings-panel {
@@ -1193,6 +1218,12 @@ input[type="password"]:disabled {
 .constraint-pill.is-relaxed {
   border-color: rgba(244, 162, 97, 0.24);
   background: rgba(244, 162, 97, 0.1);
+}
+
+.constraint-pill.is-pending {
+  border-color: rgba(244, 162, 97, 0.4);
+  background: rgba(244, 162, 97, 0.16);
+  color: #fff5d4;
 }
 
 .constraint-pill.is-off {

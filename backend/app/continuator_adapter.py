@@ -344,6 +344,36 @@ class ContinuatorSessionEngine:
             return None
         return [GenerationTraceStep.model_validate(step) for step in trace]
 
+    def _sample_memory_sequence(
+        self,
+        *,
+        length: int,
+        constraints: dict[int, object],
+        enforce_start_constraint: bool,
+    ) -> list[object] | None:
+        if not enforce_start_constraint:
+            return self._continuator.sample_sequence(
+                prefix=None,
+                length=length,
+                constraints=constraints,
+            )
+
+        if self._engine_kind == "context_bp":
+            return self._continuator.sample_sequence(
+                prefix=[],
+                length=length,
+                constraints=constraints,
+            )
+
+        return self._continuator.sample_sequence(
+            prefix=None,
+            start_vp=self._continuator.get_start_vp(),
+            length=length,
+            constraints=constraints,
+            relax_prefix_on_fail=False,
+            relax_pos0_on_fail=False,
+        )
+
     def apply_settings(
         self,
         *,
@@ -484,6 +514,7 @@ class ContinuatorSessionEngine:
     def generate_phrase(
         self,
         note_count: int | None = None,
+        enforce_start_constraint: bool = True,
         enforce_end_constraint: bool = True,
     ) -> tuple[
         PhrasePayload,
@@ -498,12 +529,17 @@ class ContinuatorSessionEngine:
                 )
 
             target_note_count = note_count or 12
-            status_message = None
+            status_messages: list[str] = []
             constraints_status = GenerationConstraintsStatus(
                 start=GenerationConstraintState(
-                    requested=False,
-                    applied=False,
-                    reason="Generated directly from memory.",
+                    requested=enforce_start_constraint,
+                    applied=enforce_start_constraint,
+                    value="beginning marker" if enforce_start_constraint else None,
+                    reason=(
+                        None
+                        if enforce_start_constraint
+                        else "Start constraint was disabled."
+                    ),
                 ),
                 end=GenerationConstraintState(
                     requested=enforce_end_constraint,
@@ -512,36 +548,62 @@ class ContinuatorSessionEngine:
                     reason=None if enforce_end_constraint else "Ending constraint was disabled.",
                 ),
             )
-            if enforce_end_constraint:
-                constraints = {target_note_count: self._continuator.get_end_vp()}
-                generated_sequence = self._continuator.sample_sequence(
-                    prefix=None,
-                    length=target_note_count + 1,
+
+            attempts: list[tuple[bool, bool]] = []
+            if enforce_start_constraint and enforce_end_constraint:
+                attempts = [
+                    (True, True),
+                    (False, True),
+                    (True, False),
+                    (False, False),
+                ]
+            elif enforce_start_constraint:
+                attempts = [(True, False), (False, False)]
+            elif enforce_end_constraint:
+                attempts = [(False, True), (False, False)]
+            else:
+                attempts = [(False, False)]
+
+            generated_sequence = None
+            applied_start_constraint = False
+            applied_end_constraint = False
+            for attempt_start, attempt_end in attempts:
+                constraints = (
+                    {target_note_count: self._continuator.get_end_vp()}
+                    if attempt_end
+                    else {}
+                )
+                generated_sequence = self._sample_memory_sequence(
+                    length=target_note_count + (1 if attempt_end else 0),
                     constraints=constraints,
+                    enforce_start_constraint=attempt_start,
                 )
                 if generated_sequence is None:
-                    generated_sequence = self._continuator.sample_sequence(
-                        prefix=None,
-                        length=target_note_count,
-                        constraints={},
-                    )
-                    status_message = (
-                        "Generated from memory without the hard end constraint "
-                        "because the exact-ending version had no solution."
-                    )
-                    constraints_status.end.applied = False
-                    constraints_status.end.relaxed = True
-                    constraints_status.end.reason = "The exact-ending version had no solution."
-            else:
-                generated_sequence = self._continuator.sample_sequence(
-                    prefix=None,
-                    length=target_note_count,
-                    constraints={},
-                )
+                    continue
+                applied_start_constraint = attempt_start
+                applied_end_constraint = attempt_end
+                break
 
             if generated_sequence is None:
                 raise NoContinuationAvailable(
                     "The Continuator could not generate a fresh phrase from the current memory."
+                )
+
+            if enforce_start_constraint and not applied_start_constraint:
+                constraints_status.start.applied = False
+                constraints_status.start.relaxed = True
+                constraints_status.start.reason = "The exact-start version had no solution."
+                status_messages.append(
+                    "Generated from memory without the hard start constraint "
+                    "because the exact-start version had no solution."
+                )
+            if enforce_end_constraint and not applied_end_constraint:
+                constraints_status.end.applied = False
+                constraints_status.end.relaxed = True
+                constraints_status.end.reason = "The exact-ending version had no solution."
+                status_messages.append(
+                    "Generated from memory without the hard end constraint "
+                    "because the exact-ending version had no solution."
                 )
 
             rendered_vp_sequence = generated_sequence
@@ -565,7 +627,7 @@ class ContinuatorSessionEngine:
                 _build_phrase_payload(rendered_sequence),
                 constraints_status,
                 self._last_generation_trace(),
-                status_message,
+                " ".join(status_messages) or None,
             )
 
     def continue_phrase(

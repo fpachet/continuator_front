@@ -302,6 +302,7 @@ def generate_phrase(
             session_id,
             None if current_user is None else current_user.id,
             note_count=payload.note_count,
+            enforce_start_constraint=payload.enforce_start_constraint,
             enforce_end_constraint=payload.enforce_end_constraint,
         )
     except UnknownSessionError as error:

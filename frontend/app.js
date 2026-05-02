@@ -268,6 +268,8 @@ const state = {
   userPlaybackPreference: null,
   userAudioOutputPreference: null,
   audioOutputDevices: [],
+  lastConstraints: null,
+  lastGenerationTrace: null,
 };
 
 function midiToFrequency(note) {
@@ -1848,6 +1850,78 @@ function activeEngineKind() {
   );
 }
 
+function comparableSessionSettings(settings) {
+  if (!settings) {
+    return null;
+  }
+  return {
+    learn_input: Boolean(settings.learn_input),
+    transposition: Boolean(settings.transposition),
+    forget_past: Boolean(settings.forget_past),
+    engine_kind: normalizedEngineKind(settings.engine_kind),
+    markov_order: normalizedMarkovOrder(settings.markov_order),
+    keep_last_inputs: normalizedKeepLastInputs(settings.keep_last_inputs),
+    decay_mode: settings.decay_mode || "full",
+  };
+}
+
+function sessionSettingValueLabel(key, value) {
+  switch (key) {
+    case "learn_input":
+      return value ? "Learn input on" : "Learn input off";
+    case "transposition":
+      return value ? "Transpose on" : "Transpose off";
+    case "forget_past":
+      return value ? "Rolling memory on" : "Full memory";
+    case "engine_kind":
+      return engineKindLabel(value);
+    case "markov_order":
+      return `K=${normalizedMarkovOrder(value)}`;
+    case "keep_last_inputs":
+      return `Keep last ${normalizedKeepLastInputs(value)}`;
+    case "decay_mode":
+      return `Decay ${value || "full"}`;
+    default:
+      return String(value);
+  }
+}
+
+function pendingSessionSettingChanges() {
+  if (!state.sessionId || !state.sessionConfiguration) {
+    return [];
+  }
+  const active = comparableSessionSettings(state.sessionConfiguration);
+  const draft = comparableSessionSettings(readSessionSettingsFromControls());
+  return [
+    ["engine_kind", "Engine"],
+    ["markov_order", "K"],
+    ["transposition", "Transpose"],
+    ["forget_past", "Memory"],
+    ["keep_last_inputs", "Keep last"],
+    ["decay_mode", "Decay"],
+    ["learn_input", "Learn input"],
+  ]
+    .filter(([key]) => active[key] !== draft[key])
+    .map(([key, label]) => ({
+      key,
+      label,
+      active: sessionSettingValueLabel(key, active[key]),
+      pending: sessionSettingValueLabel(key, draft[key]),
+    }));
+}
+
+function hasPendingSessionSettings() {
+  return pendingSessionSettingChanges().length > 0;
+}
+
+function pendingSessionSettingsText(changes = pendingSessionSettingChanges()) {
+  const visibleChanges = changes.slice(0, 4);
+  const suffix = changes.length > visibleChanges.length
+    ? ` +${changes.length - visibleChanges.length}`
+    : "";
+  return `${visibleChanges.map((change) => change.pending).join(" · ")}${suffix}`;
+}
+
 function hasGenerationTrace(trace) {
   return Array.isArray(trace) && trace.length > 0;
 }
@@ -1897,21 +1971,34 @@ function generationTraceTitle(trace, engineKind) {
 }
 
 function renderConstraintStatus(constraints, generationTrace = null) {
+  state.lastConstraints = constraints || null;
+  state.lastGenerationTrace = generationTrace || null;
   if (!elements.constraintStatus) {
     return;
   }
   elements.constraintStatus.replaceChildren();
   const engineKind = activeEngineKind();
   const traceText = generationTracePillText(generationTrace, engineKind);
-  if (!constraints && !traceText) {
+  const pendingChanges = pendingSessionSettingChanges();
+  if (!constraints && !traceText && !pendingChanges.length) {
     elements.constraintStatus.hidden = true;
     return;
   }
 
   const enginePill = document.createElement("span");
   enginePill.className = "constraint-pill is-off";
-  enginePill.textContent = `Engine: ${engineKindLabel(engineKind)}`;
+  enginePill.textContent = `Active engine: ${engineKindLabel(engineKind)}`;
   elements.constraintStatus.append(enginePill);
+
+  if (pendingChanges.length) {
+    const pill = document.createElement("span");
+    pill.className = "constraint-pill is-pending";
+    pill.textContent = `Pending: ${pendingSessionSettingsText(pendingChanges)}`;
+    pill.title = pendingChanges
+      .map((change) => `${change.label}: ${change.active} -> ${change.pending}`)
+      .join("\n");
+    elements.constraintStatus.append(pill);
+  }
 
   if (constraints) {
     [
@@ -2369,6 +2456,10 @@ function describeSessionSettings(settings) {
   return [engineLabel, orderLabel, transposeLabel, memoryLabel, decayLabel];
 }
 
+function settingsChipHtml(label, className = "") {
+  return `<span class="settings-chip ${className}">${label}</span>`;
+}
+
 function savedPlaybackPreferenceLabel(configuration) {
   if (!configuration?.playback_choice) {
     return null;
@@ -2398,10 +2489,27 @@ function describeSessionPreferences(configuration) {
 }
 
 function renderSessionSettingsSummary() {
-  const labels = describeSessionSettings(readSessionSettingsFromControls());
-  elements.settingsSummary.innerHTML = labels
-    .map((label) => `<span class="settings-chip">${label}</span>`)
-    .join("");
+  const activeSettings = state.sessionId && state.sessionConfiguration
+    ? state.sessionConfiguration
+    : readSessionSettingsFromControls();
+  const labels = describeSessionSettings(activeSettings);
+  const pendingChanges = pendingSessionSettingChanges();
+  const chips = labels.map((label, index) =>
+    settingsChipHtml(
+      state.sessionId && index === 0 ? `Active: ${label}` : label,
+      state.sessionId ? "is-active" : "",
+    ),
+  );
+  elements.settingsSummary.classList.toggle("is-pending", pendingChanges.length > 0);
+  if (pendingChanges.length) {
+    chips.unshift(settingsChipHtml("Unsaved settings", "is-warning"));
+    chips.push(
+      settingsChipHtml(`Pending: ${pendingSessionSettingsText(pendingChanges)}`, "is-pending"),
+    );
+  }
+  elements.settingsSummary.innerHTML = chips.join("");
+  updateSessionActionState();
+  renderConstraintStatus(state.lastConstraints, state.lastGenerationTrace);
 }
 
 function updateKeepLastFieldState() {
@@ -2429,9 +2537,16 @@ function syncSettingsControls(configuration) {
 }
 
 function updateSessionActionState() {
+  const hasPendingSettings = hasPendingSessionSettings();
   elements.createSessionButton.disabled = false;
   elements.resetSessionButton.disabled = !state.sessionId;
-  elements.applySettingsButton.disabled = !state.sessionId;
+  elements.applySettingsButton.disabled = !state.sessionId || !hasPendingSettings;
+  elements.applySettingsButton.classList.toggle("is-pending", hasPendingSettings);
+  elements.applySettingsButton.textContent = !state.sessionId
+    ? "Apply to Current Session"
+    : hasPendingSettings
+      ? "Apply Settings"
+      : "Settings Applied";
 }
 
 function updateAuthActionState() {
@@ -2522,6 +2637,7 @@ function clearCurrentSessionState(message = null) {
   renderHistory([]);
   renderMemory(null);
   setSessionStatus("No session");
+  renderSessionSettingsSummary();
   updateSessionActionState();
   if (message) {
     setPhraseMessage(message);
@@ -3731,6 +3847,7 @@ async function resetSession() {
   renderPerformanceState();
   updateInfiniteActionState();
   syncSettingsControls(payload.configuration);
+  renderConstraintStatus(null);
   setPhraseMessage("Session memory cleared and the current settings were preserved.");
   await refreshMemory();
   await refreshSavedSessions();
@@ -3741,6 +3858,10 @@ async function applyCurrentSessionSettings() {
     setPhraseMessage("Create a session before applying settings.", true);
     return;
   }
+  if (!hasPendingSessionSettings()) {
+    setPhraseMessage("Settings are already applied to the active session.");
+    return;
+  }
 
   const settings = readSessionSettingsFromControls();
   const payload = await requestJson(`/api/sessions/${state.sessionId}/settings`, {
@@ -3749,6 +3870,7 @@ async function applyCurrentSessionSettings() {
     body: JSON.stringify(settings),
   });
   syncSettingsControls(payload.configuration);
+  renderConstraintStatus(null);
   setPhraseMessage(
     `Session settings updated. ${describeSessionSettings(payload.configuration).join(" · ")}.`,
   );
@@ -3909,6 +4031,7 @@ async function requestMemoryGeneration(
     noteCount = preferredGenerationNoteCount(),
     statusLabel = "Generating",
     signal = null,
+    enforceStartConstraint = true,
     enforceEndConstraint = true,
   } = {},
 ) {
@@ -3916,6 +4039,7 @@ async function requestMemoryGeneration(
   setPhraseStatus(statusLabel);
   const requestBody = {
     note_count: noteCount,
+    enforce_start_constraint: enforceStartConstraint,
     enforce_end_constraint: enforceEndConstraint,
   };
   const requestStartedAt = window.performance.now();
@@ -4918,6 +5042,7 @@ async function runInfiniteStep(prefixPayload, runId) {
       noteCount: preferredGenerationNoteCount(prefixEvents),
       statusLabel: state.activePlayback ? "Re-seeding from memory" : "Generating from memory",
       signal: abortController.signal,
+      enforceStartConstraint: false,
       enforceEndConstraint: false,
     });
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
@@ -5813,6 +5938,9 @@ function bindEvents() {
     );
     renderSessionSettingsSummary();
   });
+  elements.markovOrderInput.addEventListener("input", () => {
+    renderSessionSettingsSummary();
+  });
 
   elements.forgetToggle.addEventListener("change", () => {
     updateKeepLastFieldState();
@@ -5823,6 +5951,9 @@ function bindEvents() {
     elements.keepLastInput.value = String(
       normalizedKeepLastInputs(elements.keepLastInput.value),
     );
+    renderSessionSettingsSummary();
+  });
+  elements.keepLastInput.addEventListener("input", () => {
     renderSessionSettingsSummary();
   });
 
