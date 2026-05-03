@@ -49,6 +49,7 @@ What is implemented today:
 - Session creation and reset.
 - Web MIDI input selection in the browser.
 - Browser synth playback or hardware MIDI output playback.
+- Optional live MIDI input monitoring through the selected playback renderer.
 - Phrase capture based on silence detection.
 - Continuator settings exposed through a compact advanced drawer.
 - Per-session `History` and `Memory` visualization.

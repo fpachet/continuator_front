@@ -47,6 +47,7 @@ const FAUST_WASM_BINARY_URL = "/assets/vendor/faustwasm/libfaust-wasm/libfaust-w
 const FAUST_CLAVIER_DSP_URL = "/assets/faust/continuator-clavier.dsp";
 const FAUST_CUSTOM_TEMPLATE_DSP_URL = "/assets/faust/custom-poly-template.dsp";
 const PHRASE_TIMEOUT_STORAGE_KEY = "continuator.phrase.timeout.ms";
+const MIDI_INPUT_MONITOR_STORAGE_KEY = "continuator.midi.input.monitor";
 const FAUST_CUSTOM_SOURCE_STORAGE_KEY = "continuator.faust.custom.source";
 const FAUST_CUSTOM_VALUES_STORAGE_KEY = "continuator.faust.custom.values";
 const PLAYBACK_PREFERENCE_STORAGE_PREFIX = "continuator.playback.preference";
@@ -197,6 +198,7 @@ const elements = {
   midiFolderImportInput: document.querySelector("#midi-folder-import-input"),
   connectMidiButton: document.querySelector("#connect-midi-button"),
   refreshMidiButton: document.querySelector("#refresh-midi-button"),
+  inputMonitorToggle: document.querySelector("#input-monitor-toggle"),
   virtualKeyboardPanel: document.querySelector("#virtual-keyboard-panel"),
   virtualKeyboard: document.querySelector("#virtual-keyboard"),
   virtualOctaveLabel: document.querySelector("#virtual-octave-label"),
@@ -272,6 +274,7 @@ const state = {
   liveMonitorPlaybackPromise: null,
   liveMonitorChoiceValue: null,
   liveMonitorToken: 0,
+  inputMonitorEnabled: false,
   userPlaybackPreference: null,
   userAudioOutputPreference: null,
   audioOutputDevices: [],
@@ -501,6 +504,39 @@ function safeLocalStorageSet(key, value) {
   } catch {
     // Ignore private-browsing or storage-denied failures.
   }
+}
+
+function loadStoredInputMonitorPreference() {
+  return safeLocalStorageGet(MIDI_INPUT_MONITOR_STORAGE_KEY) === "true";
+}
+
+function applyInputMonitorPreference(
+  enabled,
+  { persist = true, announce = false } = {},
+) {
+  const nextValue = Boolean(enabled);
+  state.inputMonitorEnabled = nextValue;
+  elements.inputMonitorToggle.checked = nextValue;
+  if (persist) {
+    safeLocalStorageSet(MIDI_INPUT_MONITOR_STORAGE_KEY, nextValue ? "true" : "false");
+  }
+  if (!nextValue) {
+    stopLiveMonitorPlayback();
+  }
+  renderPerformanceState();
+  if (announce) {
+    setPhraseMessage(
+      nextValue
+        ? `Monitoring MIDI input through ${playbackChoiceLabel()}.`
+        : "MIDI input monitoring off.",
+    );
+  }
+}
+
+function initializeInputMonitorPreference() {
+  applyInputMonitorPreference(loadStoredInputMonitorPreference(), {
+    persist: false,
+  });
 }
 
 function playbackPreferenceStorageKey() {
@@ -1322,6 +1358,10 @@ function syncVirtualKeyboardVisibility() {
   elements.virtualKeyboardPanel.hidden = !isVirtualMidiInputSelected();
 }
 
+function shouldMonitorSelectedMidiInput() {
+  return state.inputMonitorEnabled && !isVirtualMidiInputSelected();
+}
+
 function normalizeMidiNote(note) {
   return Math.max(0, Math.min(127, Number(note) || 0));
 }
@@ -1434,7 +1474,7 @@ async function ensureLiveMonitorPlayback() {
     })
     .catch((error) => {
       state.liveMonitorChoiceValue = null;
-      setPhraseMessage(`Virtual keyboard monitor unavailable: ${error.message}`, true);
+      setPhraseMessage(`Live input monitor unavailable: ${error.message}`, true);
       return null;
     })
     .finally(() => {
@@ -1454,7 +1494,7 @@ function stopLiveMonitorPlayback() {
   state.liveMonitorToken += 1;
 }
 
-async function monitorVirtualMidiMessage(messageEvent) {
+async function monitorLiveMidiMessage(messageEvent) {
   const event = midiMessageToEvent(messageEvent);
   if (!event) {
     return;
@@ -1487,7 +1527,7 @@ function handleUnifiedMidiMessage(messageEvent, sourceLabel, { monitor = false }
 
   recorder.handleMessage(messageEvent);
   if (monitor) {
-    void monitorVirtualMidiMessage(messageEvent);
+    void monitorLiveMidiMessage(messageEvent);
   }
   setLastMidiEvent(`${type} ${note} v${velocity}`);
   setPhraseMessage(
@@ -5739,7 +5779,6 @@ function detachCurrentInput() {
   }
   if (isVirtualMidiInputSelected()) {
     allVirtualNotesOff();
-    stopLiveMonitorPlayback();
   } else if (state.midiAccess) {
     const current = state.midiAccess.inputs.get(state.activeInputId);
     if (current) {
@@ -5747,6 +5786,7 @@ function detachCurrentInput() {
       void current.close().catch(() => {});
     }
   }
+  stopLiveMonitorPlayback();
   state.activeInputId = null;
   syncVirtualKeyboardVisibility();
   renderPerformanceState();
@@ -5791,7 +5831,9 @@ async function attachInput(inputId, { savePreference = false } = {}) {
 
   await input.open();
   input.onmidimessage = (messageEvent) => {
-    handleUnifiedMidiMessage(messageEvent, input.name || input.id);
+    handleUnifiedMidiMessage(messageEvent, input.name || input.id, {
+      monitor: shouldMonitorSelectedMidiInput(),
+    });
   };
 
   state.activeInputId = inputId;
@@ -6267,7 +6309,14 @@ function bindEvents() {
     applyPhraseTimeoutSetting(elements.phraseTimeoutInput.value, { announce: true });
   });
 
+  elements.inputMonitorToggle.addEventListener("change", () => {
+    applyInputMonitorPreference(elements.inputMonitorToggle.checked, {
+      announce: true,
+    });
+  });
+
   elements.midiOutputSelect.addEventListener("change", async () => {
+    stopLiveMonitorPlayback();
     updateSelectedOutput();
     const choice = selectedPlaybackChoice();
     try {
@@ -6481,6 +6530,7 @@ async function initialize() {
     setPhraseMessage(error.message, true);
   }
   initializePhraseTimeoutSetting();
+  initializeInputMonitorPreference();
   populatePlaybackChoices();
   syncAuthUI();
   renderSavedSessions([]);
