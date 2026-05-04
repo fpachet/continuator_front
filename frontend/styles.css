@@ -72,7 +72,7 @@ body.sheet-open {
   grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.8fr);
   gap: 24px;
   align-items: start;
-  padding: 56px 28px 24px;
+  padding: 42px 28px 20px;
   animation: rise-in 700ms ease;
 }
 
@@ -81,11 +81,11 @@ body.sheet-open {
 }
 
 .hero-copy h1 {
-  margin: 8px 0 14px;
+  margin: 6px 0 10px;
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
-  font-size: clamp(2.4rem, 5vw, 4.4rem);
-  line-height: 0.95;
-  letter-spacing: -0.03em;
+  font-size: 3.1rem;
+  line-height: 1;
+  letter-spacing: 0;
 }
 
 .eyebrow {
@@ -1857,7 +1857,7 @@ input[type="password"]:disabled {
   }
 
   .hero {
-    padding-top: 40px;
+    padding-top: 32px;
   }
 
   .hero-copy,
@@ -1907,7 +1907,7 @@ input[type="password"]:disabled {
 
   .hero-copy h1 {
     max-width: 100%;
-    font-size: clamp(2rem, 11vw, 2.65rem);
+    font-size: 2.15rem;
     overflow-wrap: break-word;
   }
 
