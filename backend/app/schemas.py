@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 
 DecayMode = Literal["full", "late", "middle", "early"]
-EngineKind = Literal["classic", "context_bp"]
+EngineKind = Literal["classic", "context_bp", "vo_regular_bp"]
 MemoryPhraseSource = Literal["seed", "live"]
 USERNAME_PATTERN = r"^[A-Za-z0-9_.-]{2,32}$"
 

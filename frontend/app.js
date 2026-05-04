@@ -56,6 +56,7 @@ const DEFAULT_ENGINE_KIND = "classic";
 const ENGINE_KIND_LABELS = new Map([
   ["classic", "Classic"],
   ["context_bp", "Context BP"],
+  ["vo_regular_bp", "VO Regular BP"],
 ]);
 const FAUST_UI_CONTROL_TYPES = new Set([
   "hslider",
@@ -2180,12 +2181,12 @@ function preferredGenerationNoteCount(referenceEvents = null) {
     return Math.max(1, eventsToNotes(referenceEvents).length);
   }
 
-  if (state.lastGeneratedPhrase?.note_count) {
-    return Math.max(1, Number(state.lastGeneratedPhrase.note_count));
-  }
-
   if (state.lastCapturedPhrase.length) {
     return Math.max(1, eventsToNotes(state.lastCapturedPhrase).length);
+  }
+
+  if (state.lastGeneratedPhrase?.note_count) {
+    return Math.max(1, Number(state.lastGeneratedPhrase.note_count));
   }
 
   return 12;
@@ -2318,7 +2319,9 @@ function normalizedMarkovOrder(value) {
 }
 
 function normalizedEngineKind(value) {
-  return value === "context_bp" ? "context_bp" : DEFAULT_ENGINE_KIND;
+  return value === "context_bp" || value === "vo_regular_bp"
+    ? value
+    : DEFAULT_ENGINE_KIND;
 }
 
 function engineKindLabel(value) {

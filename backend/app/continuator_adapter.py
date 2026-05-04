@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import random
 from tempfile import TemporaryDirectory
 import threading
 from typing import Any, get_args
@@ -18,6 +17,11 @@ try:
     from ctor.context_bp import ContextBPContinuator
 except ImportError:
     ContextBPContinuator = None
+
+try:
+    from ctor.vo_regular_bp import VORegularBPContinuator
+except ImportError:
+    VORegularBPContinuator = None
 
 from .schemas import (
     EngineKind,
@@ -272,6 +276,13 @@ class ContinuatorSessionEngine:
                     "package revision that includes ctor.context_bp."
                 )
             return ContextBPContinuator
+        if self._engine_kind == "vo_regular_bp":
+            if VORegularBPContinuator is None:
+                raise RuntimeError(
+                    "VORegularBPContinuator is not available. Install a continuator "
+                    "package revision that includes ctor.vo_regular_bp and vo_regular_bp."
+                )
+            return VORegularBPContinuator
         raise ValueError(f"Unknown Continuator engine kind: {self._engine_kind}")
 
     def _create_engine(self, *, load_seed_material: bool = True) -> Any:
@@ -321,12 +332,6 @@ class ContinuatorSessionEngine:
             return []
         return list(getattr(store, "input_sequences", []))
 
-    def _viewpoint_realizations(self) -> object:
-        store = self._midi_store()
-        if store is None:
-            return {}
-        return getattr(store, "viewpoints_realizations", {})
-
     def _has_viewpoint(self, viewpoint: object) -> bool:
         store = self._midi_store()
         if store is None:
@@ -336,44 +341,17 @@ class ContinuatorSessionEngine:
             return bool(has_viewpoint(viewpoint))
         return viewpoint in getattr(store, "viewpoints_realizations", {})
 
-    def _is_input_sequence_end_address(self, note_address: object) -> bool:
-        try:
-            sequence_index, note_index = note_address
-            sequences = self._input_sequences()
-            sequence = sequences[int(sequence_index)]
-        except (AttributeError, IndexError, TypeError, ValueError):
-            return False
-        return bool(sequence) and int(note_index) == len(sequence) - 1
-
     def _realize_vp_sequence(
         self,
         vp_sequence: list[object],
         *,
         force_ending_realization: bool = False,
     ) -> list[object]:
-        if not force_ending_realization or not vp_sequence:
-            return self._continuator.realize_vp_sequence(vp_sequence)
-
-        realizations_by_viewpoint = self._viewpoint_realizations()
-        note_addresses = []
-        for index, viewpoint in enumerate(vp_sequence):
-            realizations = list(realizations_by_viewpoint.get(viewpoint, []))
-            if not realizations:
-                return self._continuator.realize_vp_sequence(vp_sequence)
-
-            if index == len(vp_sequence) - 1:
-                ending_realizations = [
-                    address
-                    for address in realizations
-                    if self._is_input_sequence_end_address(address)
-                ]
-                if ending_realizations:
-                    note_addresses.append(random.choice(ending_realizations))
-                    continue
-
-            note_addresses.append(random.choice(realizations))
-
-        return self._continuator.set_timing(note_addresses)
+        if force_ending_realization and vp_sequence:
+            return self._continuator.realize_vp_sequence(
+                [*vp_sequence, self._continuator.get_end_vp()]
+            )
+        return self._continuator.realize_vp_sequence(vp_sequence)
 
     def _last_generation_trace(self) -> list[GenerationTraceStep] | None:
         get_trace = getattr(self._continuator, "get_last_generation_trace", None)
