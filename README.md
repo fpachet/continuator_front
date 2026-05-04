@@ -48,7 +48,7 @@ What is implemented today:
 
 - Session creation and reset.
 - Web MIDI input selection in the browser.
-- Browser synth playback or hardware MIDI output playback.
+- Browser sampled piano/violin playback, browser synth playback, or hardware MIDI output playback.
 - Optional live MIDI input monitoring through the selected playback renderer.
 - Phrase capture based on silence detection.
 - Continuator settings exposed through a compact advanced drawer.
@@ -391,6 +391,7 @@ The Hugging Face YAML block is only repository metadata for the Space platform. 
 - There is no user account layer yet.
 - The `Memory` tab shows session memory, not cross-session user memory.
 - Web MIDI support depends on browser support and user permission.
+- The built-in sampled piano and violin are loaded lazily from the [FluidR3 General MIDI browser soundfont](https://github.com/gleitz/midi-js-soundfonts) on first use.
 - The Continuator core is currently treated as a black box from the web wrapper side.
 
 ## Roadmap Ideas

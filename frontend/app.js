@@ -1,4 +1,9 @@
-const DEFAULT_PLAYBACK_CHOICE = "browser_triangle";
+import {
+  MidiJsSampleRenderer,
+  SAMPLE_INSTRUMENTS,
+} from "./sample-renderer.js?v=20260504-sample-timeout";
+
+const DEFAULT_PLAYBACK_CHOICE = "sample_piano";
 const FAUST_CLAVIER_ID = "faust_clavier";
 const FAUST_CUSTOM_ID = "faust_custom";
 const WEB_MIDI_RENDERER_ID = "web_midi";
@@ -1175,6 +1180,15 @@ const browserPlaybackRenderers = [
   }),
 ];
 
+const samplePlaybackRenderers = Object.values(SAMPLE_INSTRUMENTS).map(
+  (instrument) =>
+    new MidiJsSampleRenderer({
+      ...instrument,
+      applyAudioOutputToContext,
+      onStatusChange: renderPerformanceState,
+    }),
+);
+
 const faustClavierRenderer = new FaustPolyRenderer({
   id: FAUST_CLAVIER_ID,
   label: "Faust Clavier",
@@ -1243,6 +1257,7 @@ const faustClavierControls = [
 ];
 
 const localPlaybackRenderers = [
+  ...samplePlaybackRenderers,
   ...browserPlaybackRenderers,
   faustClavierRenderer,
   customFaustRenderer,
@@ -1773,6 +1788,9 @@ function rendererHealthLabel() {
     return choice.renderer.lastError
       ? `Faust error: ${choice.renderer.lastError.message}`
       : `Faust ${choice.renderer.status.toLowerCase()}`;
+  }
+  if (choice.renderer?.getHealthLabel) {
+    return choice.renderer.getHealthLabel();
   }
   return "Browser renderer ready";
 }
@@ -6382,7 +6400,7 @@ function bindEvents() {
           return;
         }
         await output.open();
-      } else if (choice.renderer instanceof FaustPolyRenderer) {
+      } else if (choice.renderer?.prepare) {
         await choice.renderer.prepare();
         if (choice.rendererId === FAUST_CUSTOM_ID) {
           refreshCustomFaustControlState();
