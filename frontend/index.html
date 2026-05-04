@@ -159,8 +159,7 @@
         <section class="readme-block">
           <h3>Studio Layout</h3>
           <ul class="readme-list">
-            <li><strong>Perform</strong>: live MIDI capture, phrase generation, replay, and infinite mode.</li>
-            <li><strong>Sound</strong>: playback routing plus built-in and custom Faust renderers.</li>
+            <li><strong>Perform</strong>: live MIDI capture, playback routing, phrase generation, replay, and infinite mode.</li>
             <li><strong>Memory</strong>: corpus import, active engine memory, and phrase history.</li>
             <li><strong>Session</strong>: session lifecycle, advanced Continuator settings, and saved sessions.</li>
           </ul>
@@ -283,16 +282,6 @@
               aria-controls="control-perform-panel"
             >
               Perform
-            </button>
-            <button
-              class="workspace-tab"
-              data-control-tab="sound"
-              type="button"
-              role="tab"
-              aria-selected="false"
-              aria-controls="control-sound-panel"
-            >
-              Sound
             </button>
             <button
               class="workspace-tab"
@@ -442,7 +431,7 @@
                   </p>
                   <div id="phrase-gap-meter" class="phrase-gap-meter" hidden>
                     <div class="phrase-gap-meter-head">
-                      <span>Phrase closing</span>
+                      <span id="phrase-gap-meter-label">Listening for more notes</span>
                       <strong id="phrase-gap-meter-copy">1.0s</strong>
                     </div>
                     <div class="phrase-gap-track" aria-hidden="true">
@@ -523,24 +512,10 @@
                   </div>
                 </div>
               </section>
-            </div>
-          </section>
-
-          <section
-            id="control-sound-panel"
-            class="workspace-panel"
-            data-control-panel="sound"
-            role="tabpanel"
-            hidden
-          >
-            <div class="panel-stack">
               <section class="panel-section accent-section">
                 <div class="section-head">
                   <div>
-                    <h3>Playback</h3>
-                    <p class="section-copy">
-                      Choose the sound source for continuations.
-                    </p>
+                    <h3>Output</h3>
                   </div>
                 </div>
                 <div class="route-picker">
@@ -570,19 +545,14 @@
                   </button>
                 </div>
                 <p class="field-hint compact-hint">
-                  External MIDI appears after MIDI is connected in Perform.
+                  External MIDI appears after MIDI is connected.
                 </p>
               </section>
 
               <section id="faust-renderer-panel" class="panel-section accent-section" hidden>
                 <div class="section-head">
                   <div>
-                    <h3>Faust Renderer</h3>
-                    <p class="section-copy">
-                      Route playback through the built-in Clavier or compile
-                      your own polyphonic Faust instrument directly in the
-                      browser.
-                    </p>
+                    <h3>Instrument Settings</h3>
                   </div>
                   <div id="faust-renderer-status" class="status-pill">Idle</div>
                 </div>
@@ -841,14 +811,10 @@
                 <div class="section-head">
                   <div>
                     <h3>Current Session</h3>
-                    <p class="section-copy">
-                      Create, reset, and tune the active Continuator engine
-                      without losing track of its current state.
-                    </p>
                   </div>
                 </div>
                 <p id="session-save-note" class="session-save-note">
-                  Guest session: sign in before creating a new session if you want it saved and reopenable.
+                  Guest session: sign in before creating a new session if you want it saved.
                 </p>
                 <div class="button-row">
                   <button id="create-session-button">Create Session</button>
@@ -856,17 +822,12 @@
                 </div>
                 <div class="settings-compact">
                   <div class="settings-label-row">
-                    <span class="small-copy">Continuator settings</span>
-                    <span class="small-copy">Compact summary</span>
+                    <span class="small-copy">Current settings</span>
                   </div>
                   <div id="settings-summary" class="settings-summary"></div>
                 </div>
                 <details class="settings-panel">
-                  <summary>Advanced Continuator Settings</summary>
-                  <p class="muted settings-copy">
-                    Keep the performance controls on the surface, and put the
-                    lower-frequency model and memory settings here.
-                  </p>
+                  <summary>Engine and Memory Settings</summary>
                   <div class="settings-grid">
                     <div class="field">
                       <label for="engine-kind-select">Engine</label>
@@ -929,9 +890,8 @@
                     </button>
                   </div>
                   <p class="small-copy settings-copy">
-                    New sessions use these settings automatically. Use Apply to
-                    update the current running session without clearing its
-                    memory.
+                    New sessions start with these settings. Apply Settings
+                    updates the running session without clearing memory.
                   </p>
                 </details>
                 <dl class="info-grid">
@@ -955,8 +915,7 @@
                   <div>
                     <h3>Saved Sessions</h3>
                     <p id="saved-sessions-copy" class="section-copy">
-                      Use the account control above to sign in, then reopen
-                      saved sessions here.
+                      Sign in to reopen sessions saved under your account.
                     </p>
                   </div>
                   <button

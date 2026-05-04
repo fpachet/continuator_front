@@ -116,6 +116,7 @@ const elements = {
   midiStatus: document.querySelector("#midi-status"),
   phraseStatus: document.querySelector("#phrase-status"),
   phraseGapMeter: document.querySelector("#phrase-gap-meter"),
+  phraseGapMeterLabel: document.querySelector("#phrase-gap-meter-label"),
   phraseGapMeterBar: document.querySelector("#phrase-gap-meter-bar"),
   phraseGapMeterCopy: document.querySelector("#phrase-gap-meter-copy"),
   selectedInputName: document.querySelector("#selected-input-name"),
@@ -247,6 +248,7 @@ const state = {
   lastGenerationMs: null,
   lastCaptureDurationMs: null,
   phraseGapAnimationFrameId: null,
+  serverWaitAnimationFrameId: null,
   playbackVisualizationFrameId: null,
   playbackVisualizationStartTimerId: null,
   playbackVisualizationDisplayEndsAtMs: 0,
@@ -1830,8 +1832,51 @@ function stopPhraseGapCountdown() {
     window.cancelAnimationFrame(state.phraseGapAnimationFrameId);
     state.phraseGapAnimationFrameId = null;
   }
+  if (elements.phraseGapMeter.classList.contains("is-server-wait")) {
+    return;
+  }
+  elements.phraseGapMeter.classList.remove("is-server-wait");
   elements.phraseGapMeter.hidden = true;
   elements.phraseGapMeterBar.style.width = "0%";
+}
+
+function serverWaitLabel(statusLabel) {
+  const normalizedLabel = (statusLabel || "").toLowerCase();
+  if (normalizedLabel.includes("memory") || normalizedLabel.includes("queue")) {
+    return statusLabel;
+  }
+  return "Waiting for Continuator";
+}
+
+function stopServerWaitIndicator() {
+  if (state.serverWaitAnimationFrameId) {
+    window.cancelAnimationFrame(state.serverWaitAnimationFrameId);
+    state.serverWaitAnimationFrameId = null;
+  }
+  if (!elements.phraseGapMeter.classList.contains("is-server-wait")) {
+    return;
+  }
+  elements.phraseGapMeter.classList.remove("is-server-wait");
+  elements.phraseGapMeter.hidden = true;
+  elements.phraseGapMeterBar.style.width = "0%";
+}
+
+function startServerWaitIndicator(label, startedAtMs = window.performance.now()) {
+  stopPhraseGapCountdown();
+  stopServerWaitIndicator();
+  elements.phraseGapMeterLabel.textContent = label;
+  elements.phraseGapMeterCopy.textContent = "0.0s";
+  elements.phraseGapMeterBar.style.width = "38%";
+  elements.phraseGapMeter.classList.add("is-server-wait");
+  elements.phraseGapMeter.hidden = false;
+
+  const tick = () => {
+    const elapsedMs = Math.max(0, window.performance.now() - startedAtMs);
+    elements.phraseGapMeterCopy.textContent = `${(elapsedMs / 1000).toFixed(1)}s`;
+    state.serverWaitAnimationFrameId = window.requestAnimationFrame(tick);
+  };
+
+  tick();
 }
 
 function updatePhraseGapCountdown(update) {
@@ -1851,6 +1896,8 @@ function updatePhraseGapCountdown(update) {
     window.cancelAnimationFrame(state.phraseGapAnimationFrameId);
   }
 
+  elements.phraseGapMeter.classList.remove("is-server-wait");
+  elements.phraseGapMeterLabel.textContent = "Listening for more notes";
   elements.phraseGapMeter.hidden = false;
   const tick = () => {
     const elapsedMs = Math.max(0, window.performance.now() - startedAtMs);
@@ -1858,7 +1905,7 @@ function updatePhraseGapCountdown(update) {
     const progress = Math.min(1, elapsedMs / timeoutMs);
     elements.phraseGapMeterBar.style.width = `${Math.round(progress * 100)}%`;
     elements.phraseGapMeterCopy.textContent = `${(remainingMs / 1000).toFixed(1)}s`;
-    setPhraseStatus(remainingMs > 0 ? "Closing phrase" : "Phrase ready");
+    setPhraseStatus(remainingMs > 0 ? "Listening" : "Phrase ready");
 
     if (remainingMs <= 0) {
       state.phraseGapAnimationFrameId = null;
@@ -2701,7 +2748,7 @@ function clearCurrentSessionState(message = null) {
 
 function createSavedSessionsMarkup(items) {
   if (!state.authUser) {
-    return `<p class="muted">Use the account control above to sign in and load your saved sessions.</p>`;
+    return `<p class="muted">Sign in to load your saved sessions.</p>`;
   }
   if (!items.length) {
     return `<p class="muted">No saved sessions yet. Create one, play a phrase, and it will appear here.</p>`;
@@ -2941,7 +2988,7 @@ function renderSavedSessions(items) {
     : "Guest mode";
   elements.savedSessionsCopy.textContent = state.authUser
     ? "Select a session to preview its details, then open it when you want to load its memory."
-    : "Use the account control above to sign in, then reopen saved sessions here.";
+    : "Sign in to reopen sessions saved under your account.";
   renderAccountTrigger();
   attachSavedSessionEvents();
   syncSavedSessionSelection();
@@ -3318,21 +3365,15 @@ function createMemorySummaryMarkup(memory) {
   }
 
   const chips = [
-    `${memory.summary.active_phrase_count} active sequences`,
+    `${memory.summary.active_phrase_count} active`,
     `${memory.summary.live_phrase_count} live`,
   ];
   if (memory.summary.seeded_phrase_count) {
     chips.push(`${memory.summary.seeded_phrase_count} seed`);
   }
-  chips.push(engineKindLabel(memory.configuration.engine_kind));
-  chips.push(`K=${memory.configuration.markov_order}`);
-  chips.push(memory.configuration.transposition ? "Transpose on" : "Transpose off");
   chips.push(
-    memory.configuration.forget_past
-      ? `Keep last ${memory.configuration.keep_last_inputs}`
-      : "Keep full memory",
+    `${engineKindLabel(memory.configuration.engine_kind)} / K=${memory.configuration.markov_order}`,
   );
-  chips.push(`Decay ${memory.configuration.decay_mode}`);
 
   return chips.map((label) => `<span class="settings-chip">${label}</span>`).join("");
 }
@@ -3343,12 +3384,10 @@ function createMemoryHint(memory) {
   }
   if (!memory.summary.active_phrase_count) {
     return memory.configuration.transposition
-      ? "No style phrases yet. When transpose is on, each learned phrase can appear as several active transposed variants."
+      ? "No style phrases yet. Transposed variants will appear here after learning."
       : "No style phrases yet. Play a phrase to start filling the Continuator vocabulary.";
   }
-  return memory.configuration.transposition
-    ? "The ribbon reads oldest to newest. The list below starts with the newest active phrase, and transposed variants appear separately when transpose is enabled."
-    : "The ribbon reads oldest to newest. Preview or play any phrase in the current style memory.";
+  return "";
 }
 
 function createMemoryRibbonMarkup(items) {
@@ -3382,22 +3421,23 @@ function createMemoryMarkup(items) {
     .reverse()
     .map((item) => {
       const itemLabel = item.source === "seed" ? "Seed" : "Live";
+      const detailLabel = item.source === "seed" ? "Seed phrase" : "Learned phrase";
       return `
         <div class="history-item memory-item" data-memory-index="${item.slot - 1}">
           <button class="memory-preview-button" data-memory-preview-index="${item.slot - 1}" type="button">
-            <span class="history-kind">${itemLabel} #${item.slot}</span>
-            ${createMemoryThumbnailMarkup(item)}
-            <span class="history-meta">
-              <strong>${item.note_count} notes / ${formatDurationSeconds(item.duration_seconds)}</strong>
-              <span>Active phrase ${item.slot} in the current style memory</span>
+            <span class="memory-card-head">
+              <span class="history-kind">${itemLabel} #${item.slot}</span>
+              <strong class="memory-primary">${item.note_count} notes / ${formatDurationSeconds(item.duration_seconds)}</strong>
             </span>
+            ${createMemoryThumbnailMarkup(item)}
+            <span class="memory-detail">${detailLabel} in the current style memory</span>
           </button>
           <div class="memory-actions">
             <button class="ghost memory-play-button" data-memory-play-index="${item.slot - 1}" type="button">
               Play
             </button>
             <button class="ghost memory-seed-button" data-memory-seed-index="${item.slot - 1}" type="button">
-              Seed
+              Use as Seed
             </button>
           </div>
         </div>
@@ -3524,7 +3564,9 @@ function attachMemoryEvents() {
 function renderMemory(memory) {
   state.memoryItems = memory?.items || [];
   elements.memorySummary.innerHTML = createMemorySummaryMarkup(memory);
-  elements.memoryHint.textContent = createMemoryHint(memory);
+  const memoryHint = createMemoryHint(memory);
+  elements.memoryHint.textContent = memoryHint;
+  elements.memoryHint.hidden = !memoryHint;
   elements.memoryRibbon.innerHTML = createMemoryRibbonMarkup(state.memoryItems);
   elements.memoryList.innerHTML = createMemoryMarkup(state.memoryItems);
   attachMemoryEvents();
@@ -4301,10 +4343,15 @@ async function requestContinuationFromEvents(
     handoffViewpoint,
   );
   const requestStartedAt = window.performance.now();
-  const payload = await requestJson("/api/continue", fetchOptions);
-  state.lastGenerationMs = window.performance.now() - requestStartedAt;
-  renderPerformanceState();
-  return { payload, continuationNoteCount };
+  startServerWaitIndicator(serverWaitLabel(statusLabel), requestStartedAt);
+  try {
+    const payload = await requestJson("/api/continue", fetchOptions);
+    state.lastGenerationMs = window.performance.now() - requestStartedAt;
+    renderPerformanceState();
+    return { payload, continuationNoteCount };
+  } finally {
+    stopServerWaitIndicator();
+  }
 }
 
 async function requestMemoryGeneration(
@@ -4324,15 +4371,20 @@ async function requestMemoryGeneration(
     enforce_end_constraint: enforceEndConstraint,
   };
   const requestStartedAt = window.performance.now();
-  const payload = await requestJson(`/api/sessions/${state.sessionId}/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(requestBody),
-    signal,
-  });
-  state.lastGenerationMs = window.performance.now() - requestStartedAt;
-  renderPerformanceState();
-  return { payload, noteCount };
+  startServerWaitIndicator(serverWaitLabel(statusLabel), requestStartedAt);
+  try {
+    const payload = await requestJson(`/api/sessions/${state.sessionId}/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
+      signal,
+    });
+    state.lastGenerationMs = window.performance.now() - requestStartedAt;
+    renderPerformanceState();
+    return { payload, noteCount };
+  } finally {
+    stopServerWaitIndicator();
+  }
 }
 
 async function sendCurrentPhrase() {

@@ -517,7 +517,7 @@ button.ghost.is-pending {
 
 .workspace-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   padding: 8px;
   margin-bottom: 18px;
@@ -1093,6 +1093,20 @@ input[type="password"]:disabled {
   transition: width 90ms linear;
 }
 
+.phrase-gap-meter.is-server-wait {
+  border-color: rgba(244, 162, 97, 0.24);
+  background: rgba(244, 162, 97, 0.09);
+}
+
+.phrase-gap-meter.is-server-wait .phrase-gap-meter-head strong {
+  color: var(--accent);
+}
+
+.phrase-gap-meter.is-server-wait .phrase-gap-bar {
+  width: 38%;
+  animation: server-wait-sweep 1100ms ease-in-out infinite;
+}
+
 .faust-control-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1528,20 +1542,24 @@ input[type="password"]:disabled {
 }
 
 .memory-item .history-kind {
-  min-width: 96px;
+  min-width: 0;
+  width: fit-content;
+  max-width: 100%;
+  white-space: nowrap;
 }
 
 .memory-item {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: 10px;
   overflow: hidden;
 }
 
 .memory-preview-button {
   display: grid;
-  grid-template-columns: minmax(82px, auto) minmax(76px, 104px) minmax(0, 1fr);
-  gap: 12px;
-  align-items: center;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 9px;
+  align-items: stretch;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -1556,21 +1574,42 @@ input[type="password"]:disabled {
   transform: none;
 }
 
+.memory-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.memory-primary {
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.94rem;
+  line-height: 1.25;
+  text-align: right;
+}
+
+.memory-detail {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
 .memory-actions {
   display: grid;
-  grid-template-columns: minmax(74px, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  align-self: stretch;
-  min-width: 86px;
+  min-width: 0;
 }
 
 .memory-thumbnail {
   position: relative;
   display: block;
   width: 100%;
-  height: 42px;
+  height: 48px;
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.06);
   background:
     linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
@@ -1589,9 +1628,10 @@ input[type="password"]:disabled {
 .memory-play-button,
 .memory-seed-button {
   width: 100%;
-  min-height: 36px;
+  min-height: 34px;
   margin-left: 0;
-  padding: 8px 11px;
+  padding: 7px 10px;
+  font-size: 0.82rem;
   justify-content: center;
   white-space: nowrap;
 }
@@ -1797,6 +1837,16 @@ input[type="password"]:disabled {
 
   100% {
     box-shadow: 0 0 0 1px rgba(244, 162, 97, 0.22), 0 0 0 12px rgba(244, 162, 97, 0.08);
+  }
+}
+
+@keyframes server-wait-sweep {
+  from {
+    transform: translateX(-120%);
+  }
+
+  to {
+    transform: translateX(270%);
   }
 }
 
