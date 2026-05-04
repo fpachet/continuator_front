@@ -349,6 +349,28 @@ def session_memory(
         raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
 
 
+@app.delete(
+    "/api/sessions/{session_id}/memory/{slot}",
+    response_model=SessionMemoryResponse,
+    tags=["session"],
+)
+def delete_session_memory_phrase(
+    session_id: str,
+    slot: int,
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+) -> SessionMemoryResponse:
+    try:
+        return session_manager.delete_memory_phrase(
+            session_id,
+            None if current_user is None else current_user.id,
+            slot,
+        )
+    except UnknownSessionError as error:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.post(
     "/api/sessions/{session_id}/import-midi",
     response_model=ImportMidiResponse,

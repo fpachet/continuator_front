@@ -3439,24 +3439,31 @@ function createMemoryMarkup(items) {
     .reverse()
     .map((item) => {
       const itemLabel = item.source === "seed" ? "Seed" : "Live";
-      const detailLabel = item.source === "seed" ? "Seed phrase" : "Learned phrase";
+      const deleteButton = item.deletable
+        ? `
+            <button class="ghost danger-button memory-delete-button" data-memory-delete-index="${item.slot - 1}" type="button">
+              Delete
+            </button>
+          `
+        : "";
       return `
         <div class="history-item memory-item" data-memory-index="${item.slot - 1}">
           <button class="memory-preview-button" data-memory-preview-index="${item.slot - 1}" type="button">
             <span class="memory-card-head">
               <span class="history-kind">${itemLabel} #${item.slot}</span>
-              <strong class="memory-primary">${item.note_count} notes / ${formatDurationSeconds(item.duration_seconds)}</strong>
+              <strong class="memory-primary">${item.note_count} notes</strong>
             </span>
             ${createMemoryThumbnailMarkup(item)}
-            <span class="memory-detail">${detailLabel} in the current style memory</span>
+            <span class="memory-detail">${formatDurationSeconds(item.duration_seconds)}</span>
           </button>
-          <div class="memory-actions">
+          <div class="memory-actions ${item.deletable ? "has-delete" : ""}">
             <button class="ghost memory-play-button" data-memory-play-index="${item.slot - 1}" type="button">
               Play
             </button>
             <button class="ghost memory-seed-button" data-memory-seed-index="${item.slot - 1}" type="button">
-              Use as Seed
+              Seed
             </button>
+            ${deleteButton}
           </div>
         </div>
       `;
@@ -3554,6 +3561,43 @@ function attachMemoryEvents() {
     setPhraseMessage(`Using ${item.source} memory slot ${item.slot} as the infinite-mode seed.`);
   };
 
+  const deleteMemoryIndex = async (rawIndex) => {
+    const memoryIndex = Number(rawIndex);
+    const item = state.memoryItems[memoryIndex];
+    if (!item) {
+      return;
+    }
+    if (!item.deletable) {
+      setPhraseMessage("That memory phrase cannot be deleted from this session.", true);
+      return;
+    }
+    const confirmed = window.confirm(
+      `Delete ${item.source} memory slot ${item.slot} from the active memory?`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      stopInfiniteMode({ stopPlayback: true, silent: true });
+      stopActivePlayback();
+      state.previewedMemoryIndex = null;
+      setPhraseStatus("Updating memory");
+      setPhraseMessage(`Deleting memory slot ${item.slot} and rebuilding the active memory...`);
+      const payload = await requestJson(
+        `/api/sessions/${state.sessionId}/memory/${item.slot}`,
+        { method: "DELETE" },
+      );
+      renderMemory(payload);
+      await refreshSavedSessions();
+      setPhraseStatus("Memory updated");
+      setPhraseMessage(`Deleted memory slot ${item.slot}. Active memory was rebuilt.`);
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+      setPhraseStatus("Error");
+    }
+  };
+
   elements.memoryList.querySelectorAll("[data-memory-preview-index]").forEach((node) => {
     node.addEventListener("click", () => {
       previewMemoryIndex(node.dataset.memoryPreviewIndex);
@@ -3569,6 +3613,12 @@ function attachMemoryEvents() {
   elements.memoryList.querySelectorAll("[data-memory-seed-index]").forEach((node) => {
     node.addEventListener("click", () => {
       seedMemoryIndex(node.dataset.memorySeedIndex);
+    });
+  });
+
+  elements.memoryList.querySelectorAll("[data-memory-delete-index]").forEach((node) => {
+    node.addEventListener("click", () => {
+      void deleteMemoryIndex(node.dataset.memoryDeleteIndex);
     });
   });
 

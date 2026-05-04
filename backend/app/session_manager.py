@@ -219,6 +219,64 @@ class SessionManager:
         restored_state, _, _ = self._restore_session_state(session_record)
         return restored_state
 
+    def _last_reset_at(self, session_id: str, owner_user_id: str | None) -> str | None:
+        session_record = self.storage.get_session_record(
+            session_id,
+            owner_user_id,
+            allow_guest=True,
+        )
+        if session_record is None:
+            raise UnknownSessionError(session_id)
+        last_reset_at = session_record.get("last_reset_at")
+        return None if last_reset_at is None else str(last_reset_at)
+
+    def _memory_response(
+        self,
+        state: SessionState,
+        last_reset_at: str | None,
+    ) -> SessionMemoryResponse:
+        payloads, seeded_count = state.engine.get_memory_snapshot()
+        live_payloads = payloads[seeded_count:]
+        rebuild_records = self.storage.get_rebuild_phrase_records(
+            state.session_id,
+            last_reset_at=last_reset_at,
+        )
+        record_offset = (
+            len(rebuild_records) - len(live_payloads)
+            if live_payloads and len(rebuild_records) >= len(live_payloads)
+            else None
+        )
+        items: list[MemoryPhraseItem] = []
+        for index, payload in enumerate(payloads):
+            phrase_id: str | None = None
+            if index >= seeded_count and record_offset is not None:
+                record_index = record_offset + (index - seeded_count)
+                if 0 <= record_index < len(rebuild_records):
+                    phrase_id = str(rebuild_records[record_index]["id"])
+            items.append(
+                MemoryPhraseItem(
+                    slot=index + 1,
+                    source="seed" if index < seeded_count else "live",
+                    phrase_id=phrase_id,
+                    deletable=phrase_id is not None,
+                    event_count=payload.event_count,
+                    note_count=payload.note_count,
+                    duration_seconds=payload.duration_seconds,
+                    payload=payload,
+                )
+            )
+        summary = SessionMemorySummary(
+            active_phrase_count=len(items),
+            seeded_phrase_count=seeded_count,
+            live_phrase_count=max(0, len(items) - seeded_count),
+        )
+        return SessionMemoryResponse(
+            session_id=state.session_id,
+            configuration=state.configuration,
+            summary=summary,
+            items=items,
+        )
+
     def open_session(self, session_id: str, owner_user_id: str) -> OpenSessionResponse:
         session_record = self.storage.get_session_record(session_id, owner_user_id)
         if session_record is None:
@@ -430,28 +488,63 @@ class SessionManager:
 
     def get_memory(self, session_id: str, owner_user_id: str | None) -> SessionMemoryResponse:
         state = self._require_session(session_id, owner_user_id)
-        payloads, seeded_count = state.engine.get_memory_snapshot()
-        items = [
-            MemoryPhraseItem(
-                slot=index + 1,
-                source="seed" if index < seeded_count else "live",
-                event_count=payload.event_count,
-                note_count=payload.note_count,
-                duration_seconds=payload.duration_seconds,
-                payload=payload,
-            )
-            for index, payload in enumerate(payloads)
-        ]
-        summary = SessionMemorySummary(
-            active_phrase_count=len(items),
-            seeded_phrase_count=seeded_count,
-            live_phrase_count=max(0, len(items) - seeded_count),
+        return self._memory_response(
+            state,
+            self._last_reset_at(session_id, owner_user_id),
         )
-        return SessionMemoryResponse(
-            session_id=session_id,
-            configuration=state.configuration,
-            summary=summary,
-            items=items,
+
+    def delete_memory_phrase(
+        self,
+        session_id: str,
+        owner_user_id: str | None,
+        slot: int,
+    ) -> SessionMemoryResponse:
+        state = self._require_session(session_id, owner_user_id)
+        last_reset_at = self._last_reset_at(session_id, owner_user_id)
+        payloads, seeded_count = state.engine.get_memory_snapshot()
+        if slot < 1 or slot > len(payloads):
+            raise ValueError(f"Unknown memory slot: {slot}")
+        if slot <= seeded_count:
+            raise ValueError("Seed memory phrases come from configured seed material.")
+
+        live_payloads = payloads[seeded_count:]
+        live_index = slot - seeded_count - 1
+        rebuild_records = self.storage.get_rebuild_phrase_records(
+            session_id,
+            last_reset_at=last_reset_at,
+        )
+        if len(rebuild_records) < len(live_payloads):
+            raise ValueError("This memory phrase cannot be mapped to a stored learned phrase.")
+
+        record_offset = len(rebuild_records) - len(live_payloads)
+        target_record_index = record_offset + live_index
+        if target_record_index < 0 or target_record_index >= len(rebuild_records):
+            raise ValueError(f"Unknown memory slot: {slot}")
+
+        remaining_live_records = [
+            record
+            for index, record in enumerate(
+                rebuild_records[record_offset : record_offset + len(live_payloads)]
+            )
+            if index != live_index
+        ]
+        remaining_payloads = [
+            PhrasePayload.model_validate(record["payload"])
+            for record in remaining_live_records
+        ]
+        state.engine.replace_live_memory(remaining_payloads)
+
+        remaining_phrase_ids = [str(record["id"]) for record in remaining_live_records]
+        self.storage.keep_only_active_learned_phrases(
+            session_id,
+            remaining_phrase_ids,
+            last_reset_at=last_reset_at,
+        )
+        state.last_seen_at = utc_now_iso()
+        self.storage.touch_session(session_id, state.last_seen_at)
+        return self._memory_response(
+            state,
+            self._last_reset_at(session_id, owner_user_id),
         )
 
     def reset_session(self, session_id: str, owner_user_id: str | None) -> ResetSessionResponse:

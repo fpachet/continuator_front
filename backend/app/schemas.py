@@ -181,6 +181,8 @@ class SessionHistoryResponse(BaseModel):
 class MemoryPhraseItem(BaseModel):
     slot: int = Field(ge=1)
     source: MemoryPhraseSource
+    phrase_id: str | None = None
+    deletable: bool = False
     event_count: int = Field(ge=0)
     note_count: int = Field(ge=0)
     duration_seconds: float = Field(ge=0.0)

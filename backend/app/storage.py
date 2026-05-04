@@ -441,6 +441,62 @@ class PhraseStorage:
 
         return [json.loads(str(row["payload_json"])) for row in rows]
 
+    def get_rebuild_phrase_records(
+        self,
+        session_id: str,
+        last_reset_at: str | None = None,
+    ) -> list[dict[str, object]]:
+        query = """
+            SELECT id, payload_json
+            FROM phrases
+            WHERE session_id = ?
+              AND kind = 'input'
+              AND COALESCE(learned, 1) = 1
+        """
+        params: list[object] = [session_id]
+        if last_reset_at is not None:
+            query += " AND created_at > ?"
+            params.append(last_reset_at)
+        query += " ORDER BY created_at ASC, id ASC"
+
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(query, params).fetchall()
+
+        return [
+            {
+                "id": row["id"],
+                "payload": json.loads(str(row["payload_json"])),
+            }
+            for row in rows
+        ]
+
+    def keep_only_active_learned_phrases(
+        self,
+        session_id: str,
+        phrase_ids_to_keep: list[str],
+        last_reset_at: str | None = None,
+    ) -> int:
+        query = """
+            UPDATE phrases
+            SET learned = 0
+            WHERE session_id = ?
+              AND kind = 'input'
+              AND COALESCE(learned, 1) = 1
+        """
+        params: list[object] = [session_id]
+        if last_reset_at is not None:
+            query += " AND created_at > ?"
+            params.append(last_reset_at)
+        if phrase_ids_to_keep:
+            placeholders = ", ".join("?" for _ in phrase_ids_to_keep)
+            query += f" AND id NOT IN ({placeholders})"
+            params.extend(phrase_ids_to_keep)
+
+        with self._lock, self._connect() as connection:
+            cursor = connection.execute(query, params)
+            connection.commit()
+        return int(cursor.rowcount)
+
     def count_continuation_requests(
         self,
         session_id: str,

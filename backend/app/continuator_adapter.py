@@ -487,6 +487,23 @@ class ContinuatorSessionEngine:
                 transpose=self._continuator.transpose,
             )
 
+    def replace_live_memory(self, payloads: list[PhrasePayload]) -> list[PhrasePayload]:
+        with self._lock:
+            self._continuator = self._create_engine(load_seed_material=True)
+            rebuilt_payloads: list[PhrasePayload] = []
+            for payload in payloads:
+                phrase_events = [MidiEvent.model_validate(event) for event in payload.events]
+                try:
+                    rebuilt_payloads.append(
+                        self._learn_phrase_events_locked(
+                            phrase_events,
+                            transpose=False,
+                        )
+                    )
+                except NoContinuationAvailable:
+                    continue
+            return rebuilt_payloads
+
     def import_midi_files(
         self,
         midi_files: list[tuple[str, bytes]],
