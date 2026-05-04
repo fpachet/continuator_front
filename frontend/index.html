@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Web Continuator</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260504-compact-title" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260504-compact-header" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -14,6 +14,7 @@
         <h1>Web Continuator</h1>
       </div>
       <div class="hero-side">
+        <span id="timing-readout" class="hero-status small-copy">Waiting for first phrase</span>
         <div class="hero-actions">
           <button
             class="hero-utility-button ghost"
@@ -986,7 +987,6 @@
         <article class="card timeline-card">
           <div class="card-head">
             <h2>Phrase Timeline</h2>
-            <span id="timing-readout" class="small-copy">Waiting for first phrase</span>
           </div>
           <div id="phrase-timeline" class="phrase-timeline">
             <div id="timeline-captured" class="timeline-segment">

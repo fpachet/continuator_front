@@ -69,23 +69,24 @@ body.sheet-open {
 
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(260px, 0.8fr);
-  gap: 24px;
-  align-items: start;
-  padding: 42px 28px 20px;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+  padding: 18px 28px 12px;
   animation: rise-in 700ms ease;
 }
 
 .hero-copy {
-  align-self: end;
+  align-self: center;
 }
 
 .hero-copy h1 {
-  margin: 6px 0 10px;
+  margin: 0;
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
-  font-size: 3.1rem;
+  font-size: 1.55rem;
   line-height: 1;
   letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .eyebrow {
@@ -106,10 +107,11 @@ body.sheet-open {
 
 .hero-side {
   position: relative;
-  display: grid;
-  gap: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   justify-self: end;
-  width: min(100%, 420px);
+  width: min(100%, 920px);
 }
 
 .hero-actions {
@@ -117,8 +119,17 @@ body.sheet-open {
   justify-content: flex-end;
 }
 
+.hero-status {
+  min-width: 0;
+  margin-right: 2px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .hero-utility-button {
-  padding: 10px 14px;
+  padding: 8px 13px;
   border-radius: 999px;
   backdrop-filter: blur(10px);
 }
@@ -339,6 +350,11 @@ body.sheet-open {
 }
 
 .hero-account-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 10;
+  width: min(420px, calc(100vw - 56px));
   margin-bottom: 0;
   box-shadow: var(--shadow);
   backdrop-filter: blur(18px);
@@ -1857,12 +1873,28 @@ input[type="password"]:disabled {
   }
 
   .hero {
-    padding-top: 32px;
+    gap: 12px;
+    padding-top: 16px;
   }
 
   .hero-copy,
   .hero-side {
     justify-self: stretch;
+  }
+
+  .hero-copy h1 {
+    font-size: 1.45rem;
+  }
+
+  .hero-side {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .hero-status {
+    order: 3;
+    width: 100%;
+    text-align: left;
   }
 
   .hero-actions {
@@ -1900,21 +1932,26 @@ input[type="password"]:disabled {
   }
 
   .hero {
-    gap: 16px;
-    padding-top: 28px;
-    padding-bottom: 18px;
+    gap: 12px;
+    padding-top: 14px;
+    padding-bottom: 14px;
   }
 
   .hero-copy h1 {
     max-width: 100%;
-    font-size: 2.15rem;
+    font-size: 1.35rem;
     overflow-wrap: break-word;
+    white-space: normal;
   }
 
   .hero-side,
   .account-trigger {
     width: 100%;
     max-width: 100%;
+  }
+
+  .hero-account-panel {
+    width: calc(100vw - 32px);
   }
 
   .card {
