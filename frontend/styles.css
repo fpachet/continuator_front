@@ -394,6 +394,154 @@ body.sheet-open {
   display: none;
 }
 
+.graph-panel {
+  position: fixed;
+  top: 84px;
+  left: 24px;
+  z-index: 30;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  width: min(780px, calc(100vw - 32px));
+  height: min(640px, calc(100vh - 110px));
+  min-width: 380px;
+  min-height: 310px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow: hidden;
+  resize: both;
+  padding: 14px;
+  border-radius: 18px;
+  border: 2px solid rgba(244, 162, 97, 0.72);
+  background:
+    linear-gradient(140deg, rgba(39, 54, 61, 0.98), rgba(20, 29, 36, 0.98)),
+    var(--panel);
+  box-shadow:
+    0 22px 70px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 0 0 6px rgba(244, 162, 97, 0.08);
+  backdrop-filter: blur(18px);
+}
+
+.graph-panel::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 24px;
+  height: 24px;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, transparent 0 38%, rgba(244, 162, 97, 0.88) 38% 48%, transparent 48% 100%),
+    linear-gradient(135deg, transparent 0 56%, rgba(244, 162, 97, 0.68) 56% 66%, transparent 66% 100%),
+    linear-gradient(135deg, transparent 0 74%, rgba(244, 162, 97, 0.48) 74% 84%, transparent 84% 100%);
+  opacity: 1;
+}
+
+.graph-panel[hidden] {
+  display: none;
+}
+
+.graph-panel.is-dragging {
+  user-select: none;
+}
+
+.graph-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin: -14px -14px 10px;
+  padding: 12px 14px;
+  cursor: move;
+  touch-action: none;
+  border-bottom: 1px solid rgba(244, 162, 97, 0.38);
+  background:
+    linear-gradient(90deg, rgba(244, 162, 97, 0.25), rgba(109, 211, 206, 0.13)),
+    rgba(255, 255, 255, 0.045);
+}
+
+.graph-head button {
+  cursor: pointer;
+}
+
+.graph-head h2 {
+  margin: 4px 0 0;
+  font-size: 1.12rem;
+  color: #fff8ee;
+}
+
+.graph-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 8px;
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.graph-tab {
+  min-height: 0;
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.1;
+  box-shadow: none;
+}
+
+.graph-tab.is-active {
+  background: rgba(109, 211, 206, 0.14);
+  color: var(--text);
+}
+
+.graph-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.graph-controls label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.graph-controls select {
+  min-height: 28px;
+  width: auto;
+  padding: 4px 24px 4px 9px;
+  border-radius: 8px;
+  border-color: rgba(244, 162, 97, 0.32);
+  background-color: rgba(7, 18, 23, 0.78);
+  color: var(--text);
+  font-size: 0.78rem;
+}
+
+.graph-image-frame {
+  min-height: 0;
+  height: 100%;
+  overflow: auto;
+  border-radius: 14px;
+  border: 1px solid rgba(244, 162, 97, 0.3);
+  background: #071217;
+}
+
+.graph-image-frame img {
+  display: block;
+  width: 100%;
+  min-width: 640px;
+  height: auto;
+}
+
 .readme-head {
   display: flex;
   align-items: flex-start;
@@ -2084,6 +2232,50 @@ input[type="password"]:disabled {
     left: 16px;
     width: auto;
     max-height: calc(100vh - 32px);
+  }
+
+  .graph-panel {
+    top: 16px;
+    left: 16px;
+    width: calc(100vw - 32px);
+    height: min(560px, calc(100vh - 32px));
+    min-width: 0;
+    min-height: 280px;
+    max-height: calc(100vh - 32px);
+    padding: 12px;
+    resize: vertical;
+  }
+
+  .graph-head {
+    margin: -12px -12px 10px;
+    flex-direction: column;
+    cursor: default;
+  }
+
+  .graph-tabs {
+    grid-template-columns: 1fr;
+  }
+
+  .graph-controls {
+    align-items: stretch;
+  }
+
+  .graph-controls label {
+    flex: 1 1 150px;
+  }
+
+  .graph-controls select {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .graph-image-frame {
+    min-height: 0;
+    max-height: none;
+  }
+
+  .graph-image-frame img {
+    min-width: 620px;
   }
 
   .readme-head {

@@ -63,6 +63,7 @@ const ENGINE_KIND_LABELS = new Map([
   ["context_bp", "Context BP"],
   ["vo_regular_bp", "VO Regular BP"],
 ]);
+const GRAPH_MODES = new Set(["slice", "all", "most_used", "neighborhood"]);
 const FAUST_UI_CONTROL_TYPES = new Set([
   "hslider",
   "vslider",
@@ -87,6 +88,19 @@ const elements = {
   closeReadmeButton: document.querySelector("#close-readme-button"),
   readmePanel: document.querySelector("#readme-panel"),
   readmeOverlay: document.querySelector("#readme-overlay"),
+  showGraphButton: document.querySelector("#show-graph-button"),
+  closeGraphButton: document.querySelector("#close-graph-button"),
+  graphHead: document.querySelector(".graph-head"),
+  graphPanel: document.querySelector("#graph-panel"),
+  graphOverlay: document.querySelector("#graph-overlay"),
+  graphImage: document.querySelector("#graph-image"),
+  graphImageFrame: document.querySelector(".graph-image-frame"),
+  graphMeta: document.querySelector("#graph-meta"),
+  graphTitle: document.querySelector("#graph-title"),
+  graphKindTabs: document.querySelectorAll("[data-graph-kind]"),
+  graphControls: document.querySelector("#graph-controls"),
+  graphModeSelect: document.querySelector("#graph-mode-select"),
+  graphOrderSelect: document.querySelector("#graph-order-select"),
   accountPanel: document.querySelector("#account-panel"),
   accountPanelCopy: document.querySelector("#account-panel-copy"),
   authStatus: document.querySelector("#auth-status"),
@@ -230,6 +244,14 @@ const state = {
   sessionId: null,
   sessionIsOwned: false,
   readmeOpen: false,
+  graphOpen: false,
+  graphImageUrl: null,
+  graphLoading: false,
+  activeGraphKind: "memory",
+  graphMode: "slice",
+  graphOrder: "all",
+  graphPanelPosition: null,
+  graphDragState: null,
   accountPanelOpen: false,
   sessionConfiguration: null,
   lastCapturedPhrase: [],
@@ -2278,18 +2300,224 @@ function renderAccountTrigger() {
   elements.authStatusCopy.textContent = "Click to sign in";
 }
 
+function syncSheetOpenClass() {
+  document.body.classList.toggle("sheet-open", state.readmeOpen);
+}
+
 function setReadmeOpen(open) {
   state.readmeOpen = open;
   elements.readmePanel.hidden = !open;
   elements.readmeOverlay.hidden = !open;
   elements.openReadmeButton.setAttribute("aria-expanded", String(open));
-  document.body.classList.toggle("sheet-open", open);
+  syncSheetOpenClass();
   if (open) {
+    setGraphOpen(false);
     setAccountPanelOpen(false);
     window.requestAnimationFrame(() => {
       elements.closeReadmeButton?.focus();
     });
   }
+}
+
+function clearGraphImage() {
+  if (state.graphImageUrl) {
+    URL.revokeObjectURL(state.graphImageUrl);
+    state.graphImageUrl = null;
+  }
+  elements.graphImage.removeAttribute("src");
+}
+
+function normalizedGraphKind(kind) {
+  return kind === "constraints" ? "constraints" : "memory";
+}
+
+function normalizedGraphMode(mode) {
+  return GRAPH_MODES.has(mode) ? mode : "slice";
+}
+
+function normalizedGraphOrder(order) {
+  return order === "all" ? "all" : String(normalizedMarkovOrder(order));
+}
+
+function graphOrderLimit() {
+  return normalizedMarkovOrder(
+    state.sessionConfiguration?.markov_order || elements.markovOrderInput?.value || 4,
+  );
+}
+
+function syncGraphOrderOptions() {
+  const select = elements.graphOrderSelect;
+  if (!select) {
+    return;
+  }
+  const selected = normalizedGraphOrder(state.graphOrder);
+  const limit = graphOrderLimit();
+  select.innerHTML = "";
+  const allOption = document.createElement("option");
+  allOption.value = "all";
+  allOption.textContent = "All orders";
+  select.append(allOption);
+  for (let order = 1; order <= limit; order += 1) {
+    const option = document.createElement("option");
+    option.value = String(order);
+    option.textContent = `Order ${order}`;
+    select.append(option);
+  }
+  const nextValue = selected === "all" || Number(selected) <= limit ? selected : "all";
+  state.graphOrder = nextValue;
+  select.value = nextValue;
+}
+
+function graphKindTitle(kind) {
+  return normalizedGraphKind(kind) === "constraints"
+    ? "Last Constraint Graph"
+    : "Memory Graph";
+}
+
+function graphKindMeta(kind, phase = "idle") {
+  const normalizedKind = normalizedGraphKind(kind);
+  if (phase === "loading") {
+    return normalizedKind === "constraints"
+      ? "Rendering the latest constrained generation trace..."
+      : "Rendering the learned memory graph...";
+  }
+  return normalizedKind === "constraints"
+    ? "Snapshot from the most recent constrained generation request."
+    : "Snapshot generated from the active session memory.";
+}
+
+function graphKindEndpoint(kind) {
+  const normalizedKind = normalizedGraphKind(kind);
+  const timestamp = Date.now();
+  if (normalizedKind === "constraints") {
+    return `/api/sessions/${state.sessionId}/graphs/constraints.svg?max_steps=96&ts=${timestamp}`;
+  }
+  const mode = normalizedGraphMode(state.graphMode);
+  const order = normalizedGraphOrder(state.graphOrder);
+  const params = new URLSearchParams({
+    max_nodes: mode === "all" ? "240" : "96",
+    max_edges: mode === "all" ? "600" : "220",
+    mode,
+    ts: String(timestamp),
+  });
+  if (order !== "all") {
+    params.set("order", order);
+  }
+  return `/api/sessions/${state.sessionId}/graphs/memory.svg?${params.toString()}`;
+}
+
+function setActiveGraphKind(kind) {
+  state.activeGraphKind = normalizedGraphKind(kind);
+  elements.graphTitle.textContent = graphKindTitle(state.activeGraphKind);
+  elements.graphMeta.textContent = graphKindMeta(state.activeGraphKind);
+  syncGraphOrderOptions();
+  if (elements.graphControls) {
+    elements.graphControls.hidden = state.activeGraphKind !== "memory";
+  }
+  elements.graphKindTabs.forEach((node) => {
+    const active = normalizedGraphKind(node.dataset.graphKind) === state.activeGraphKind;
+    node.classList.toggle("is-active", active);
+    node.setAttribute("aria-selected", String(active));
+  });
+}
+
+function clampGraphPanelPosition(position) {
+  const panel = elements.graphPanel;
+  const margin = 8;
+  const visibleStrip = 120;
+  const verticalStrip = 80;
+  const panelWidth = panel?.offsetWidth || 780;
+  const minX = Math.min(margin, visibleStrip - panelWidth);
+  const minY = margin;
+  const maxX = Math.max(minX, window.innerWidth - visibleStrip);
+  const maxY = Math.max(minY, window.innerHeight - verticalStrip);
+  return {
+    x: Math.min(maxX, Math.max(minX, Math.round(position.x))),
+    y: Math.min(maxY, Math.max(minY, Math.round(position.y))),
+  };
+}
+
+function defaultGraphPanelPosition() {
+  const panel = elements.graphPanel;
+  const panelWidth = panel?.offsetWidth || 780;
+  return clampGraphPanelPosition({
+    x: window.innerWidth - panelWidth - 24,
+    y: 84,
+  });
+}
+
+function applyGraphPanelPosition(position) {
+  const nextPosition = clampGraphPanelPosition(position);
+  state.graphPanelPosition = nextPosition;
+  elements.graphPanel.style.left = `${nextPosition.x}px`;
+  elements.graphPanel.style.top = `${nextPosition.y}px`;
+}
+
+function ensureGraphPanelPosition() {
+  applyGraphPanelPosition(state.graphPanelPosition || defaultGraphPanelPosition());
+}
+
+function setGraphOpen(open) {
+  state.graphOpen = open;
+  elements.graphPanel.hidden = !open;
+  elements.graphOverlay.hidden = true;
+  elements.showGraphButton.setAttribute("aria-expanded", String(open));
+  syncSheetOpenClass();
+  if (open) {
+    setReadmeOpen(false);
+    setAccountPanelOpen(false);
+    window.requestAnimationFrame(() => {
+      ensureGraphPanelPosition();
+    });
+    return;
+  }
+  clearGraphImage();
+}
+
+function graphDragHandleIsInteractive(target) {
+  return target instanceof Element && Boolean(target.closest("button, a, input, select, textarea"));
+}
+
+function startGraphPanelDrag(event) {
+  if (event.button !== 0 || graphDragHandleIsInteractive(event.target)) {
+    return;
+  }
+  if (window.matchMedia("(max-width: 640px)").matches) {
+    return;
+  }
+  event.preventDefault();
+  ensureGraphPanelPosition();
+  const position = state.graphPanelPosition || defaultGraphPanelPosition();
+  state.graphDragState = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    panelX: position.x,
+    panelY: position.y,
+  };
+  elements.graphPanel.classList.add("is-dragging");
+  elements.graphHead.setPointerCapture?.(event.pointerId);
+}
+
+function moveGraphPanelDrag(event) {
+  const dragState = state.graphDragState;
+  if (!dragState || dragState.pointerId !== event.pointerId) {
+    return;
+  }
+  applyGraphPanelPosition({
+    x: dragState.panelX + event.clientX - dragState.startX,
+    y: dragState.panelY + event.clientY - dragState.startY,
+  });
+}
+
+function stopGraphPanelDrag(event) {
+  const dragState = state.graphDragState;
+  if (!dragState || dragState.pointerId !== event.pointerId) {
+    return;
+  }
+  state.graphDragState = null;
+  elements.graphPanel.classList.remove("is-dragging");
+  elements.graphHead.releasePointerCapture?.(event.pointerId);
 }
 
 function setAccountPanelOpen(open) {
@@ -2660,6 +2888,11 @@ function updateSessionActionState() {
   const hasPendingSettings = hasPendingSessionSettings();
   elements.createSessionButton.disabled = false;
   elements.resetSessionButton.disabled = !state.sessionId;
+  elements.showGraphButton.disabled = !state.sessionId || state.graphLoading;
+  elements.showGraphButton.classList.toggle("is-pending", state.graphLoading);
+  elements.showGraphButton.textContent = state.graphLoading
+    ? "Rendering..."
+    : "Show Memory Graph";
   elements.applySettingsButton.disabled = !state.sessionId || !hasPendingSettings;
   elements.applySettingsButton.classList.toggle("is-pending", hasPendingSettings);
   elements.applySettingsButton.textContent = !state.sessionId
@@ -2753,6 +2986,7 @@ function clearCurrentSessionState(message = null) {
   state.historyItems = [];
   state.memoryItems = [];
   elements.sessionId.textContent = "Open or create a session";
+  setGraphOpen(false);
   clearPhraseBuffers();
   renderHistory([]);
   renderMemory(null);
@@ -4287,12 +4521,104 @@ async function refreshMemory() {
   renderMemory(payload);
 }
 
+async function updateSessionGraphImage(
+  kind = state.activeGraphKind,
+  {
+    openPanel = true,
+    announce = true,
+    closeOnError = true,
+    preserveScroll = false,
+  } = {},
+) {
+  if (!state.sessionId) {
+    if (announce) {
+      setPhraseMessage("Create a session before showing its graph.", true);
+    }
+    return;
+  }
+
+  const graphKind = normalizedGraphKind(kind);
+  const previousScrollLeft = preserveScroll ? elements.graphImageFrame?.scrollLeft || 0 : 0;
+  const previousScrollTop = preserveScroll ? elements.graphImageFrame?.scrollTop || 0 : 0;
+  state.graphLoading = true;
+  updateSessionActionState();
+  setActiveGraphKind(graphKind);
+  elements.graphMeta.textContent = graphKindMeta(graphKind, "loading");
+  if (openPanel || !preserveScroll) {
+    clearGraphImage();
+  }
+  if (openPanel) {
+    setGraphOpen(true);
+  }
+
+  try {
+    const response = await fetch(graphKindEndpoint(graphKind), {
+      headers: { Accept: "image/svg+xml" },
+    });
+    const rawText = await response.text();
+    if (!response.ok) {
+      let detail = rawText || `Graph request failed (${response.status}).`;
+      try {
+        const payload = JSON.parse(rawText);
+        if (typeof payload?.detail === "string") {
+          detail = payload.detail;
+        }
+      } catch {
+        // Keep the raw response text.
+      }
+      throw new Error(detail);
+    }
+
+    const nextImageUrl = URL.createObjectURL(
+      new Blob([rawText], { type: "image/svg+xml" }),
+    );
+    const previousImageUrl = state.graphImageUrl;
+    state.graphImageUrl = nextImageUrl;
+    elements.graphImage.src = nextImageUrl;
+    if (previousImageUrl) {
+      URL.revokeObjectURL(previousImageUrl);
+    }
+    elements.graphMeta.textContent = graphKindMeta(graphKind);
+    if (preserveScroll && elements.graphImageFrame) {
+      window.requestAnimationFrame(() => {
+        elements.graphImageFrame.scrollLeft = previousScrollLeft;
+        elements.graphImageFrame.scrollTop = previousScrollTop;
+      });
+    }
+    if (announce) {
+      setPhraseMessage(`Rendered the ${graphKindTitle(graphKind).toLowerCase()}.`);
+    }
+  } catch (error) {
+    if (closeOnError) {
+      setGraphOpen(false);
+    }
+    if (announce) {
+      setPhraseMessage(error.message, true);
+    }
+  } finally {
+    state.graphLoading = false;
+    updateSessionActionState();
+  }
+}
+
+async function showSessionGraph(kind = state.activeGraphKind) {
+  await updateSessionGraphImage(kind);
+}
+
 async function refreshSessionActivity() {
   if (!state.sessionId) {
     return;
   }
 
   await Promise.all([refreshHistory(), refreshMemory()]);
+  if (state.graphOpen) {
+    await updateSessionGraphImage(state.activeGraphKind, {
+      openPanel: false,
+      announce: false,
+      closeOnError: false,
+      preserveScroll: true,
+    });
+  }
 }
 
 function buildContinuationRequestBody(
@@ -6130,6 +6456,57 @@ function bindEvents() {
     setReadmeOpen(false);
   });
 
+  elements.showGraphButton.addEventListener("click", async () => {
+    try {
+      await showSessionGraph("memory");
+    } catch (error) {
+      setPhraseMessage(error.message, true);
+    }
+  });
+
+  elements.graphKindTabs.forEach((node) => {
+    node.addEventListener("click", async () => {
+      try {
+        await showSessionGraph(node.dataset.graphKind);
+      } catch (error) {
+        setPhraseMessage(error.message, true);
+      }
+    });
+  });
+
+  elements.graphModeSelect?.addEventListener("change", async () => {
+    state.graphMode = normalizedGraphMode(elements.graphModeSelect.value);
+    elements.graphModeSelect.value = state.graphMode;
+    if (state.graphOpen && state.activeGraphKind === "memory") {
+      await updateSessionGraphImage("memory", {
+        openPanel: false,
+        closeOnError: false,
+        preserveScroll: true,
+      });
+    }
+  });
+
+  elements.graphOrderSelect?.addEventListener("change", async () => {
+    state.graphOrder = normalizedGraphOrder(elements.graphOrderSelect.value);
+    elements.graphOrderSelect.value = state.graphOrder;
+    if (state.graphOpen && state.activeGraphKind === "memory") {
+      await updateSessionGraphImage("memory", {
+        openPanel: false,
+        closeOnError: false,
+        preserveScroll: true,
+      });
+    }
+  });
+
+  elements.graphHead.addEventListener("pointerdown", startGraphPanelDrag);
+  elements.graphHead.addEventListener("pointermove", moveGraphPanelDrag);
+  elements.graphHead.addEventListener("pointerup", stopGraphPanelDrag);
+  elements.graphHead.addEventListener("pointercancel", stopGraphPanelDrag);
+
+  elements.closeGraphButton.addEventListener("click", () => {
+    setGraphOpen(false);
+  });
+
   elements.authStatus.addEventListener("click", () => {
     if (state.readmeOpen) {
       setReadmeOpen(false);
@@ -6162,6 +6539,10 @@ function bindEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && state.readmeOpen) {
       setReadmeOpen(false);
+      return;
+    }
+    if (event.key === "Escape" && state.graphOpen) {
+      setGraphOpen(false);
       return;
     }
     if (event.key === "Escape" && state.accountPanelOpen) {
@@ -6633,6 +7014,9 @@ function bindEvents() {
   });
 
   window.addEventListener("resize", () => {
+    if (state.graphOpen && state.graphPanelPosition) {
+      applyGraphPanelPosition(state.graphPanelPosition);
+    }
     renderVirtualKeyboard();
     drawPianoRoll(
       elements.inputRoll,

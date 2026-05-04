@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Web Continuator</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260504-compact-header" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260504-graph-modes" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -256,6 +256,72 @@
             <li>Playing live MIDI interrupts whatever continuation is currently playing.</li>
           </ul>
         </section>
+      </div>
+    </aside>
+
+    <div id="graph-overlay" class="sheet-overlay" hidden></div>
+    <aside
+      id="graph-panel"
+      class="graph-panel"
+      role="dialog"
+      aria-modal="false"
+      aria-labelledby="graph-title"
+      hidden
+    >
+      <div class="graph-head">
+        <div>
+          <p class="readme-kicker">State Graph</p>
+          <h2 id="graph-title">Continuator Graph</h2>
+          <p id="graph-meta" class="section-copy">
+            Snapshot of the active session memory.
+          </p>
+        </div>
+        <button id="close-graph-button" class="ghost sheet-close" type="button">
+          Close
+        </button>
+      </div>
+      <div class="graph-tabs" role="tablist" aria-label="Continuator graph views">
+        <button
+          class="graph-tab is-active"
+          data-graph-kind="memory"
+          type="button"
+          role="tab"
+          aria-selected="true"
+        >
+          Memory Graph
+        </button>
+        <button
+          class="graph-tab"
+          data-graph-kind="constraints"
+          type="button"
+          role="tab"
+          aria-selected="false"
+        >
+          Last Constraint Graph
+        </button>
+      </div>
+      <div id="graph-controls" class="graph-controls" aria-label="Memory graph display options">
+        <label>
+          <span>Mode</span>
+          <select id="graph-mode-select">
+            <option value="slice">Weighted slice</option>
+            <option value="all">All</option>
+            <option value="most_used">Most used</option>
+            <option value="neighborhood">Latest phrase</option>
+          </select>
+        </label>
+        <label>
+          <span>Order</span>
+          <select id="graph-order-select">
+            <option value="all">All orders</option>
+          </select>
+        </label>
+      </div>
+      <div class="graph-image-frame">
+        <img
+          id="graph-image"
+          alt="Continuator internal graph snapshot"
+        />
       </div>
     </aside>
 
@@ -770,6 +836,17 @@
                         musical vocabulary.
                       </p>
                     </div>
+                    <button
+                      id="show-graph-button"
+                      class="ghost head-action"
+                      type="button"
+                      aria-haspopup="dialog"
+                      aria-expanded="false"
+                      aria-controls="graph-panel"
+                      disabled
+                    >
+                      Show Memory Graph
+                    </button>
                   </div>
                   <div id="memory-summary" class="settings-summary">
                     <span class="settings-chip">No active memory yet</span>
@@ -1066,6 +1143,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20260504-sample-timeout"></script>
+    <script type="module" src="/assets/app.js?v=20260504-graph-modes"></script>
   </body>
 </html>

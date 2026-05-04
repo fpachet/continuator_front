@@ -349,6 +349,70 @@ def session_memory(
         raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
 
 
+@app.get(
+    "/api/sessions/{session_id}/graphs/memory.svg",
+    tags=["continuator"],
+)
+def session_memory_graph_svg(
+    session_id: str,
+    max_nodes: int = Query(default=96, ge=8, le=240),
+    max_edges: int = Query(default=220, ge=1, le=600),
+    mode: str = Query(default="slice", pattern="^(slice|all|most_used|neighborhood)$"),
+    order: int | None = Query(default=None, ge=1, le=16),
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+) -> Response:
+    try:
+        svg = session_manager.render_memory_graph_svg(
+            session_id,
+            None if current_user is None else current_user.id,
+            max_nodes=max_nodes,
+            max_edges=max_edges,
+            graph_mode=mode,
+            order_filter=order,
+        )
+    except UnknownSessionError as error:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+    return Response(content=svg, media_type="image/svg+xml")
+
+
+@app.get(
+    "/api/sessions/{session_id}/graphs/constraints.svg",
+    tags=["continuator"],
+)
+def session_constraint_graph_svg(
+    session_id: str,
+    max_steps: int = Query(default=96, ge=1, le=240),
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+) -> Response:
+    try:
+        svg = session_manager.render_constraint_graph_svg(
+            session_id,
+            None if current_user is None else current_user.id,
+            max_steps=max_steps,
+        )
+    except UnknownSessionError as error:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+    return Response(content=svg, media_type="image/svg+xml")
+
+
+@app.get(
+    "/api/sessions/{session_id}/graph.svg",
+    tags=["continuator"],
+)
+def session_graph_svg_legacy(
+    session_id: str,
+    max_nodes: int = Query(default=96, ge=8, le=240),
+    max_edges: int = Query(default=220, ge=1, le=600),
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+) -> Response:
+    return session_memory_graph_svg(
+        session_id,
+        max_nodes=max_nodes,
+        max_edges=max_edges,
+        current_user=current_user,
+    )
+
+
 @app.delete(
     "/api/sessions/{session_id}/memory/{slot}",
     response_model=SessionMemoryResponse,

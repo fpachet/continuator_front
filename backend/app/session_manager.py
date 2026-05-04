@@ -13,6 +13,8 @@ from .schemas import (
     CreateSessionRequest,
     CreateSessionResponse,
     GeneratePhraseResponse,
+    GenerationConstraintsStatus,
+    GenerationTraceStep,
     HistoryItem,
     ImportedMidiFileSummary,
     ImportMidiResponse,
@@ -54,6 +56,10 @@ class SessionState:
     configuration: SessionConfiguration
     engine: ContinuatorSessionEngine
     continuation_request_count: int = 0
+    last_generation_trace: list[GenerationTraceStep] | None = None
+    last_generation_constraints: GenerationConstraintsStatus | None = None
+    last_generation_request_id: str | None = None
+    last_generation_created_at: str | None = None
 
 
 class SessionManager:
@@ -102,6 +108,27 @@ class SessionManager:
             seed_midi_file=self.seed_midi_file,
             seed_midi_folder=self.seed_midi_folder,
         )
+
+    @staticmethod
+    def _clear_last_generation_graph(state: SessionState) -> None:
+        state.last_generation_trace = None
+        state.last_generation_constraints = None
+        state.last_generation_request_id = None
+        state.last_generation_created_at = None
+
+    @staticmethod
+    def _remember_last_generation_graph(
+        state: SessionState,
+        *,
+        request_id: str,
+        created_at: str,
+        constraints: GenerationConstraintsStatus | None,
+        generation_trace: list[GenerationTraceStep] | None,
+    ) -> None:
+        state.last_generation_trace = generation_trace
+        state.last_generation_constraints = constraints
+        state.last_generation_request_id = request_id
+        state.last_generation_created_at = created_at
 
     def create_session(
         self,
@@ -353,6 +380,13 @@ class SessionManager:
 
         state.last_seen_at = created_at
         state.continuation_request_count += 1
+        self._remember_last_generation_graph(
+            state,
+            request_id=request_id,
+            created_at=created_at,
+            constraints=constraints,
+            generation_trace=generation_trace,
+        )
         self.storage.touch_session(state.session_id, created_at)
         self.storage.log_phrase(
             phrase_id=uuid.uuid4().hex,
@@ -407,6 +441,13 @@ class SessionManager:
         )
 
         state.last_seen_at = created_at
+        self._remember_last_generation_graph(
+            state,
+            request_id=request_id,
+            created_at=created_at,
+            constraints=constraints,
+            generation_trace=generation_trace,
+        )
         self.storage.touch_session(state.session_id, created_at)
         self.storage.log_phrase(
             phrase_id=uuid.uuid4().hex,
@@ -443,6 +484,7 @@ class SessionManager:
         imported_files, skipped_files = state.engine.import_midi_files(midi_files)
 
         state.last_seen_at = created_at
+        self._clear_last_generation_graph(state)
         self.storage.touch_session(state.session_id, created_at)
         for index, imported_file in enumerate(imported_files):
             self.storage.log_phrase(
@@ -493,6 +535,46 @@ class SessionManager:
             self._last_reset_at(session_id, owner_user_id),
         )
 
+    def render_memory_graph_svg(
+        self,
+        session_id: str,
+        owner_user_id: str | None,
+        *,
+        max_nodes: int = 96,
+        max_edges: int = 220,
+        graph_mode: str = "slice",
+        order_filter: int | None = None,
+    ) -> str:
+        state = self._require_session(session_id, owner_user_id)
+        focus_symbols = (
+            [step.symbol for step in state.last_generation_trace]
+            if state.last_generation_trace
+            else None
+        )
+        return state.engine.render_graph_svg(
+            max_nodes=max_nodes,
+            max_edges=max_edges,
+            graph_mode=graph_mode,
+            order_filter=order_filter,
+            focus_symbols=focus_symbols,
+        )
+
+    def render_constraint_graph_svg(
+        self,
+        session_id: str,
+        owner_user_id: str | None,
+        *,
+        max_steps: int = 96,
+    ) -> str:
+        state = self._require_session(session_id, owner_user_id)
+        return state.engine.render_constraint_graph_svg(
+            trace=state.last_generation_trace,
+            constraints=state.last_generation_constraints,
+            request_id=state.last_generation_request_id,
+            created_at=state.last_generation_created_at,
+            max_steps=max_steps,
+        )
+
     def delete_memory_phrase(
         self,
         session_id: str,
@@ -540,6 +622,7 @@ class SessionManager:
             remaining_phrase_ids,
             last_reset_at=last_reset_at,
         )
+        self._clear_last_generation_graph(state)
         state.last_seen_at = utc_now_iso()
         self.storage.touch_session(session_id, state.last_seen_at)
         return self._memory_response(
@@ -551,6 +634,7 @@ class SessionManager:
         state = self._require_session(session_id, owner_user_id)
         state.engine.reset()
         state.continuation_request_count = 0
+        self._clear_last_generation_graph(state)
         state.last_seen_at = utc_now_iso()
         self.storage.mark_session_reset(session_id, state.last_seen_at, state.last_seen_at)
         return ResetSessionResponse(
@@ -579,6 +663,7 @@ class SessionManager:
         state.engine.apply_settings(**update_fields)
         state.configuration = state.configuration.model_copy(update=update_fields)
         state.last_seen_at = updated_at
+        self._clear_last_generation_graph(state)
         self.storage.update_session_metadata(
             session_id=session_id,
             metadata=state.configuration.model_dump(),
