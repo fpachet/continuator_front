@@ -1,8 +1,12 @@
 :root {
   --bg: #071217;
-  --panel: rgba(7, 18, 23, 0.76);
-  --panel-strong: rgba(10, 24, 30, 0.9);
-  --border: rgba(181, 215, 207, 0.14);
+  --panel: rgba(11, 27, 34, 0.84);
+  --panel-strong: rgba(14, 32, 40, 0.94);
+  --border: rgba(181, 215, 207, 0.22);
+  --surface-border: rgba(181, 215, 207, 0.18);
+  --surface-border-strong: rgba(181, 215, 207, 0.28);
+  --surface-fill: rgba(18, 39, 47, 0.52);
+  --surface-fill-strong: rgba(21, 48, 56, 0.64);
   --text: #ecf4ef;
   --muted: #9bb8b1;
   --accent: #f4a261;
@@ -159,11 +163,16 @@ body.sheet-open {
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  border: 1px solid var(--border);
+  border: 1px solid var(--surface-border-strong);
   border-radius: var(--radius);
-  background: var(--panel);
+  background:
+    linear-gradient(145deg, rgba(16, 36, 44, 0.82), rgba(8, 20, 26, 0.82)),
+    var(--panel);
   backdrop-filter: blur(18px);
-  box-shadow: var(--shadow);
+  box-shadow:
+    var(--shadow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.055),
+    inset 0 0 0 1px rgba(109, 211, 206, 0.035);
   padding: 22px;
   animation: rise-in 700ms ease;
 }
@@ -204,7 +213,7 @@ body.sheet-open {
 .control-workspace {
   padding: 18px;
   background:
-    linear-gradient(145deg, rgba(9, 24, 31, 0.94), rgba(7, 18, 23, 0.86)),
+    linear-gradient(145deg, rgba(16, 37, 45, 0.9), rgba(8, 21, 27, 0.88)),
     var(--panel);
 }
 
@@ -777,14 +786,20 @@ button.ghost.is-pending {
   min-width: 0;
   padding: 18px;
   border-radius: 20px;
-  background: rgba(255, 255, 255, 0.035);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.035), rgba(109, 211, 206, 0.018)),
+    var(--surface-fill);
+  border: 1px solid var(--surface-border);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 10px 26px rgba(0, 0, 0, 0.12);
 }
 
 .accent-section {
   background:
-    linear-gradient(135deg, rgba(109, 211, 206, 0.08), rgba(255, 255, 255, 0.02)),
-    rgba(255, 255, 255, 0.035);
+    linear-gradient(135deg, rgba(109, 211, 206, 0.12), rgba(255, 255, 255, 0.03)),
+    var(--surface-fill-strong);
+  border-color: rgba(109, 211, 206, 0.24);
 }
 
 .section-head {
@@ -813,8 +828,9 @@ button.ghost.is-pending {
   padding: 6px;
   margin-bottom: 18px;
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(18, 39, 47, 0.58);
+  border: 1px solid var(--surface-border);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .view-tab {
@@ -1437,8 +1453,11 @@ input[type="password"]:disabled {
   min-height: 72px;
   padding: 13px 14px;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid var(--surface-border);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.035), rgba(109, 211, 206, 0.018)),
+    rgba(18, 39, 47, 0.52);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .timeline-segment span {
@@ -1607,7 +1626,10 @@ input[type="password"]:disabled {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
     rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--surface-border-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 10px 24px rgba(0, 0, 0, 0.12);
 }
 
 .piano-roll:hover {
