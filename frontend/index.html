@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Web Continuator</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260505-region-borders" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260505-label-button-contrast" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -510,16 +510,6 @@
                   <input id="learn-input-toggle" type="checkbox" checked />
                   <span>Learn the played phrase before generating</span>
                 </label>
-                <dl class="info-grid">
-                  <div>
-                    <dt>Selected Input</dt>
-                    <dd id="selected-input-name">None</dd>
-                  </div>
-                  <div>
-                    <dt>Last MIDI Event</dt>
-                    <dd id="last-midi-event">None yet</dd>
-                  </div>
-                </dl>
               </section>
 
               <section class="panel-section">
@@ -836,14 +826,9 @@
                         musical vocabulary.
                       </p>
                     </div>
-                  </div>
-                  <div id="memory-summary" class="settings-summary">
-                    <span class="settings-chip">No active memory yet</span>
-                  </div>
-                  <div class="memory-graph-action">
                     <button
                       id="show-graph-button"
-                      class="ghost"
+                      class="ghost head-action"
                       type="button"
                       aria-haspopup="dialog"
                       aria-expanded="false"
@@ -852,6 +837,9 @@
                     >
                       Show Memory Graph
                     </button>
+                  </div>
+                  <div id="memory-summary" class="settings-summary">
+                    <span class="settings-chip">No active memory yet</span>
                   </div>
                   <p id="memory-hint" class="small-copy memory-hint">
                     Create a session and play a phrase to inspect the active Continuator memory.
@@ -1100,7 +1088,7 @@
         <article class="card roll-card output-card">
           <div class="card-head">
             <h2>Generated Continuation</h2>
-            <span class="small-copy">Returned by the Python Continuator engine</span>
+            <span class="small-copy">Returned by Continuator</span>
           </div>
           <div class="roll-viewport">
             <canvas

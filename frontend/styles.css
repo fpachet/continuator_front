@@ -241,8 +241,9 @@ body.sheet-open {
 }
 
 .status-cluster .status-pill {
-  background: rgba(255, 255, 255, 0.04);
-  padding: 7px 10px;
+  background: rgba(181, 215, 207, 0.035);
+  border-color: rgba(181, 215, 207, 0.08);
+  padding: 6px 9px;
   font-size: 0.82rem;
   white-space: nowrap;
 }
@@ -675,10 +676,19 @@ button:disabled {
 }
 
 button.ghost {
-  background: rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.07), rgba(109, 211, 206, 0.045));
   color: var(--text);
-  box-shadow: none;
-  border: 1px solid var(--border);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 8px 18px rgba(0, 0, 0, 0.14);
+  border: 1px solid rgba(181, 215, 207, 0.26);
+}
+
+button.ghost:hover:not(:disabled) {
+  border-color: rgba(244, 162, 97, 0.48);
+  background:
+    linear-gradient(145deg, rgba(244, 162, 97, 0.14), rgba(109, 211, 206, 0.07));
 }
 
 button.ghost.is-pending {
@@ -854,10 +864,12 @@ button.ghost.is-pending {
 
 .status-pill {
   border-radius: 999px;
-  padding: 8px 12px;
-  background: rgba(255, 255, 255, 0.05);
+  padding: 6px 10px;
+  border: 1px solid rgba(181, 215, 207, 0.09);
+  background: rgba(181, 215, 207, 0.035);
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: 0.82rem;
+  font-weight: 500;
 }
 
 .field {
@@ -1142,12 +1154,13 @@ input[type="password"]:disabled {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  background: rgba(255, 255, 255, 0.04);
+  padding: 5px 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
   color: var(--muted);
-  font-size: 0.88rem;
+  font-size: 0.86rem;
+  font-weight: 600;
 }
 
 .settings-chip.is-active {
@@ -1400,13 +1413,14 @@ input[type="password"]:disabled {
   display: inline-flex;
   align-items: center;
   min-height: 30px;
-  padding: 5px 9px;
-  border-radius: 999px;
-  border: 1px solid rgba(109, 211, 206, 0.2);
-  background: rgba(109, 211, 206, 0.08);
+  padding: 4px 0;
+  border-radius: 0;
+  border: 0;
+  background: transparent;
   color: var(--text);
   font-size: 0.78rem;
   line-height: 1.25;
+  font-weight: 700;
 }
 
 .constraint-pill.is-relaxed {
@@ -1421,8 +1435,8 @@ input[type="password"]:disabled {
 }
 
 .constraint-pill.is-off {
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  border-color: transparent;
+  background: transparent;
   color: var(--muted);
 }
 
@@ -1692,15 +1706,6 @@ input[type="password"]:disabled {
 .memory-hint {
   margin: 12px 0 14px;
   line-height: 1.5;
-}
-
-.memory-graph-action {
-  display: flex;
-  margin: 12px 0 14px;
-}
-
-.memory-graph-action button {
-  padding-inline: 18px;
 }
 
 .memory-ribbon {

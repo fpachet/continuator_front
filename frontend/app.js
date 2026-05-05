@@ -138,8 +138,6 @@ const elements = {
   phraseGapMeterLabel: document.querySelector("#phrase-gap-meter-label"),
   phraseGapMeterBar: document.querySelector("#phrase-gap-meter-bar"),
   phraseGapMeterCopy: document.querySelector("#phrase-gap-meter-copy"),
-  selectedInputName: document.querySelector("#selected-input-name"),
-  lastMidiEvent: document.querySelector("#last-midi-event"),
   capturedEventCount: document.querySelector("#captured-event-count"),
   capturedNoteCount: document.querySelector("#captured-note-count"),
   generatedEventCount: document.querySelector("#generated-event-count"),
@@ -243,6 +241,8 @@ const state = {
   authUser: null,
   sessionId: null,
   sessionIsOwned: false,
+  selectedInputLabel: "No MIDI input selected",
+  lastMidiEventLabel: "None yet",
   readmeOpen: false,
   graphOpen: false,
   graphImageUrl: null,
@@ -2068,7 +2068,7 @@ function hasGenerationTrace(trace) {
 function generationTracePillText(trace, engineKind) {
   if (!Array.isArray(trace) || !trace.length) {
     if (engineKind === "context_bp") {
-      return "Trace: not returned";
+      return "Trace orders: not returned";
     }
     return null;
   }
@@ -2084,7 +2084,7 @@ function generationTracePillText(trace, engineKind) {
   );
   const suffix = trace.length > 12 ? ` … +${trace.length - 12}` : "";
   const skipped = skippedCount ? ` · ${skippedCount} skips` : "";
-  return `Trace: ${orders}${suffix}${skipped}`;
+  return `Trace orders: ${orders}${suffix}${skipped}`;
 }
 
 function generationTraceTitle(trace, engineKind) {
@@ -2548,11 +2548,11 @@ function setPhraseStatus(label) {
 }
 
 function setSelectedInputName(label) {
-  elements.selectedInputName.textContent = label;
+  state.selectedInputLabel = label;
 }
 
 function setLastMidiEvent(label) {
-  elements.lastMidiEvent.textContent = label;
+  state.lastMidiEventLabel = label;
 }
 
 async function requestJson(url, options = {}) {
@@ -6803,7 +6803,7 @@ function bindEvents() {
   elements.midiInputSelect.addEventListener("change", async (event) => {
     try {
       await attachInput(event.target.value, { savePreference: true });
-      setPhraseMessage(`MIDI input changed to ${elements.selectedInputName.textContent}.`);
+      setPhraseMessage(`MIDI input changed to ${state.selectedInputLabel}.`);
     } catch (error) {
       setPhraseMessage(error.message, true);
     }
