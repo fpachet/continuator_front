@@ -803,17 +803,6 @@
                   >
                     Import MIDI Folder
                   </button>
-                  <button
-                    id="show-graph-button"
-                    class="ghost"
-                    type="button"
-                    aria-haspopup="dialog"
-                    aria-expanded="false"
-                    aria-controls="graph-panel"
-                    disabled
-                  >
-                    Show Memory Graph
-                  </button>
                 </div>
                 <p class="field-hint">
                   Imported phrases are learned into the active session memory
@@ -850,6 +839,19 @@
                   </div>
                   <div id="memory-summary" class="settings-summary">
                     <span class="settings-chip">No active memory yet</span>
+                  </div>
+                  <div class="memory-graph-action">
+                    <button
+                      id="show-graph-button"
+                      class="ghost"
+                      type="button"
+                      aria-haspopup="dialog"
+                      aria-expanded="false"
+                      aria-controls="graph-panel"
+                      disabled
+                    >
+                      Show Memory Graph
+                    </button>
                   </div>
                   <p id="memory-hint" class="small-copy memory-hint">
                     Create a session and play a phrase to inspect the active Continuator memory.

@@ -1672,6 +1672,15 @@ input[type="password"]:disabled {
   line-height: 1.5;
 }
 
+.memory-graph-action {
+  display: flex;
+  margin: 12px 0 14px;
+}
+
+.memory-graph-action button {
+  padding-inline: 18px;
+}
+
 .memory-ribbon {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(16px, 1fr));
