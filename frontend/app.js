@@ -1481,8 +1481,19 @@ function isVirtualMidiInputSelected() {
   return isVirtualMidiInputId(state.activeInputId);
 }
 
+function selectedMidiInputId() {
+  return elements.midiInputSelect?.value || "";
+}
+
+function isVirtualMidiInputChosen() {
+  return (
+    isVirtualMidiInputSelected() ||
+    isVirtualMidiInputId(selectedMidiInputId())
+  );
+}
+
 function syncVirtualKeyboardVisibility() {
-  elements.virtualKeyboardPanel.hidden = !isVirtualMidiInputSelected();
+  elements.virtualKeyboardPanel.hidden = !isVirtualMidiInputChosen();
 }
 
 function shouldMonitorSelectedMidiInput() {
@@ -6472,9 +6483,15 @@ async function populateMidiSelectors() {
   populatePlaybackChoices();
   const inputs = state.midiAccess ? [...state.midiAccess.inputs.values()] : [];
   const previousInputId = elements.midiInputSelect.value;
-  const currentInputId = state.activeInputId || previousInputId;
+  const currentInputId = isVirtualMidiInputId(previousInputId)
+    ? previousInputId
+    : state.activeInputId || previousInputId;
   const preferredInputId = state.sessionConfiguration?.midi_input_id || null;
   const physicalInputIds = new Set(inputs.map((input) => input.id));
+  const currentInputAvailable =
+    isVirtualMidiInputId(currentInputId) || physicalInputIds.has(currentInputId);
+  const preferredInputAvailable =
+    isVirtualMidiInputId(preferredInputId) || physicalInputIds.has(preferredInputId);
 
   elements.midiInputSelect.disabled = false;
   elements.midiInputSelect.innerHTML = [
@@ -6487,9 +6504,9 @@ async function populateMidiSelectors() {
   ].join("");
 
   const inputId =
-    isVirtualMidiInputId(currentInputId) || physicalInputIds.has(currentInputId)
+    currentInputAvailable
       ? currentInputId
-      : isVirtualMidiInputId(preferredInputId) || physicalInputIds.has(preferredInputId)
+      : preferredInputAvailable
       ? preferredInputId
       : inputs.length
         ? inputs[0].id
@@ -7101,6 +7118,7 @@ function bindEvents() {
 
   elements.midiInputSelect.addEventListener("change", async (event) => {
     try {
+      syncVirtualKeyboardVisibility();
       await attachInput(event.target.value, { savePreference: true });
       setPhraseMessage(`MIDI input changed to ${state.selectedInputLabel}.`);
     } catch (error) {
