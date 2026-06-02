@@ -96,9 +96,12 @@ intentionally remembers a file, not a folder, because Chrome can reject folder
 access for protected locations.
 
 If the browser does not support the file-save picker, the export falls back to a
-normal browser download. The backend also keeps `POST /api/sessions/{session_id}/save-midi`
-as a server-side fallback route, but browser users should prefer the ZIP
-download path because it writes to a location they choose locally.
+normal browser download. Hugging Face embeds Spaces in a cross-origin frame, so
+the embedded Space also uses the normal browser download flow; open the direct
+Space URL if you want Chrome's file-save picker and `Don't ask again` behavior.
+The backend also keeps `POST /api/sessions/{session_id}/save-midi` as a
+server-side fallback route, but browser users should prefer the ZIP download
+path because it writes to a location they choose locally.
 
 ## High-Level Architecture
 
@@ -369,7 +372,9 @@ CONTINUATOR_DB_PATH=/data/continuator.sqlite3
 ```
 
 The browser ZIP export does not require persistent Space storage because the
-archive is downloaded to the user. The server-side fallback `save-midi` route
+archive is downloaded to the user. In the embedded Hugging Face Space page,
+browser security rules block Chrome's file-save picker, so exports fall back to
+the browser's normal download flow. The server-side fallback `save-midi` route
 writes inside the container unless `CONTINUATOR_SESSION_EXPORT_DIR` points to a
 mounted volume, so it is mainly useful for local development or managed storage
 setups.

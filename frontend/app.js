@@ -544,8 +544,27 @@ function safeLocalStorageSet(key, value) {
   }
 }
 
+function isCrossOriginSubframe() {
+  if (window.self === window.top) {
+    return false;
+  }
+  try {
+    void window.top.location.href;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function filePickerBlockedByFrame(error) {
+  return /cross.?origin|sub.?frames?|file picker/i.test(error?.message || "");
+}
+
 function midiExportZipSaveSupported() {
-  return typeof window.showSaveFilePicker === "function";
+  return (
+    typeof window.showSaveFilePicker === "function" &&
+    !isCrossOriginSubframe()
+  );
 }
 
 function midiExportZipRememberSupported() {
@@ -4734,14 +4753,23 @@ async function saveSessionMidi() {
           setPhraseMessage("MIDI export cancelled.");
           return;
         }
-        if (error?.name === "NotAllowedError" || /system files/i.test(error?.message || "")) {
+        if (filePickerBlockedByFrame(error)) {
+          destinationLabel = `${downloadZipBlob(payload.blob, payload.archive_file_name)} in your browser downloads`;
+          setSessionMidiSaveResult(
+            "File picker is blocked in this embedded page; using browser downloads instead.",
+          );
+          fileHandle = null;
+        } else if (error?.name === "NotAllowedError" || /system files/i.test(error?.message || "")) {
           throw new Error(
             "Chrome blocked that location. Save the ZIP in Downloads, Documents, Desktop, or Music instead of a system, home, or project folder.",
           );
+        } else {
+          throw error;
         }
-        throw error;
       }
-      destinationLabel = await writeZipBlobToFileHandle(payload.blob, fileHandle);
+      if (fileHandle) {
+        destinationLabel = await writeZipBlobToFileHandle(payload.blob, fileHandle);
+      }
     } else {
       destinationLabel = `${downloadZipBlob(payload.blob, payload.archive_file_name)} in your browser downloads`;
     }
