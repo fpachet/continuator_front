@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Web Continuator</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260505-label-button-contrast" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260602-session-midi-zip2" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -155,6 +155,20 @@
             <li>Wait for the phrase to end, or click <strong>Send Phrase</strong>.</li>
             <li>Review the continuation in the piano rolls, history, and memory.</li>
           </ol>
+        </section>
+
+        <section class="readme-block">
+          <h3>Saving Session MIDI</h3>
+          <p>
+            The Session panel can export the current session as a MIDI ZIP
+            archive. The archive contains the played input phrases and generated
+            continuations in session order.
+          </p>
+          <p>
+            In Chrome and Edge, <strong>Don't ask again</strong> remembers the
+            selected ZIP file and overwrites it on future saves. Other browsers
+            use the normal download flow.
+          </p>
         </section>
 
         <section class="readme-block">
@@ -887,7 +901,19 @@
                 <div class="button-row">
                   <button id="create-session-button">Create Session</button>
                   <button id="reset-session-button" class="ghost">Reset Memory</button>
+                  <button id="save-session-midi-button" class="ghost">
+                    Save Session MIDI
+                  </button>
+                  <label class="toggle compact-toggle">
+                    <input id="remember-midi-export-file-toggle" type="checkbox" />
+                    <span>Don't ask again</span>
+                  </label>
                 </div>
+                <p
+                  id="session-midi-save-result"
+                  class="session-midi-save-result"
+                  hidden
+                ></p>
                 <div class="settings-compact">
                   <div class="settings-label-row">
                     <span class="small-copy">Current settings</span>
@@ -1133,6 +1159,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20260504-graph-modes"></script>
+    <script type="module" src="/assets/app.js?v=20260602-session-midi-zip2"></script>
   </body>
 </html>

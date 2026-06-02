@@ -3,15 +3,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+import base64
 import threading
 import uuid
 
 from .continuator_adapter import ContinuatorSessionEngine, MidiImportError, NoContinuationAvailable
+from .midi_export import (
+    midi_files_to_zip_bytes,
+    phrase_payload_to_midi_bytes,
+    write_phrase_payload_midi,
+)
 from .schemas import (
     ContinueRequest,
     ContinueResponse,
     CreateSessionRequest,
     CreateSessionResponse,
+    DownloadSessionMidiResponse,
     GeneratePhraseResponse,
     GenerationConstraintsStatus,
     GenerationTraceStep,
@@ -23,8 +30,11 @@ from .schemas import (
     OpenSessionResponse,
     PhrasePayload,
     ResetSessionResponse,
+    SaveSessionMidiResponse,
     SessionConfiguration,
     SessionHistoryResponse,
+    SessionMidiDownloadFile,
+    SessionMidiExportFile,
     SessionMemoryResponse,
     SessionMemorySummary,
     UpdateSessionNameRequest,
@@ -45,6 +55,15 @@ class UnknownSessionError(KeyError):
 
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def safe_export_path_part(value: object, fallback: str) -> str:
+    normalized = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "-"
+        for char in str(value or "")
+    )
+    normalized = "-".join(part for part in normalized.split("-") if part)
+    return (normalized[:80] or fallback).strip("-_") or fallback
 
 
 @dataclass
@@ -68,10 +87,12 @@ class SessionManager:
         storage: PhraseStorage,
         seed_midi_file: Path | None = None,
         seed_midi_folder: Path | None = None,
+        session_export_dir: Path | None = None,
     ) -> None:
         self.storage = storage
         self.seed_midi_file = seed_midi_file
         self.seed_midi_folder = seed_midi_folder
+        self.session_export_dir = session_export_dir or Path("session_midi_exports")
         self._sessions: dict[str, SessionState] = {}
         self._lock = threading.RLock()
 
@@ -527,6 +548,138 @@ class SessionManager:
             for item in self.storage.get_history(session_id, limit=limit)
         ]
         return SessionHistoryResponse(session_id=session_id, items=items)
+
+    def save_session_midi(
+        self,
+        session_id: str,
+        owner_user_id: str | None,
+    ) -> SaveSessionMidiResponse:
+        if not self.storage.session_exists(session_id, owner_user_id, allow_guest=True):
+            raise UnknownSessionError(session_id)
+
+        rows = self.storage.get_played_and_generated_phrases(session_id)
+        if not rows:
+            raise ValueError("No played or generated phrases are available to save yet.")
+
+        exported_at = utc_now_iso()
+        folder_name = "-".join(
+            [
+                safe_export_path_part(session_id[:12], "session"),
+                safe_export_path_part(exported_at, "export"),
+                uuid.uuid4().hex[:8],
+            ]
+        )
+        export_dir = self.session_export_dir / folder_name
+        counts = {"input": 0, "generated": 0}
+        files: list[SessionMidiExportFile] = []
+
+        for index, row in enumerate(rows, start=1):
+            kind = str(row["kind"])
+            if kind not in counts:
+                continue
+            payload = PhrasePayload.model_validate(row["payload"])
+            counts[kind] += 1
+            created_at = safe_export_path_part(row["created_at"], "time")
+            request_id = safe_export_path_part(row["request_id"], "request")
+            file_name = f"{index:04d}_{kind}_{created_at}_{request_id[:12]}.mid"
+            path = export_dir / file_name
+            write_phrase_payload_midi(payload, path)
+            files.append(
+                SessionMidiExportFile(
+                    kind=kind,
+                    request_id=str(row["request_id"]),
+                    file_name=file_name,
+                    path=str(path.resolve()),
+                    event_count=payload.event_count,
+                    note_count=payload.note_count,
+                    duration_seconds=payload.duration_seconds,
+                )
+            )
+
+        if not files:
+            raise ValueError("No playable phrases are available to save yet.")
+
+        return SaveSessionMidiResponse(
+            session_id=session_id,
+            exported_at=exported_at,
+            directory=str(export_dir.resolve()),
+            file_count=len(files),
+            input_file_count=counts["input"],
+            generated_file_count=counts["generated"],
+            files=files,
+        )
+
+    def download_session_midi(
+        self,
+        session_id: str,
+        owner_user_id: str | None,
+    ) -> DownloadSessionMidiResponse:
+        if not self.storage.session_exists(session_id, owner_user_id, allow_guest=True):
+            raise UnknownSessionError(session_id)
+
+        rows = self.storage.get_played_and_generated_phrases(session_id)
+        if not rows:
+            raise ValueError("No played or generated phrases are available to save yet.")
+
+        exported_at = utc_now_iso()
+        folder_name = "-".join(
+            [
+                "continuator-session",
+                safe_export_path_part(session_id[:12], "session"),
+                safe_export_path_part(exported_at, "export"),
+                uuid.uuid4().hex[:8],
+            ]
+        )
+        counts = {"input": 0, "generated": 0}
+        files: list[SessionMidiDownloadFile] = []
+
+        for index, row in enumerate(rows, start=1):
+            kind = str(row["kind"])
+            if kind not in counts:
+                continue
+            payload = PhrasePayload.model_validate(row["payload"])
+            counts[kind] += 1
+            created_at = safe_export_path_part(row["created_at"], "time")
+            request_id = safe_export_path_part(row["request_id"], "request")
+            file_name = f"{index:04d}_{kind}_{created_at}_{request_id[:12]}.mid"
+            midi_bytes = phrase_payload_to_midi_bytes(payload)
+            files.append(
+                SessionMidiDownloadFile(
+                    kind=kind,
+                    request_id=str(row["request_id"]),
+                    file_name=file_name,
+                    event_count=payload.event_count,
+                    note_count=payload.note_count,
+                    duration_seconds=payload.duration_seconds,
+                    content_base64=base64.b64encode(midi_bytes).decode("ascii"),
+                )
+            )
+
+        if not files:
+            raise ValueError("No playable phrases are available to save yet.")
+
+        return DownloadSessionMidiResponse(
+            session_id=session_id,
+            exported_at=exported_at,
+            folder_name=folder_name,
+            file_count=len(files),
+            input_file_count=counts["input"],
+            generated_file_count=counts["generated"],
+            files=files,
+        )
+
+    def session_midi_zip(
+        self,
+        session_id: str,
+        owner_user_id: str | None,
+    ) -> tuple[str, bytes, DownloadSessionMidiResponse]:
+        payload = self.download_session_midi(session_id, owner_user_id)
+        files = [
+            (file.file_name, base64.b64decode(file.content_base64))
+            for file in payload.files
+        ]
+        archive_name = f"{payload.folder_name}.zip"
+        return archive_name, midi_files_to_zip_bytes(files), payload
 
     def get_memory(self, session_id: str, owner_user_id: str | None) -> SessionMemoryResponse:
         state = self._require_session(session_id, owner_user_id)

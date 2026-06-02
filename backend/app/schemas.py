@@ -178,6 +178,46 @@ class SessionHistoryResponse(BaseModel):
     items: list[HistoryItem]
 
 
+class SessionMidiExportFile(BaseModel):
+    kind: Literal["input", "generated"]
+    request_id: str
+    file_name: str
+    path: str
+    event_count: int = Field(ge=0)
+    note_count: int = Field(ge=0)
+    duration_seconds: float = Field(ge=0.0)
+
+
+class SaveSessionMidiResponse(BaseModel):
+    session_id: str
+    exported_at: str
+    directory: str
+    file_count: int = Field(ge=0)
+    input_file_count: int = Field(ge=0)
+    generated_file_count: int = Field(ge=0)
+    files: list[SessionMidiExportFile]
+
+
+class SessionMidiDownloadFile(BaseModel):
+    kind: Literal["input", "generated"]
+    request_id: str
+    file_name: str
+    event_count: int = Field(ge=0)
+    note_count: int = Field(ge=0)
+    duration_seconds: float = Field(ge=0.0)
+    content_base64: str
+
+
+class DownloadSessionMidiResponse(BaseModel):
+    session_id: str
+    exported_at: str
+    folder_name: str
+    file_count: int = Field(ge=0)
+    input_file_count: int = Field(ge=0)
+    generated_file_count: int = Field(ge=0)
+    files: list[SessionMidiDownloadFile]
+
+
 class MemoryPhraseItem(BaseModel):
     slot: int = Field(ge=1)
     source: MemoryPhraseSource

@@ -16,6 +16,7 @@ class Settings:
     app_name: str
     frontend_dir: Path
     db_path: Path
+    session_export_dir: Path
     seed_midi_file: Path | None
     seed_midi_folder: Path | None
 
@@ -32,6 +33,8 @@ def load_settings() -> Settings:
         app_name=os.getenv("CONTINUATOR_APP_NAME", "Web Continuator"),
         frontend_dir=FRONTEND_DIR,
         db_path=_env_path("CONTINUATOR_DB_PATH") or (DATA_DIR / "continuator.sqlite3"),
+        session_export_dir=_env_path("CONTINUATOR_SESSION_EXPORT_DIR")
+        or (DATA_DIR / "session_midi_exports"),
         seed_midi_file=_env_path("CONTINUATOR_SEED_MIDI_FILE"),
         seed_midi_folder=_env_path("CONTINUATOR_SEED_MIDI_FOLDER"),
     )

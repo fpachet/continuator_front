@@ -53,6 +53,9 @@ const FAUST_CLAVIER_DSP_URL = "/assets/faust/continuator-clavier.dsp";
 const FAUST_CUSTOM_TEMPLATE_DSP_URL = "/assets/faust/custom-poly-template.dsp";
 const PHRASE_TIMEOUT_STORAGE_KEY = "continuator.phrase.timeout.ms";
 const MIDI_INPUT_MONITOR_STORAGE_KEY = "continuator.midi.input.monitor";
+const MIDI_EXPORT_FILE_DB_NAME = "continuator-midi-zip-export";
+const MIDI_EXPORT_FILE_STORE_NAME = "file-handles";
+const MIDI_EXPORT_FILE_HANDLE_KEY = "session-midi-export-zip";
 const FAUST_CUSTOM_SOURCE_STORAGE_KEY = "continuator.faust.custom.source";
 const FAUST_CUSTOM_VALUES_STORAGE_KEY = "continuator.faust.custom.values";
 const PLAYBACK_PREFERENCE_STORAGE_PREFIX = "continuator.playback.preference";
@@ -151,6 +154,8 @@ const elements = {
   readyOutputStep: document.querySelector("#ready-output-step"),
   rendererHealth: document.querySelector("#renderer-health"),
   sessionSaveNote: document.querySelector("#session-save-note"),
+  sessionMidiSaveResult: document.querySelector("#session-midi-save-result"),
+  rememberMidiExportFileToggle: document.querySelector("#remember-midi-export-file-toggle"),
   timingReadout: document.querySelector("#timing-readout"),
   timelineCaptured: document.querySelector("#timeline-captured"),
   timelineGenerated: document.querySelector("#timeline-generated"),
@@ -210,6 +215,7 @@ const elements = {
   panicButton: document.querySelector("#panic-button"),
   createSessionButton: document.querySelector("#create-session-button"),
   resetSessionButton: document.querySelector("#reset-session-button"),
+  saveSessionMidiButton: document.querySelector("#save-session-midi-button"),
   applySettingsButton: document.querySelector("#apply-settings-button"),
   importMidiFilesButton: document.querySelector("#import-midi-files-button"),
   importMidiFolderButton: document.querySelector("#import-midi-folder-button"),
@@ -241,6 +247,8 @@ const state = {
   authUser: null,
   sessionId: null,
   sessionIsOwned: false,
+  sessionMidiSaving: false,
+  midiExportFileHandle: null,
   selectedInputLabel: "No MIDI input selected",
   lastMidiEventLabel: "None yet",
   readmeOpen: false,
@@ -533,6 +541,85 @@ function safeLocalStorageSet(key, value) {
     window.localStorage.setItem(key, value);
   } catch {
     // Ignore private-browsing or storage-denied failures.
+  }
+}
+
+function midiExportZipSaveSupported() {
+  return typeof window.showSaveFilePicker === "function";
+}
+
+function midiExportZipRememberSupported() {
+  return midiExportZipSaveSupported() && typeof window.indexedDB !== "undefined";
+}
+
+function openMidiExportFileDb() {
+  return new Promise((resolve, reject) => {
+    if (!window.indexedDB) {
+      reject(new Error("This browser cannot remember export files."));
+      return;
+    }
+    const request = window.indexedDB.open(MIDI_EXPORT_FILE_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(MIDI_EXPORT_FILE_STORE_NAME);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error("Could not open export file storage."));
+  });
+}
+
+async function withMidiExportFileStore(mode, callback) {
+  const db = await openMidiExportFileDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const transaction = db.transaction(MIDI_EXPORT_FILE_STORE_NAME, mode);
+      const store = transaction.objectStore(MIDI_EXPORT_FILE_STORE_NAME);
+      const request = callback(store);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error("Export file storage failed."));
+    });
+  } finally {
+    db.close();
+  }
+}
+
+function readStoredMidiExportFileHandle() {
+  return withMidiExportFileStore("readonly", (store) =>
+    store.get(MIDI_EXPORT_FILE_HANDLE_KEY),
+  );
+}
+
+function writeStoredMidiExportFileHandle(handle) {
+  return withMidiExportFileStore("readwrite", (store) =>
+    store.put(handle, MIDI_EXPORT_FILE_HANDLE_KEY),
+  );
+}
+
+function clearStoredMidiExportFileHandle() {
+  return withMidiExportFileStore("readwrite", (store) =>
+    store.delete(MIDI_EXPORT_FILE_HANDLE_KEY),
+  );
+}
+
+async function initializeMidiExportFilePreference() {
+  if (!elements.rememberMidiExportFileToggle) {
+    return;
+  }
+  const supported = midiExportZipRememberSupported();
+  elements.rememberMidiExportFileToggle.disabled = !supported;
+  if (!supported) {
+    elements.rememberMidiExportFileToggle.title =
+      "Remembering export files is not available in this browser.";
+    return;
+  }
+  try {
+    const handle = await readStoredMidiExportFileHandle();
+    if (handle) {
+      state.midiExportFileHandle = handle;
+      elements.rememberMidiExportFileToggle.checked = true;
+    }
+  } catch {
+    state.midiExportFileHandle = null;
+    elements.rememberMidiExportFileToggle.checked = false;
   }
 }
 
@@ -1867,6 +1954,121 @@ function renderPerformanceState() {
   renderTimingReadout();
 }
 
+function setSessionMidiSaveResult(message = "", isError = false) {
+  if (!elements.sessionMidiSaveResult) {
+    return;
+  }
+  const normalizedMessage = String(message || "").trim();
+  elements.sessionMidiSaveResult.hidden = !normalizedMessage;
+  elements.sessionMidiSaveResult.textContent = normalizedMessage;
+  elements.sessionMidiSaveResult.classList.toggle("is-error", Boolean(isError));
+}
+
+async function ensureFileWritePermission(handle) {
+  const options = { mode: "readwrite" };
+  if ((await handle.queryPermission(options)) === "granted") {
+    return true;
+  }
+  return (await handle.requestPermission(options)) === "granted";
+}
+
+function fileNameFromContentDisposition(value) {
+  const match = String(value || "").match(/filename="([^"]+)"/i);
+  return match?.[1] || `continuator-session-${Date.now()}.zip`;
+}
+
+async function requestSessionMidiZip() {
+  const response = await fetch(`/api/sessions/${state.sessionId}/midi.zip`);
+  const blob = await response.blob();
+  if (!response.ok) {
+    let detail = `MIDI export failed (${response.status}).`;
+    try {
+      const text = await blob.text();
+      const payload = JSON.parse(text);
+      if (typeof payload?.detail === "string") {
+        detail = payload.detail;
+      }
+    } catch {
+      // Keep the default error.
+    }
+    throw new Error(detail);
+  }
+
+  return {
+    blob,
+    archive_file_name: fileNameFromContentDisposition(
+      response.headers.get("Content-Disposition"),
+    ),
+    file_count: Number(response.headers.get("X-Midi-File-Count") || 0),
+    input_file_count: Number(response.headers.get("X-Midi-Input-File-Count") || 0),
+    generated_file_count: Number(response.headers.get("X-Midi-Generated-File-Count") || 0),
+  };
+}
+
+async function chooseMidiExportZipFileHandle(fileName) {
+  const rememberFile = elements.rememberMidiExportFileToggle?.checked;
+  if (rememberFile && state.midiExportFileHandle) {
+    if (await ensureFileWritePermission(state.midiExportFileHandle)) {
+      return state.midiExportFileHandle;
+    }
+  }
+
+  const pickerOptions = {
+    id: "continuator-session-midi-zip-export",
+    suggestedName: fileName || `continuator-session-${Date.now()}.zip`,
+    startIn: "downloads",
+    types: [
+      {
+        description: "ZIP archive",
+        accept: {
+          "application/zip": [".zip"],
+        },
+      },
+    ],
+  };
+  let handle = null;
+  try {
+    handle = await window.showSaveFilePicker(pickerOptions);
+  } catch (error) {
+    if (error?.name === "TypeError") {
+      handle = await window.showSaveFilePicker({
+        suggestedName: pickerOptions.suggestedName,
+        types: pickerOptions.types,
+      });
+    } else {
+      throw error;
+    }
+  }
+  if (!(await ensureFileWritePermission(handle))) {
+    throw new Error("Permission to write that ZIP file was not granted.");
+  }
+
+  if (rememberFile && midiExportZipRememberSupported()) {
+    state.midiExportFileHandle = handle;
+    await writeStoredMidiExportFileHandle(handle);
+  }
+  return handle;
+}
+
+async function writeZipBlobToFileHandle(blob, handle) {
+  const writable = await handle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+  return handle.name || "selected ZIP file";
+}
+
+function downloadZipBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName || `continuator-session-${Date.now()}.zip`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return link.download;
+}
+
 function stopPhraseGapCountdown() {
   if (state.phraseGapAnimationFrameId) {
     window.cancelAnimationFrame(state.phraseGapAnimationFrameId);
@@ -2886,8 +3088,23 @@ function syncSettingsControls(configuration) {
 
 function updateSessionActionState() {
   const hasPendingSettings = hasPendingSessionSettings();
+  const canRememberExportFile = midiExportZipRememberSupported();
   elements.createSessionButton.disabled = false;
   elements.resetSessionButton.disabled = !state.sessionId;
+  elements.saveSessionMidiButton.disabled = !state.sessionId || state.sessionMidiSaving;
+  elements.saveSessionMidiButton.classList.toggle("is-pending", state.sessionMidiSaving);
+  elements.saveSessionMidiButton.textContent = state.sessionMidiSaving
+    ? "Saving MIDI..."
+    : "Save Session MIDI";
+  elements.rememberMidiExportFileToggle.disabled =
+    !canRememberExportFile || state.sessionMidiSaving;
+  if (!canRememberExportFile) {
+    elements.rememberMidiExportFileToggle.checked = false;
+    elements.rememberMidiExportFileToggle.title =
+      "Remembering export files is not available in this browser.";
+  } else {
+    elements.rememberMidiExportFileToggle.title = "";
+  }
   elements.showGraphButton.disabled = !state.sessionId || state.graphLoading;
   elements.showGraphButton.classList.toggle("is-pending", state.graphLoading);
   elements.showGraphButton.textContent = state.graphLoading
@@ -2985,6 +3202,7 @@ function clearCurrentSessionState(message = null) {
   state.sessionConfiguration = null;
   state.historyItems = [];
   state.memoryItems = [];
+  setSessionMidiSaveResult();
   elements.sessionId.textContent = "Open or create a session";
   setGraphOpen(false);
   clearPhraseBuffers();
@@ -4390,6 +4608,7 @@ async function useSessionPayload(payload, { owned = Boolean(state.authUser) } = 
   state.sessionId = payload.session_id;
   state.sessionIsOwned = owned;
   state.sessionConfiguration = payload.configuration;
+  setSessionMidiSaveResult();
   elements.sessionId.textContent = payload.session_id;
   syncSettingsControls(payload.configuration);
   await restoreSessionPreferences(payload.configuration);
@@ -4476,6 +4695,54 @@ async function resetSession() {
   setPhraseMessage("Session memory cleared and the current settings were preserved.");
   await refreshMemory();
   await refreshSavedSessions();
+}
+
+async function saveSessionMidi() {
+  if (!state.sessionId) {
+    setSessionMidiSaveResult("Create or open a session before saving MIDI files.", true);
+    setPhraseMessage("Create or open a session before saving MIDI files.", true);
+    return;
+  }
+
+  state.sessionMidiSaving = true;
+  updateSessionActionState();
+  setSessionMidiSaveResult("Saving played and generated phrases as MIDI files...");
+  setPhraseStatus("Saving");
+  setPhraseMessage("Saving played and generated phrases as MIDI files...");
+  try {
+    const payload = await requestSessionMidiZip();
+    let destinationLabel = null;
+    if (midiExportZipSaveSupported()) {
+      let fileHandle = null;
+      try {
+        fileHandle = await chooseMidiExportZipFileHandle(payload.archive_file_name);
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
+          setSessionMidiSaveResult("MIDI export cancelled.");
+          setPhraseMessage("MIDI export cancelled.");
+          return;
+        }
+        if (error?.name === "NotAllowedError" || /system files/i.test(error?.message || "")) {
+          throw new Error(
+            "Chrome blocked that location. Save the ZIP in Downloads, Documents, Desktop, or Music instead of a system, home, or project folder.",
+          );
+        }
+        throw error;
+      }
+      destinationLabel = await writeZipBlobToFileHandle(payload.blob, fileHandle);
+    } else {
+      destinationLabel = `${downloadZipBlob(payload.blob, payload.archive_file_name)} in your browser downloads`;
+    }
+
+    const message = defaultSessionMidiSaveMessage(payload, destinationLabel);
+    setPhraseStatus("Saved");
+    setSessionMidiSaveResult(message);
+    setPhraseMessage(message);
+  } finally {
+    state.sessionMidiSaving = false;
+    updateSessionActionState();
+  }
 }
 
 async function applyCurrentSessionSettings() {
@@ -4704,6 +4971,14 @@ function defaultMidiImportMessage(payload) {
     message += ` Skipped ${pluralize(skippedCount, "file")} that were empty, unreadable, or not MIDI.`;
   }
   return message;
+}
+
+function defaultSessionMidiSaveMessage(payload, destinationLabel = null) {
+  const fileCount = Number(payload?.file_count || 0);
+  const inputCount = Number(payload?.input_file_count || 0);
+  const generatedCount = Number(payload?.generated_file_count || 0);
+  const destination = destinationLabel || payload?.directory || "the selected folder";
+  return `Saved ${pluralize(fileCount, "MIDI file")} (${pluralize(inputCount, "played phrase")}, ${pluralize(generatedCount, "generated phrase")}) to ${destination}.`;
 }
 
 function defaultMemoryGenerationMessage(payload, requestedNoteCount) {
@@ -6566,6 +6841,30 @@ function bindEvents() {
     }
   });
 
+  elements.saveSessionMidiButton.addEventListener("click", async () => {
+    try {
+      await saveSessionMidi();
+    } catch (error) {
+      setSessionMidiSaveResult(error.message, true);
+      setPhraseMessage(error.message, true);
+      setPhraseStatus("Error");
+    }
+  });
+
+  elements.rememberMidiExportFileToggle.addEventListener("change", async () => {
+    if (elements.rememberMidiExportFileToggle.checked) {
+      setSessionMidiSaveResult("The next selected MIDI ZIP file will be remembered and overwritten on future saves.");
+      return;
+    }
+    state.midiExportFileHandle = null;
+    try {
+      await clearStoredMidiExportFileHandle();
+      setSessionMidiSaveResult("MIDI export ZIP preference cleared.");
+    } catch {
+      setSessionMidiSaveResult("MIDI export ZIP preference cleared for this page.");
+    }
+  });
+
   elements.connectMidiButton.addEventListener("click", async () => {
     try {
       await connectMidi();
@@ -7038,6 +7337,7 @@ async function initialize() {
   }
   initializePhraseTimeoutSetting();
   initializeInputMonitorPreference();
+  await initializeMidiExportFilePreference();
   populatePlaybackChoices();
   syncAuthUI();
   renderSavedSessions([]);

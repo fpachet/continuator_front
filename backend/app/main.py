@@ -21,6 +21,7 @@ from .schemas import (
     ContinueResponse,
     CreateSessionRequest,
     CreateSessionResponse,
+    DownloadSessionMidiResponse,
     GeneratePhraseRequest,
     GeneratePhraseResponse,
     ImportMidiResponse,
@@ -30,6 +31,7 @@ from .schemas import (
     PublicConfigResponse,
     RegisterRequest,
     ResetSessionResponse,
+    SaveSessionMidiResponse,
     SessionHistoryResponse,
     SessionMemoryResponse,
     UpdateSessionNameRequest,
@@ -51,6 +53,7 @@ session_manager = SessionManager(
     storage=storage,
     seed_midi_file=settings.seed_midi_file,
     seed_midi_folder=settings.seed_midi_folder,
+    session_export_dir=settings.session_export_dir,
 )
 
 
@@ -329,6 +332,76 @@ def session_history(
         )
     except UnknownSessionError as error:
         raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+
+
+@app.post(
+    "/api/sessions/{session_id}/save-midi",
+    response_model=SaveSessionMidiResponse,
+    tags=["session"],
+)
+def save_session_midi(
+    session_id: str,
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+) -> SaveSessionMidiResponse:
+    try:
+        return session_manager.save_session_midi(
+            session_id,
+            None if current_user is None else current_user.id,
+        )
+    except UnknownSessionError as error:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get(
+    "/api/sessions/{session_id}/midi-download",
+    response_model=DownloadSessionMidiResponse,
+    tags=["session"],
+)
+def download_session_midi(
+    session_id: str,
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+) -> DownloadSessionMidiResponse:
+    try:
+        return session_manager.download_session_midi(
+            session_id,
+            None if current_user is None else current_user.id,
+        )
+    except UnknownSessionError as error:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get(
+    "/api/sessions/{session_id}/midi.zip",
+    tags=["session"],
+)
+def session_midi_zip(
+    session_id: str,
+    current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
+) -> Response:
+    try:
+        file_name, content, payload = session_manager.session_midi_zip(
+            session_id,
+            None if current_user is None else current_user.id,
+        )
+    except UnknownSessionError as error:
+        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{file_name}"',
+            "X-Midi-File-Count": str(payload.file_count),
+            "X-Midi-Input-File-Count": str(payload.input_file_count),
+            "X-Midi-Generated-File-Count": str(payload.generated_file_count),
+        },
+    )
 
 
 @app.get(

@@ -1451,6 +1451,24 @@ input[type="password"]:disabled {
   line-height: 1.45;
 }
 
+.session-midi-save-result {
+  margin: -6px 0 16px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(109, 211, 206, 0.22);
+  background: rgba(109, 211, 206, 0.08);
+  color: var(--text);
+  font-size: 0.84rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.session-midi-save-result.is-error {
+  border-color: rgba(239, 127, 88, 0.34);
+  background: rgba(239, 127, 88, 0.1);
+  color: #ffd8ca;
+}
+
 .timeline-card {
   padding-bottom: 18px;
 }

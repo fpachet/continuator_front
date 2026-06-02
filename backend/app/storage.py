@@ -605,3 +605,56 @@ class PhraseStorage:
             }
             for row in rows
         ]
+
+    def get_played_and_generated_phrases(self, session_id: str) -> list[dict[str, object]]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    phrases.id,
+                    phrases.request_id,
+                    phrases.kind,
+                    phrases.created_at,
+                    phrases.event_count,
+                    phrases.note_count,
+                    phrases.duration_seconds,
+                    phrases.payload_json
+                FROM phrases
+                WHERE phrases.session_id = ?
+                  AND phrases.event_count > 0
+                  AND (
+                    phrases.kind = 'generated'
+                    OR (
+                      phrases.kind = 'input'
+                      AND EXISTS (
+                        SELECT 1
+                        FROM phrases AS generated
+                        WHERE generated.session_id = phrases.session_id
+                          AND generated.request_id = phrases.request_id
+                          AND generated.kind = 'generated'
+                          AND generated.event_count > 0
+                      )
+                    )
+                  )
+                ORDER BY
+                    phrases.created_at ASC,
+                    phrases.request_id ASC,
+                    CASE phrases.kind WHEN 'input' THEN 0 ELSE 1 END,
+                    phrases.id ASC
+                """,
+                (session_id,),
+            ).fetchall()
+
+        return [
+            {
+                "id": row["id"],
+                "request_id": row["request_id"],
+                "kind": row["kind"],
+                "created_at": row["created_at"],
+                "event_count": row["event_count"],
+                "note_count": row["note_count"],
+                "duration_seconds": row["duration_seconds"],
+                "payload": json.loads(row["payload_json"]),
+            }
+            for row in rows
+        ]

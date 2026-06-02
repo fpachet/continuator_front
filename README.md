@@ -27,6 +27,7 @@ The current implementation is meant as an MVP for experimentation, demos, and ar
 - A `FastAPI` backend that wraps the Python Continuator engine.
 - One isolated Continuator engine per live session.
 - SQLite logging for captured and generated phrases.
+- Session MIDI export for all played/generated phrase pairs.
 - A compact UI with MIDI controls, phrase playback, and session activity views.
 - A tabbed `History | Memory` activity card.
 - Docker packaging suitable for local containers and Hugging Face Docker Spaces.
@@ -53,6 +54,7 @@ What is implemented today:
 - Phrase capture based on silence detection.
 - Continuator settings exposed through a compact advanced drawer.
 - Per-session `History` and `Memory` visualization.
+- `Save Session MIDI` export from the Session panel.
 
 What is intentionally not implemented yet:
 
@@ -66,6 +68,7 @@ What is intentionally not implemented yet:
 The UI is organized around a simple performance loop:
 
 - `Session`: create a new isolated Continuator session or reset its memory.
+- `Save Session MIDI`: export every played/generated phrase pair from the current session as MIDI files in one ZIP archive.
 - `MIDI I/O`: connect browser MIDI, choose an input port, and choose a playback output.
 - `Phrase Flow`: monitor captured and generated note counts, send a phrase manually, replay the last continuation, or clear local buffers.
 - `Session Activity`: switch between `History` and `Memory`.
@@ -75,6 +78,27 @@ The UX principle is to keep the performance flow visible at all times and hide l
 - High-frequency controls stay on the main surface.
 - Advanced model controls live in the `Advanced Continuator Settings` drawer.
 - Memory inspection stays inside a local tabbed card rather than taking over the page.
+
+## Saving Session MIDI
+
+The Session panel includes `Save Session MIDI`.
+
+When clicked, the browser asks the backend for a ZIP archive containing one `.mid`
+file for each played input phrase and each generated phrase in the current
+session. Filenames preserve the phrase order and label files as `input` or
+`generated`.
+
+In browsers that support the File System Access API, such as Chrome and Edge,
+the button opens a file-save picker for the ZIP archive. The checkbox labelled
+`Don't ask again` remembers the selected ZIP file handle in browser storage and
+overwrites that same ZIP on future saves after permission is granted. This
+intentionally remembers a file, not a folder, because Chrome can reject folder
+access for protected locations.
+
+If the browser does not support the file-save picker, the export falls back to a
+normal browser download. The backend also keeps `POST /api/sessions/{session_id}/save-midi`
+as a server-side fallback route, but browser users should prefer the ZIP
+download path because it writes to a location they choose locally.
 
 ## High-Level Architecture
 
@@ -185,6 +209,7 @@ backend/
     config.py
     continuator_adapter.py
     main.py
+    midi_export.py
     schemas.py
     session_manager.py
     storage.py
@@ -203,6 +228,7 @@ Main responsibilities:
 - `frontend/app.js`: MIDI capture, phrase segmentation, API calls, playback, and client-side visualization.
 - `frontend/styles.css`: layout and visual design.
 - `backend/app/main.py`: FastAPI routes.
+- `backend/app/midi_export.py`: phrase-payload to MIDI conversion and ZIP packaging.
 - `backend/app/session_manager.py`: session lifecycle, orchestration, and API-facing session logic.
 - `backend/app/continuator_adapter.py`: bridge between web JSON payloads and the Continuator Python engine.
 - `backend/app/storage.py`: SQLite session and phrase logging.
@@ -220,6 +246,9 @@ Current API endpoints:
 - `POST /api/sessions/{session_id}/generate`: generate a phrase directly from memory.
 - `GET /api/sessions/{session_id}/history`: retrieve recent logged phrase history.
 - `GET /api/sessions/{session_id}/memory`: retrieve the active memory snapshot for the live engine.
+- `GET /api/sessions/{session_id}/midi-download`: return played and generated phrases as base64 MIDI file payloads.
+- `GET /api/sessions/{session_id}/midi.zip`: download played and generated phrases as a ZIP archive for the browser save/download flow.
+- `POST /api/sessions/{session_id}/save-midi`: save played and generated phrases as MIDI files on the backend as a server-side fallback.
 - `POST /api/sessions/{session_id}/reset`: clear the live engine memory while preserving session settings.
 
 API payloads use JSON and expose both:
@@ -268,6 +297,7 @@ Typical local interaction:
 7. Wait until the selected phrase gap has elapsed after the final note release. The default gap is 1 second.
 8. Let auto-send submit the phrase, or click `Send Phrase`.
 9. Inspect `History` or `Memory` in the `Session Activity` card.
+10. Use `Save Session MIDI` in the Session panel to export the played/generated phrases as a ZIP archive of MIDI files.
 
 When you change frontend code, a normal refresh is usually enough.
 When you change backend models or routes, restarting the server and refreshing the page is the safest option.
@@ -278,6 +308,7 @@ Environment variables currently supported:
 
 - `CONTINUATOR_APP_NAME`: override the displayed app name.
 - `CONTINUATOR_DB_PATH`: move the SQLite database to another location.
+- `CONTINUATOR_SESSION_EXPORT_DIR`: choose where fallback backend-side MIDI exports are written.
 - `CONTINUATOR_SEED_MIDI_FILE`: preload each new session with one MIDI file.
 - `CONTINUATOR_SEED_MIDI_FOLDER`: preload each new session with a folder of MIDI files.
 
@@ -286,6 +317,7 @@ Examples:
 ```bash
 export CONTINUATOR_SEED_MIDI_FILE=/absolute/path/to/example.mid
 export CONTINUATOR_DB_PATH=/absolute/path/to/continuator.sqlite3
+export CONTINUATOR_SESSION_EXPORT_DIR=/absolute/path/to/session-midi-exports
 ```
 
 ## Optional Seed Corpus
@@ -336,6 +368,12 @@ If you want phrase history to survive restarts, attach a storage volume or bucke
 CONTINUATOR_DB_PATH=/data/continuator.sqlite3
 ```
 
+The browser ZIP export does not require persistent Space storage because the
+archive is downloaded to the user. The server-side fallback `save-midi` route
+writes inside the container unless `CONTINUATOR_SESSION_EXPORT_DIR` points to a
+mounted volume, so it is mainly useful for local development or managed storage
+setups.
+
 If you want each new session to start from a corpus, you can also define:
 
 ```bash
@@ -348,6 +386,7 @@ For a first public demo, the simplest deployment is:
 - free CPU hardware
 - no persistent storage
 - no seed corpus
+- browser-side MIDI ZIP export only
 
 That keeps the setup minimal and is enough to validate browser MIDI capture, API round-trips, and continuation playback.
 
@@ -367,6 +406,7 @@ Things to keep in mind:
 - The current live session registry is in process memory, so scaling to multiple replicas would require shared session storage.
 - SQLite is fine for a prototype, but PostgreSQL would be a better next step for heavier concurrent use.
 - Persistent user memory is not implemented yet.
+- Browser MIDI ZIP exports are user downloads; backend-side MIDI export folders need mounted storage if they should survive a Space rebuild.
 - Long-lived or heavier multi-user deployments will need explicit storage, authentication, and horizontal architecture decisions.
 
 ## Local Mac Usage After Space Setup
