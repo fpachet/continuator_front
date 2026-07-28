@@ -31,6 +31,8 @@ const ROLL_END_MARGIN_MAX_SECONDS = 1.2;
 const ROLL_DENSE_NOTE_THRESHOLD = 128;
 const ROLL_DENSE_MAX_DPR = 1.5;
 const CAPTURE_PREVIEW_INTERVAL_MS = 250;
+const STATUS_INDICATOR_INTERVAL_MS = 100;
+const PHRASE_GAP_VISIBILITY_DELAY_MS = 150;
 const COMPUTER_KEYBOARD_OFFSETS = new Map([
   ["KeyA", 0],
   ["KeyW", 1],
@@ -290,8 +292,8 @@ const state = {
   capturePreviewTimerId: null,
   pendingCapturePreviewNotes: null,
   lastCapturePreviewAtMs: 0,
-  phraseGapAnimationFrameId: null,
-  serverWaitAnimationFrameId: null,
+  phraseGapTimerId: null,
+  serverWaitTimerId: null,
   playbackVisualizationFrameId: null,
   playbackVisualizationStartTimerId: null,
   playbackVisualizationDisplayEndsAtMs: 0,
@@ -1631,7 +1633,7 @@ function updateVisualMidiState(messageEvent) {
   } else {
     return;
   }
-  renderVirtualKeyboardActiveNotes();
+  renderVirtualKeyboardNoteState(note);
 }
 
 async function ensureLiveMonitorPlayback() {
@@ -1717,16 +1719,21 @@ function handleUnifiedMidiMessage(messageEvent, sourceLabel, { monitor = false }
         )
       : false;
 
+  const phraseWasEmpty = recorder.events.length === 0;
   recorder.handleMessage(messageEvent);
   if (monitor) {
     void monitorLiveMidiMessage(messageEvent);
   }
   setLastMidiEvent(`${type} ${note} v${velocity}`);
-  setPhraseMessage(
-    interruptedPlayback
-      ? `Stopped the current continuation and switched to live MIDI from ${sourceLabel}.`
-      : `Receiving MIDI from ${sourceLabel}. Waiting for phrase end...`,
-  );
+  if (interruptedPlayback) {
+    setPhraseMessage(
+      `Stopped the current continuation and switched to live MIDI from ${sourceLabel}.`,
+    );
+  } else if (phraseWasEmpty) {
+    setPhraseMessage(
+      `Receiving MIDI from ${sourceLabel}. Waiting for phrase end...`,
+    );
+  }
 }
 
 function emitVirtualMidiNote(note, type) {
@@ -1850,6 +1857,15 @@ function renderVirtualKeyboardActiveNotes() {
       key.classList.toggle("is-active", state.activeVisualMidiNotes.has(note));
       key.classList.toggle("is-latched", state.virtualLatchedNotes.has(note));
     });
+}
+
+function renderVirtualKeyboardNoteState(note) {
+  const key = elements.virtualKeyboard.querySelector(`[data-midi-note="${note}"]`);
+  if (!key) {
+    return;
+  }
+  key.classList.toggle("is-active", state.activeVisualMidiNotes.has(note));
+  key.classList.toggle("is-latched", state.virtualLatchedNotes.has(note));
 }
 
 function renderVirtualKeyboard() {
@@ -2135,16 +2151,19 @@ function downloadZipBlob(blob, fileName) {
 }
 
 function stopPhraseGapCountdown() {
-  if (state.phraseGapAnimationFrameId) {
-    window.cancelAnimationFrame(state.phraseGapAnimationFrameId);
-    state.phraseGapAnimationFrameId = null;
+  if (state.phraseGapTimerId != null) {
+    window.clearTimeout(state.phraseGapTimerId);
+    state.phraseGapTimerId = null;
   }
   if (elements.phraseGapMeter.classList.contains("is-server-wait")) {
     return;
   }
-  elements.phraseGapMeter.classList.remove("is-server-wait");
-  elements.phraseGapMeter.hidden = true;
-  elements.phraseGapMeterBar.style.width = "0%";
+  if (!elements.phraseGapMeter.hidden) {
+    elements.phraseGapMeter.hidden = true;
+  }
+  if (elements.phraseGapMeterBar.style.width !== "0%") {
+    elements.phraseGapMeterBar.style.width = "0%";
+  }
 }
 
 function serverWaitLabel(statusLabel) {
@@ -2156,9 +2175,9 @@ function serverWaitLabel(statusLabel) {
 }
 
 function stopServerWaitIndicator() {
-  if (state.serverWaitAnimationFrameId) {
-    window.cancelAnimationFrame(state.serverWaitAnimationFrameId);
-    state.serverWaitAnimationFrameId = null;
+  if (state.serverWaitTimerId != null) {
+    window.clearTimeout(state.serverWaitTimerId);
+    state.serverWaitTimerId = null;
   }
   if (!elements.phraseGapMeter.classList.contains("is-server-wait")) {
     return;
@@ -2179,8 +2198,14 @@ function startServerWaitIndicator(label, startedAtMs = window.performance.now())
 
   const tick = () => {
     const elapsedMs = Math.max(0, window.performance.now() - startedAtMs);
-    elements.phraseGapMeterCopy.textContent = `${(elapsedMs / 1000).toFixed(1)}s`;
-    state.serverWaitAnimationFrameId = window.requestAnimationFrame(tick);
+    setTextContentIfChanged(
+      elements.phraseGapMeterCopy,
+      `${(elapsedMs / 1000).toFixed(1)}s`,
+    );
+    state.serverWaitTimerId = window.setTimeout(
+      tick,
+      STATUS_INDICATOR_INTERVAL_MS,
+    );
   };
 
   tick();
@@ -2199,34 +2224,54 @@ function updatePhraseGapCountdown(update) {
     return;
   }
 
-  if (state.phraseGapAnimationFrameId) {
-    window.cancelAnimationFrame(state.phraseGapAnimationFrameId);
+  if (state.phraseGapTimerId != null) {
+    window.clearTimeout(state.phraseGapTimerId);
   }
 
-  elements.phraseGapMeter.classList.remove("is-server-wait");
-  elements.phraseGapMeterLabel.textContent = "Listening for more notes";
-  elements.phraseGapMeter.hidden = false;
   const tick = () => {
     const elapsedMs = Math.max(0, window.performance.now() - startedAtMs);
     const remainingMs = Math.max(0, timeoutMs - elapsedMs);
     const progress = Math.min(1, elapsedMs / timeoutMs);
-    elements.phraseGapMeterBar.style.width = `${Math.round(progress * 100)}%`;
-    elements.phraseGapMeterCopy.textContent = `${(remainingMs / 1000).toFixed(1)}s`;
-    setPhraseStatus(remainingMs > 0 ? "Listening" : "Phrase ready");
+    if (
+      elapsedMs >= PHRASE_GAP_VISIBILITY_DELAY_MS ||
+      remainingMs <= 0
+    ) {
+      elements.phraseGapMeter.classList.remove("is-server-wait");
+      setTextContentIfChanged(
+        elements.phraseGapMeterLabel,
+        "Listening for more notes",
+      );
+      elements.phraseGapMeter.hidden = false;
+      elements.phraseGapMeterBar.style.width = `${Math.round(progress * 100)}%`;
+      setTextContentIfChanged(
+        elements.phraseGapMeterCopy,
+        `${(remainingMs / 1000).toFixed(1)}s`,
+      );
+      setPhraseStatus(remainingMs > 0 ? "Listening" : "Phrase ready");
+    }
 
     if (remainingMs <= 0) {
-      state.phraseGapAnimationFrameId = null;
+      state.phraseGapTimerId = null;
       return;
     }
-    state.phraseGapAnimationFrameId = window.requestAnimationFrame(tick);
+    state.phraseGapTimerId = window.setTimeout(
+      tick,
+      STATUS_INDICATOR_INTERVAL_MS,
+    );
   };
 
-  tick();
+  state.phraseGapTimerId = window.setTimeout(
+    tick,
+    Math.min(STATUS_INDICATOR_INTERVAL_MS, timeoutMs),
+  );
 }
 
 function setPhraseMessage(message, danger = false) {
-  elements.messageBox.textContent = message;
-  elements.messageBox.style.color = danger ? "var(--danger)" : "var(--muted)";
+  setTextContentIfChanged(elements.messageBox, message);
+  const color = danger ? "var(--danger)" : "var(--muted)";
+  if (elements.messageBox.style.color !== color) {
+    elements.messageBox.style.color = color;
+  }
 }
 
 function constraintPillText(label, state) {
@@ -2820,16 +2865,23 @@ function setAccountPanelOpen(open) {
   }
 }
 
+function setTextContentIfChanged(element, value) {
+  const text = String(value);
+  if (element.textContent !== text) {
+    element.textContent = text;
+  }
+}
+
 function setSessionStatus(label) {
-  elements.sessionStatus.textContent = label;
+  setTextContentIfChanged(elements.sessionStatus, label);
 }
 
 function setMidiStatus(label) {
-  elements.midiStatus.textContent = label;
+  setTextContentIfChanged(elements.midiStatus, label);
 }
 
 function setPhraseStatus(label) {
-  elements.phraseStatus.textContent = label;
+  setTextContentIfChanged(elements.phraseStatus, label);
 }
 
 function setSelectedInputName(label) {

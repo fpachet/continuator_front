@@ -154,6 +154,9 @@ every MIDI event:
   or reconstruct the full event history after every `note_on` or `note_off`.
 - Dense piano rolls use a reduced-effect drawing path that avoids an expensive
   blurred shadow for every individual note.
+- Repeated MIDI status text is written only when it changes. Phrase-gap and
+  server-wait indicators update at a modest rate so the controls pane is not
+  continuously repainted during capture or generation.
 - Phrase playback keeps the piano-roll canvas stable and animates a lightweight
   playhead overlay for both captured and generated phrases.
 - `History`, `Memory`, and saved-session payloads refresh only when their
