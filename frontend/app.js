@@ -64,6 +64,8 @@ const MIDI_EXPORT_FILE_HANDLE_KEY = "session-midi-export-zip";
 const FAUST_CUSTOM_SOURCE_STORAGE_KEY = "continuator.faust.custom.source";
 const FAUST_CUSTOM_VALUES_STORAGE_KEY = "continuator.faust.custom.values";
 const PLAYBACK_PREFERENCE_STORAGE_PREFIX = "continuator.playback.preference";
+const MIDI_COPY_OUTPUT_PREFERENCE_STORAGE_PREFIX =
+  "continuator.midi.copy.output.preference";
 const AUDIO_OUTPUT_PREFERENCE_STORAGE_PREFIX = "continuator.audio.output.preference";
 const DEFAULT_ENGINE_KIND = "classic";
 const ENGINE_KIND_LABELS = new Map([
@@ -158,6 +160,8 @@ const elements = {
   readyPhraseStep: document.querySelector("#ready-phrase-step"),
   readyOutputStep: document.querySelector("#ready-output-step"),
   rendererHealth: document.querySelector("#renderer-health"),
+  midiCopyStatusChip: document.querySelector("#midi-copy-status-chip"),
+  midiCopyStatus: document.querySelector("#midi-copy-status"),
   sessionSaveNote: document.querySelector("#session-save-note"),
   sessionMidiSaveResult: document.querySelector("#session-midi-save-result"),
   rememberMidiExportFileToggle: document.querySelector("#remember-midi-export-file-toggle"),
@@ -180,6 +184,7 @@ const elements = {
   midiInputSelect: document.querySelector("#midi-input-select"),
   phraseTimeoutInput: document.querySelector("#phrase-timeout-input"),
   midiOutputSelect: document.querySelector("#midi-output-select"),
+  midiCopyOutputSelect: document.querySelector("#midi-copy-output-select"),
   audioOutputSelect: document.querySelector("#audio-output-select"),
   faustRendererPanel: document.querySelector("#faust-renderer-panel"),
   faustClavierPanel: document.querySelector("#faust-clavier-panel"),
@@ -324,6 +329,7 @@ const state = {
   liveMonitorToken: 0,
   inputMonitorEnabled: false,
   userPlaybackPreference: null,
+  userMidiCopyOutputPreference: null,
   userAudioOutputPreference: null,
   audioOutputDevices: [],
   lastConstraints: null,
@@ -690,6 +696,11 @@ function playbackPreferenceStorageKey() {
   return `${PLAYBACK_PREFERENCE_STORAGE_PREFIX}.${userId}`;
 }
 
+function midiCopyOutputPreferenceStorageKey() {
+  const userId = state.authUser?.id || "guest";
+  return `${MIDI_COPY_OUTPUT_PREFERENCE_STORAGE_PREFIX}.${userId}`;
+}
+
 function audioOutputPreferenceStorageKey() {
   const userId = state.authUser?.id || "guest";
   return `${AUDIO_OUTPUT_PREFERENCE_STORAGE_PREFIX}.${userId}`;
@@ -732,6 +743,50 @@ function rememberPlaybackPreference(preference) {
   safeLocalStorageSet(
     playbackPreferenceStorageKey(),
     JSON.stringify(state.userPlaybackPreference),
+  );
+}
+
+function parseStoredMidiCopyOutputPreference(value) {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value);
+    const outputId = String(parsed?.midi_copy_output_id || "").trim();
+    const outputName = String(parsed?.midi_copy_output_name || "").trim();
+    if (!outputId) {
+      return null;
+    }
+    return {
+      midi_copy_output_id: outputId,
+      midi_copy_output_name: outputName || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function loadStoredMidiCopyOutputPreference() {
+  return parseStoredMidiCopyOutputPreference(
+    safeLocalStorageGet(midiCopyOutputPreferenceStorageKey()),
+  );
+}
+
+function rememberMidiCopyOutputPreference(preference) {
+  const outputId = String(preference?.midi_copy_output_id || "").trim();
+  if (!outputId) {
+    state.userMidiCopyOutputPreference = null;
+    safeLocalStorageSet(midiCopyOutputPreferenceStorageKey(), null);
+    return;
+  }
+  const outputName = String(preference?.midi_copy_output_name || "").trim();
+  state.userMidiCopyOutputPreference = {
+    midi_copy_output_id: outputId,
+    midi_copy_output_name: outputName || null,
+  };
+  safeLocalStorageSet(
+    midiCopyOutputPreferenceStorageKey(),
+    JSON.stringify(state.userMidiCopyOutputPreference),
   );
 }
 
@@ -1450,32 +1505,15 @@ const webMidiRenderer = {
   },
 
   dispatchEvent(playback, event) {
-    const status =
-      event.type === "note_on" && event.velocity > 0
-        ? 0x90 | (event.channel & 0x0f)
-        : 0x80 | (event.channel & 0x0f);
-    sendOutputMessage(playback.output, [status, event.note, event.velocity]);
-
-    const key = outputNoteKey(event.note, event.channel);
-    if (event.type === "note_on" && event.velocity > 0) {
-      playback.activeOutputNotes.add(key);
-    } else {
-      playback.activeOutputNotes.delete(key);
-    }
+    dispatchMidiEventToOutput(
+      playback.output,
+      playback.activeOutputNotes,
+      event,
+    );
   },
 
   stopPlayback(playback) {
-    if (!playback.output) {
-      return;
-    }
-
-    playback.activeOutputNotes.forEach((key) => {
-      const [channelRaw, noteRaw] = key.split(":");
-      const channel = Number(channelRaw);
-      const note = Number(noteRaw);
-      sendOutputMessage(playback.output, [0x80 | (channel & 0x0f), note, 0]);
-    });
-    sendMidiPanicToOutput(playback.output);
+    stopMidiOutputPlayback(playback.output, playback.activeOutputNotes);
   },
 
   panicPlayback(playback) {
@@ -1661,6 +1699,7 @@ async function ensureLiveMonitorPlayback() {
     .then((playback) => {
       if (token !== state.liveMonitorToken) {
         playback.renderer?.stopPlayback?.(playback);
+        stopMidiCopyPlayback(playback);
         return null;
       }
       state.liveMonitorPlayback = playback;
@@ -1682,6 +1721,7 @@ function stopLiveMonitorPlayback() {
   if (playback?.renderer?.stopPlayback) {
     playback.renderer.stopPlayback(playback);
   }
+  stopMidiCopyPlayback(playback);
   state.liveMonitorPlayback = null;
   state.liveMonitorPlaybackPromise = null;
   state.liveMonitorChoiceValue = null;
@@ -2010,6 +2050,14 @@ function renderPerformanceState() {
 
   if (elements.rendererHealth) {
     elements.rendererHealth.textContent = rendererHealthLabel();
+  }
+  if (elements.midiCopyStatusChip && elements.midiCopyStatus) {
+    const outputId = selectedMidiCopyOutputId();
+    const output = selectedMidiCopyOutput();
+    elements.midiCopyStatusChip.hidden = !outputId;
+    elements.midiCopyStatus.textContent = output
+      ? `${output.name || output.id} ready`
+      : "Output unavailable";
   }
   if (elements.sessionSaveNote) {
     elements.sessionSaveNote.textContent = state.authUser
@@ -3164,11 +3212,16 @@ function describeSessionPreferences(configuration) {
   const labels = [];
   const inputName = configuration?.midi_input_name || configuration?.midi_input_id;
   const playbackName = savedPlaybackPreferenceLabel(configuration);
+  const midiCopyName =
+    configuration?.midi_copy_output_name || configuration?.midi_copy_output_id;
   if (inputName) {
     labels.push(`Input ${inputName}`);
   }
   if (playbackName) {
     labels.push(`Playback ${playbackName}`);
+  }
+  if (midiCopyName) {
+    labels.push(`MIDI copy ${midiCopyName}`);
   }
   return labels;
 }
@@ -3534,16 +3587,32 @@ function currentPlaybackPreference() {
   };
 }
 
+function currentMidiCopyOutputPreference() {
+  const outputId = selectedMidiCopyOutputId();
+  const output = midiOutputById(outputId);
+  return {
+    midi_copy_output_id: output?.id || null,
+    midi_copy_output_name: output ? output.name || output.id : null,
+  };
+}
+
 function currentSessionPreferences() {
   return {
     ...currentInputPreference(),
     ...currentPlaybackPreference(),
+    ...currentMidiCopyOutputPreference(),
   };
 }
 
 async function saveSessionPreferences(preferences) {
   if (preferences?.playback_choice) {
     rememberPlaybackPreference(preferences);
+  }
+  if (
+    preferences &&
+    Object.prototype.hasOwnProperty.call(preferences, "midi_copy_output_id")
+  ) {
+    rememberMidiCopyOutputPreference(preferences);
   }
   if (!state.sessionId || !preferences || !Object.keys(preferences).length) {
     return null;
@@ -4610,6 +4679,7 @@ function eventsToNotes(events) {
 async function refreshAuthState() {
   const payload = await requestJson("/api/auth/me");
   state.authUser = payload?.user || null;
+  state.userMidiCopyOutputPreference = loadStoredMidiCopyOutputPreference();
   state.userAudioOutputPreference = loadStoredAudioOutputPreference();
   populateAudioOutputChoices();
   await applyPreferredAudioOutput();
@@ -4654,6 +4724,7 @@ async function submitAuth(mode) {
   });
 
   state.authUser = payload.user;
+  state.userMidiCopyOutputPreference = loadStoredMidiCopyOutputPreference();
   state.userAudioOutputPreference = loadStoredAudioOutputPreference();
   populateAudioOutputChoices();
   await applyPreferredAudioOutput();
@@ -4690,6 +4761,7 @@ async function logoutUser() {
   await requestJson("/api/auth/logout", { method: "POST" });
   state.authUser = null;
   state.userPlaybackPreference = loadStoredPlaybackPreference();
+  state.userMidiCopyOutputPreference = loadStoredMidiCopyOutputPreference();
   state.userAudioOutputPreference = loadStoredAudioOutputPreference();
   populateAudioOutputChoices();
   await applyPreferredAudioOutput();
@@ -4762,6 +4834,16 @@ function pendingPlaybackPreference() {
     : state.userPlaybackPreference;
 }
 
+function pendingMidiCopyOutputPreference() {
+  return state.sessionConfiguration?.midi_copy_output_id
+    ? {
+        midi_copy_output_id: state.sessionConfiguration.midi_copy_output_id,
+        midi_copy_output_name:
+          state.sessionConfiguration.midi_copy_output_name || null,
+      }
+    : state.userMidiCopyOutputPreference;
+}
+
 function selectedPlaybackRestoresPendingPreference() {
   const preference = pendingPlaybackPreference();
   if (!preference?.playback_choice) {
@@ -4778,6 +4860,21 @@ function selectedPlaybackRestoresPendingPreference() {
     preferredChoice.rendererId === WEB_MIDI_RENDERER_ID &&
     normalizedDeviceName(playbackChoiceLabel(selectedChoiceValue)) ===
       normalizedDeviceName(preference.playback_choice_name)
+  );
+}
+
+function selectedMidiCopyRestoresPendingPreference() {
+  const preference = pendingMidiCopyOutputPreference();
+  const selectedOutput = selectedMidiCopyOutput();
+  if (!preference?.midi_copy_output_id || !selectedOutput) {
+    return false;
+  }
+  if (selectedOutput.id === preference.midi_copy_output_id) {
+    return true;
+  }
+  return (
+    normalizedDeviceName(selectedOutput.name || selectedOutput.id) ===
+    normalizedDeviceName(preference.midi_copy_output_name)
   );
 }
 
@@ -4822,6 +4919,48 @@ function resolveAvailablePlaybackPreference(preference, outputs = []) {
     : null;
 }
 
+function resolveAvailableMidiCopyOutputId(preference, outputs = []) {
+  const primaryOutputId = selectedPrimaryMidiOutputId();
+  const eligibleOutputs = outputs.filter((output) => output.id !== primaryOutputId);
+  const preferredOutputId = preference?.midi_copy_output_id || null;
+  if (!preferredOutputId) {
+    return null;
+  }
+
+  const matchedById = eligibleOutputs.find(
+    (output) => output.id === preferredOutputId,
+  );
+  if (matchedById) {
+    return matchedById.id;
+  }
+
+  const preferredName = normalizedDeviceName(
+    preference?.midi_copy_output_name,
+  );
+  if (!preferredName) {
+    return null;
+  }
+  const matchedByName = eligibleOutputs.find(
+    (output) =>
+      normalizedDeviceName(output.name || output.id) === preferredName,
+  );
+  return matchedByName?.id || null;
+}
+
+function selectMidiCopyOutputPreference(preference) {
+  const selectedOutputId = populateMidiCopyOutputChoices(preference);
+  if (!selectedOutputId) {
+    return false;
+  }
+  const output = midiOutputById(selectedOutputId);
+  rememberMidiCopyOutputPreference({
+    midi_copy_output_id: selectedOutputId,
+    midi_copy_output_name:
+      preference?.midi_copy_output_name || output?.name || selectedOutputId,
+  });
+  return true;
+}
+
 async function selectMidiInputPreference(configuration) {
   const preferredInputId = configuration?.midi_input_id;
   if (!preferredInputId) {
@@ -4841,6 +4980,7 @@ async function selectMidiInputPreference(configuration) {
 
 async function restoreSessionPreferences(configuration) {
   selectPlaybackPreference(configuration);
+  selectMidiCopyOutputPreference(configuration);
   await selectMidiInputPreference(configuration);
 }
 
@@ -4888,11 +5028,18 @@ async function createSession({ preservePhraseBuffers = false, announce = true } 
 
   await useSessionPayload(payload, { owned: Boolean(state.authUser) });
   const restoredPlaybackPreference = selectPlaybackPreference(state.userPlaybackPreference);
+  const restoredMidiCopyPreference = selectMidiCopyOutputPreference(
+    state.userMidiCopyOutputPreference,
+  );
   await saveSessionPreferences({
     ...currentInputPreference(),
     ...(restoredPlaybackPreference || !state.userPlaybackPreference?.playback_choice
       ? currentPlaybackPreference()
       : {}),
+    ...(restoredMidiCopyPreference ||
+    !state.userMidiCopyOutputPreference?.midi_copy_output_id
+      ? currentMidiCopyOutputPreference()
+      : state.userMidiCopyOutputPreference),
   });
   setControlView("perform");
   if (!preservePhraseBuffers) {
@@ -5641,6 +5788,28 @@ function midiOutputById(outputId) {
   return state.midiAccess.outputs.get(outputId) || null;
 }
 
+function selectedPrimaryMidiOutputId() {
+  const choice = resolvePlaybackChoice();
+  return choice.rendererId === WEB_MIDI_RENDERER_ID ? choice.targetId : null;
+}
+
+function selectedMidiCopyOutputId() {
+  return elements.midiCopyOutputSelect?.value || null;
+}
+
+function selectedMidiCopyOutput() {
+  const outputId = selectedMidiCopyOutputId();
+  if (!outputId || outputId === selectedPrimaryMidiOutputId()) {
+    return null;
+  }
+  return midiOutputById(outputId);
+}
+
+function midiCopyOutputLabel() {
+  const output = selectedMidiCopyOutput();
+  return output ? output.name || output.id : null;
+}
+
 function selectedPlaybackChoiceValue() {
   return elements.midiOutputSelect.value || DEFAULT_PLAYBACK_CHOICE;
 }
@@ -6057,6 +6226,19 @@ async function createPlaybackSession(choiceValue = selectedPlaybackChoiceValue()
   }
 
   const rendererState = (await choice.renderer.createPlaybackSession?.(choice.targetId)) || {};
+  const midiCopyOutput = selectedMidiCopyOutput();
+  let midiCopyReady = false;
+  if (midiCopyOutput) {
+    try {
+      await midiCopyOutput.open();
+      midiCopyReady = true;
+    } catch {
+      setPhraseMessage(
+        `${playbackChoiceLabel(choice.value)} remains active, but the MIDI copy output is unavailable.`,
+        true,
+      );
+    }
+  }
   return {
     renderer: choice.renderer,
     rendererId: choice.renderer.id,
@@ -6067,6 +6249,9 @@ async function createPlaybackSession(choiceValue = selectedPlaybackChoiceValue()
     handoffAtMs: performance.now(),
     endsAtMs: performance.now(),
     ...rendererState,
+    midiCopyOutput: midiCopyReady ? midiCopyOutput : null,
+    midiCopyOutputId: midiCopyOutput?.id || null,
+    midiCopyActiveNotes: new Set(),
   };
 }
 
@@ -6080,6 +6265,59 @@ function sendOutputMessage(output, message) {
   } catch {
     // Ignore unavailable outputs while cancelling or switching playback.
   }
+}
+
+function midiMessageForPlaybackEvent(event) {
+  if (!event || !["note_on", "note_off"].includes(event.type)) {
+    return null;
+  }
+  const noteOn = event.type === "note_on" && event.velocity > 0;
+  const status = (noteOn ? 0x90 : 0x80) | (event.channel & 0x0f);
+  return [status, event.note, event.velocity];
+}
+
+function dispatchMidiEventToOutput(output, activeNotes, event) {
+  const message = midiMessageForPlaybackEvent(event);
+  if (!output || !message) {
+    return;
+  }
+  sendOutputMessage(output, message);
+
+  const key = outputNoteKey(event.note, event.channel);
+  if (event.type === "note_on" && event.velocity > 0) {
+    activeNotes?.add(key);
+  } else {
+    activeNotes?.delete(key);
+  }
+}
+
+function stopMidiOutputPlayback(output, activeNotes) {
+  if (!output) {
+    return false;
+  }
+  activeNotes?.forEach((key) => {
+    const [channelRaw, noteRaw] = key.split(":");
+    const channel = Number(channelRaw);
+    const note = Number(noteRaw);
+    sendOutputMessage(output, [0x80 | (channel & 0x0f), note, 0]);
+  });
+  activeNotes?.clear();
+  return sendMidiPanicToOutput(output);
+}
+
+function dispatchMidiCopyEvent(playback, event) {
+  dispatchMidiEventToOutput(
+    playback?.midiCopyOutput,
+    playback?.midiCopyActiveNotes,
+    event,
+  );
+}
+
+function stopMidiCopyPlayback(playback) {
+  return stopMidiOutputPlayback(
+    playback?.midiCopyOutput,
+    playback?.midiCopyActiveNotes,
+  );
 }
 
 function sendMidiPanicToOutput(output) {
@@ -6133,6 +6371,21 @@ async function sendPlaybackPanic() {
     activePlayback.targetId === selectedChoice.targetId;
   if (!matchesActiveSelection && selectedChoice.renderer?.panicTarget) {
     sent = (await selectedChoice.renderer.panicTarget(selectedChoice.targetId)) || sent;
+  }
+
+  const selectedCopyOutput = selectedMidiCopyOutput();
+  const selectedCopyWillBeStopped =
+    selectedCopyOutput &&
+    [activePlayback, liveMonitorPlayback].some(
+      (playback) => playback?.midiCopyOutput === selectedCopyOutput,
+    );
+  if (selectedCopyOutput && !selectedCopyWillBeStopped) {
+    try {
+      await selectedCopyOutput.open();
+      sent = sendMidiPanicToOutput(selectedCopyOutput) || sent;
+    } catch {
+      // Keep panic best-effort when a secondary MIDI destination disconnects.
+    }
   }
 
   return sent;
@@ -6286,6 +6539,7 @@ function stopActivePlayback() {
   playback.timerIds.clear();
   playback.cleanupTimerId = null;
   playback.renderer?.stopPlayback?.(playback);
+  stopMidiCopyPlayback(playback);
   state.activePlayback = null;
   state.activeMemoryPlaybackIndex = null;
   state.activeRollPlaybackKind = null;
@@ -6298,6 +6552,7 @@ function stopActivePlayback() {
 
 function dispatchPlaybackEvent(playback, event) {
   playback.renderer?.dispatchEvent?.(playback, event);
+  dispatchMidiCopyEvent(playback, event);
 }
 
 async function playPayload(
@@ -6728,6 +6983,53 @@ function populatePlaybackChoices() {
   updateSelectedOutput();
 }
 
+function populateMidiCopyOutputChoices(
+  preference = pendingMidiCopyOutputPreference(),
+) {
+  if (!elements.midiCopyOutputSelect) {
+    return null;
+  }
+  const outputs = state.midiAccess ? [...state.midiAccess.outputs.values()] : [];
+  const primaryOutputId = selectedPrimaryMidiOutputId();
+  const eligibleOutputs = outputs.filter(
+    (output) => output.id !== primaryOutputId,
+  );
+  const eligibleOutputIds = new Set(eligibleOutputs.map((output) => output.id));
+  const previousOutputId = selectedMidiCopyOutputId();
+  const preferredOutputId = resolveAvailableMidiCopyOutputId(
+    preference,
+    outputs,
+  );
+  const selectedOutputId =
+    preferredOutputId ||
+    (previousOutputId && eligibleOutputIds.has(previousOutputId)
+      ? previousOutputId
+      : null);
+
+  const outputOptions = eligibleOutputs
+    .map(
+      (output) =>
+        `<option value="${output.id}">${output.name || output.id}</option>`,
+    )
+    .join("");
+  const emptyOption = !eligibleOutputs.length
+    ? `<option value="__no_additional_midi_outputs__" disabled>${
+        state.midiAccess
+          ? "No additional MIDI outputs found"
+          : "Connect MIDI to show outputs"
+      }</option>`
+    : "";
+
+  elements.midiCopyOutputSelect.innerHTML = [
+    `<option value="">Off</option>`,
+    outputOptions,
+    emptyOption,
+  ].join("");
+  elements.midiCopyOutputSelect.disabled = !state.midiAccess;
+  elements.midiCopyOutputSelect.value = selectedOutputId || "";
+  return selectedOutputId;
+}
+
 async function populateMidiSelectors() {
   populatePlaybackChoices();
   const inputs = state.midiAccess ? [...state.midiAccess.inputs.values()] : [];
@@ -6849,16 +7151,32 @@ async function connectMidi() {
   state.midiAccess.onstatechange = async () => {
     try {
       await populateMidiSelectors();
-      if (selectedPlaybackRestoresPendingPreference()) {
-        await saveSessionPreferences(currentPlaybackPreference());
+      const restoredPreferences = {
+        ...(selectedPlaybackRestoresPendingPreference()
+          ? currentPlaybackPreference()
+          : {}),
+        ...(selectedMidiCopyRestoresPendingPreference()
+          ? currentMidiCopyOutputPreference()
+          : {}),
+      };
+      if (Object.keys(restoredPreferences).length) {
+        await saveSessionPreferences(restoredPreferences);
       }
     } catch (error) {
       setPhraseMessage(error.message, true);
     }
   };
   await populateMidiSelectors();
-  if (selectedPlaybackRestoresPendingPreference()) {
-    await saveSessionPreferences(currentPlaybackPreference());
+  const restoredPreferences = {
+    ...(selectedPlaybackRestoresPendingPreference()
+      ? currentPlaybackPreference()
+      : {}),
+    ...(selectedMidiCopyRestoresPendingPreference()
+      ? currentMidiCopyOutputPreference()
+      : {}),
+  };
+  if (Object.keys(restoredPreferences).length) {
+    await saveSessionPreferences(restoredPreferences);
   }
   if (!state.activeInputId) {
     setMidiStatus("Connected / choose input");
@@ -6868,6 +7186,7 @@ async function connectMidi() {
 
 function updateSelectedOutput() {
   stopLiveMonitorPlayback();
+  populateMidiCopyOutputChoices();
   syncFaustRendererPanel();
   renderPerformanceState();
 }
@@ -7405,12 +7724,45 @@ function bindEvents() {
           refreshCustomFaustControlState();
         }
       }
-      await saveSessionPreferences(currentPlaybackPreference());
-      setPhraseMessage(`Playback renderer set to ${playbackChoiceLabel()}.`);
+      await saveSessionPreferences({
+        ...currentPlaybackPreference(),
+        ...currentMidiCopyOutputPreference(),
+      });
+      const copyLabel = midiCopyOutputLabel();
+      setPhraseMessage(
+        copyLabel
+          ? `Playback renderer set to ${playbackChoiceLabel()}, also sending MIDI to ${copyLabel}.`
+          : `Playback renderer set to ${playbackChoiceLabel()}.`,
+      );
     } catch (error) {
       setPhraseMessage(error.message, true);
     } finally {
       syncFaustRendererPanel();
+    }
+  });
+
+  elements.midiCopyOutputSelect.addEventListener("change", async () => {
+    stopLiveMonitorPlayback();
+    const output = selectedMidiCopyOutput();
+    try {
+      if (output) {
+        await output.open();
+      }
+      await saveSessionPreferences(currentMidiCopyOutputPreference());
+      setPhraseMessage(
+        output
+          ? `Also sending MIDI to ${output.name || output.id}.`
+          : "Secondary MIDI output off.",
+      );
+    } catch (error) {
+      elements.midiCopyOutputSelect.value = "";
+      await saveSessionPreferences(currentMidiCopyOutputPreference());
+      setPhraseMessage(
+        `Could not open the secondary MIDI output: ${error.message}`,
+        true,
+      );
+    } finally {
+      renderPerformanceState();
     }
   });
 
@@ -7598,6 +7950,7 @@ function bindEvents() {
 
 async function initialize() {
   bindEvents();
+  state.userMidiCopyOutputPreference = loadStoredMidiCopyOutputPreference();
   state.userAudioOutputPreference = loadStoredAudioOutputPreference();
   try {
     await initializeCustomFaustSource();

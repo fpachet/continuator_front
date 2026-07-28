@@ -50,6 +50,7 @@ What is implemented today:
 - Session creation and reset.
 - Web MIDI input selection in the browser.
 - Browser sampled piano/violin playback, browser synth playback, or hardware MIDI output playback.
+- Optional MIDI fan-out to one additional hardware or virtual MIDI output.
 - Optional live MIDI input monitoring through the selected playback renderer.
 - Phrase capture based on silence detection.
 - Continuator settings exposed through a compact advanced drawer.
@@ -69,7 +70,7 @@ The UI is organized around a simple performance loop:
 
 - `Session`: create a new isolated Continuator session or reset its memory.
 - `Save Session MIDI`: export every played/generated phrase pair from the current session as MIDI files in one ZIP archive.
-- `MIDI I/O`: connect browser MIDI, choose an input port, and choose a playback output.
+- `MIDI I/O`: connect browser MIDI, choose an input port and playback renderer, and optionally copy playback to another MIDI output.
 - `Phrase Flow`: monitor captured and generated note counts, send a phrase manually, replay the last continuation, or clear local buffers.
 - `Session Activity`: switch between `History` and `Memory`.
 
@@ -318,12 +319,13 @@ Typical local interaction:
 2. Click `Connect MIDI`.
 3. Choose a MIDI input.
 4. Choose `Browser Synth` or a hardware output.
-5. Optionally open `Advanced Continuator Settings`.
-6. Play a phrase.
-7. Wait until the selected phrase gap has elapsed after the final note release. The default gap is 1 second.
-8. Let auto-send submit the phrase, or click `Send Phrase`.
-9. Inspect `History` or `Memory` in the `Session Activity` card.
-10. Use `Save Session MIDI` in the Session panel to export the played/generated phrases as a ZIP archive of MIDI files.
+5. Optionally choose another hardware or virtual port under `Also send MIDI to`.
+6. Optionally open `Advanced Continuator Settings`.
+7. Play a phrase.
+8. Wait until the selected phrase gap has elapsed after the final note release. The default gap is 1 second.
+9. Let auto-send submit the phrase, or click `Send Phrase`.
+10. Inspect `History` or `Memory` in the `Session Activity` card.
+11. Use `Save Session MIDI` in the Session panel to export the played/generated phrases as a ZIP archive of MIDI files.
 
 When you change frontend code, a normal refresh is usually enough.
 When you change backend models or routes, restarting the server and refreshing the page is the safest option.

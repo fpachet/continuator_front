@@ -115,6 +115,8 @@ class SessionManager:
             midi_input_name=None,
             playback_choice=None,
             playback_choice_name=None,
+            midi_copy_output_id=None,
+            midi_copy_output_name=None,
         )
 
     def _build_engine(self, configuration: SessionConfiguration) -> ContinuatorSessionEngine:

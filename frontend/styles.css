@@ -1613,6 +1613,10 @@ input[type="password"]:disabled {
   background: rgba(255, 255, 255, 0.035);
 }
 
+.playback-status-chip[hidden] {
+  display: none;
+}
+
 .playback-status-chip span {
   color: var(--muted);
   font-size: 0.72rem;

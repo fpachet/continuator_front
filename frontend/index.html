@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Web Continuator</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260602-session-midi-zip3" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260728-midi-copy2" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -174,7 +174,7 @@
         <section class="readme-block">
           <h3>Studio Layout</h3>
           <ul class="readme-list">
-            <li><strong>Perform</strong>: live MIDI capture, playback routing, phrase generation, replay, and infinite mode.</li>
+            <li><strong>Perform</strong>: live MIDI capture, playback routing, optional MIDI fan-out, phrase generation, replay, and infinite mode.</li>
             <li><strong>Memory</strong>: corpus import, active engine memory, and phrase history.</li>
             <li><strong>Session</strong>: session lifecycle, advanced Continuator settings, and saved sessions.</li>
           </ul>
@@ -601,10 +601,22 @@
                     <option>System default</option>
                   </select>
                 </div>
+                <div class="route-picker">
+                  <label class="route-picker-label" for="midi-copy-output-select">
+                    Also send MIDI to
+                  </label>
+                  <select id="midi-copy-output-select" disabled>
+                    <option value="">Connect MIDI first</option>
+                  </select>
+                </div>
                 <div class="playback-status-row">
                   <span class="playback-status-chip">
                     <span>Health</span>
                     <strong id="renderer-health">Browser renderer ready</strong>
+                  </span>
+                  <span id="midi-copy-status-chip" class="playback-status-chip" hidden>
+                    <span>MIDI copy</span>
+                    <strong id="midi-copy-status">Off</strong>
                   </span>
                 </div>
                 <div class="sound-actions">
@@ -616,7 +628,8 @@
                   </button>
                 </div>
                 <p class="field-hint compact-hint">
-                  External MIDI appears after MIDI is connected.
+                  External MIDI appears after MIDI is connected. The secondary
+                  output mirrors playback and monitored live input.
                 </p>
               </section>
 
@@ -1162,6 +1175,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20260728-performance3"></script>
+    <script type="module" src="/assets/app.js?v=20260728-midi-copy2"></script>
   </body>
 </html>

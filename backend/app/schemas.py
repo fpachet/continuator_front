@@ -102,6 +102,8 @@ class SessionConfiguration(BaseModel):
     midi_input_name: str | None = Field(default=None, max_length=256)
     playback_choice: str | None = Field(default=None, max_length=512)
     playback_choice_name: str | None = Field(default=None, max_length=256)
+    midi_copy_output_id: str | None = Field(default=None, max_length=256)
+    midi_copy_output_name: str | None = Field(default=None, max_length=256)
 
 
 class CreateSessionResponse(BaseModel):
@@ -279,6 +281,8 @@ class UpdateSessionPreferencesRequest(BaseModel):
     midi_input_name: str | None = Field(default=None, max_length=256)
     playback_choice: str | None = Field(default=None, max_length=512)
     playback_choice_name: str | None = Field(default=None, max_length=256)
+    midi_copy_output_id: str | None = Field(default=None, max_length=256)
+    midi_copy_output_name: str | None = Field(default=None, max_length=256)
 
 
 class UpdateSessionPreferencesResponse(BaseModel):
