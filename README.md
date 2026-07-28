@@ -137,11 +137,28 @@ The phrase pipeline is:
 7. The backend reconstructs `mido.Message` objects and asks Continuator for a phrase representation.
 8. The backend follows the current Continuator strategy: learn the input phrase first, then generate.
 9. The backend returns both the input phrase and generated phrase as note-level and event-level JSON payloads.
-10. The browser updates the piano rolls, logs the interaction in `History`, refreshes `Memory`, and plays the continuation.
+10. The browser updates the piano rolls, logs the interaction, plays the continuation, and refreshes visible session views without blocking the performance flow.
 
 By default, the backend asks for a continuation with the same note count as the input phrase.
 
 For robustness, the wrapper currently retries generation without the hard end constraint if the exact same-length plus exact-ending request has no solution. This helps some dense or chordal phrases without modifying the Continuator core itself.
+
+### Front-End Performance Behavior
+
+Long or dense phrases are handled without rebuilding the complete display for
+every MIDI event:
+
+- Live capture updates event and completed-note counters incrementally.
+- The captured piano roll is rendered once when the phrase closes, rather than
+  being copied, reconstructed, and redrawn after every `note_on` or `note_off`.
+- Phrase playback keeps the piano-roll canvas stable and animates a lightweight
+  playhead overlay for both captured and generated phrases.
+- `History`, `Memory`, and saved-session payloads refresh only when their
+  corresponding view is visible. Opening a view refreshes it on demand.
+
+These rules keep browser interaction responsive while capturing or playing
+phrases containing many notes. Server-side learning and generation time is
+reported separately in the timing readout.
 
 ## Session Model
 

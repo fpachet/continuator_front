@@ -1102,13 +1102,16 @@
             <h2>Captured Phrase</h2>
             <span class="small-copy">Detected from browser MIDI events</span>
           </div>
-          <canvas
-            id="input-roll"
-            class="piano-roll"
-            role="button"
-            tabindex="0"
-            aria-label="Captured phrase piano roll. Click a note to audition it, or click empty space to play the phrase."
-          ></canvas>
+          <div class="roll-viewport">
+            <canvas
+              id="input-roll"
+              class="piano-roll"
+              role="button"
+              tabindex="0"
+              aria-label="Captured phrase piano roll. Click a note to audition it, or click empty space to play the phrase."
+            ></canvas>
+            <div id="input-playhead" class="roll-playhead" hidden></div>
+          </div>
         </article>
 
         <article class="card roll-card output-card">
@@ -1159,6 +1162,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20260602-session-midi-zip3"></script>
+    <script type="module" src="/assets/app.js?v=20260728-performance"></script>
   </body>
 </html>

@@ -166,6 +166,7 @@ const elements = {
   memoryHint: document.querySelector("#memory-hint"),
   memoryRibbon: document.querySelector("#memory-ribbon"),
   inputRoll: document.querySelector("#input-roll"),
+  inputPlayhead: document.querySelector("#input-playhead"),
   outputRoll: document.querySelector("#output-roll"),
   outputPlayhead: document.querySelector("#output-playhead"),
   settingsSummary: document.querySelector("#settings-summary"),
@@ -1185,6 +1186,7 @@ class PhraseRecorder {
   reset() {
     this.events = [];
     this.pendingNotes = new Set();
+    this.completedNoteCount = 0;
     this.lastTimestamp = null;
     if (this.timer) {
       window.clearTimeout(this.timer);
@@ -1236,11 +1238,17 @@ class PhraseRecorder {
       this.pendingNotes.add(key);
       this.onGapUpdate?.({ active: false });
     } else {
-      this.pendingNotes.delete(key);
+      const completedNote = this.pendingNotes.delete(key);
+      if (completedNote) {
+        this.completedNoteCount += 1;
+      }
     }
 
     this.events.push(event);
-    this.onUpdate?.(this.snapshot(), false);
+    this.onUpdate?.({
+      eventCount: this.events.length,
+      noteCount: this.completedNoteCount,
+    });
     this.scheduleCompletionCheck(timestamp);
   }
 
@@ -1289,7 +1297,6 @@ class PhraseRecorder {
     const phrase = this.snapshot();
     this.reset();
     this.onComplete?.(phrase);
-    this.onUpdate?.(phrase, true);
   }
 }
 
@@ -1470,9 +1477,8 @@ const playbackRendererRegistry = new Map(
 );
 const recorder = new PhraseRecorder(
   PHRASE_TIMEOUT_MS,
-  (events, completed) => {
-    const notes = eventsToNotes(events);
-    renderCapturedStats(events, notes, completed);
+  ({ eventCount, noteCount }) => {
+    renderCapturedProgress(eventCount, noteCount);
   },
   async (phrase) => {
     rememberCapturedPhrase(phrase);
@@ -2758,6 +2764,7 @@ function setAccountPanelOpen(open) {
   elements.authStatus.setAttribute("aria-expanded", String(open));
   elements.authStatus.classList.toggle("is-open", open);
   if (open) {
+    scheduleVisibleSessionRefresh();
     const focusTarget = state.authUser
       ? elements.accountOpenSessionsButton
       : elements.authUsernameInput;
@@ -3597,6 +3604,16 @@ function renderCapturedStats(events, notes, completed) {
   setPhraseStatus(completed ? "Phrase ready" : "Listening");
   drawPianoRoll(elements.inputRoll, notes, "#6dd3ce", "Input phrase");
   syncRollPlaybackState();
+}
+
+function renderCapturedProgress(eventCount, noteCount) {
+  elements.capturedEventCount.textContent = String(eventCount);
+  elements.capturedNoteCount.textContent = String(noteCount);
+  setPhraseStatus("Listening");
+  if (eventCount === 1) {
+    drawPianoRoll(elements.inputRoll, [], "#6dd3ce", "Capturing input phrase");
+    syncRollPlaybackState();
+  }
 }
 
 function renderGeneratedStats(payload) {
@@ -4927,6 +4944,23 @@ async function refreshSessionActivity() {
   }
 }
 
+async function refreshVisibleSessionViews() {
+  const refreshes = [];
+  if (state.activeControlView === "memory") {
+    refreshes.push(refreshSessionActivity());
+  }
+  if (state.activeControlView === "session" || state.accountPanelOpen) {
+    refreshes.push(refreshSavedSessions());
+  }
+  await Promise.all(refreshes);
+}
+
+function scheduleVisibleSessionRefresh() {
+  void refreshVisibleSessionViews().catch((error) => {
+    console.warn("Could not refresh the visible session view.", error);
+  });
+}
+
 function buildContinuationRequestBody(
   phraseEvents,
   learnInput,
@@ -5105,10 +5139,9 @@ async function sendCurrentPhrase() {
   if (payload.generated_phrase.event_count > 0) {
     await playPayload(payload.generated_phrase);
   }
-  await refreshSessionActivity();
-  await refreshSavedSessions();
   setPhraseStatus(payload.generated_phrase.note_count ? "Generated" : "Primed");
   setPhraseMessage(defaultContinuationMessage(payload, continuationNoteCount));
+  scheduleVisibleSessionRefresh();
 }
 
 async function generateFreshPhrase() {
@@ -5121,10 +5154,9 @@ async function generateFreshPhrase() {
   if (payload.generated_phrase.event_count > 0) {
     await playPayload(payload.generated_phrase);
   }
-  await refreshSessionActivity();
-  await refreshSavedSessions();
   setPhraseStatus(payload.generated_phrase.note_count ? "Generated" : "Primed");
   setPhraseMessage(defaultMemoryGenerationMessage(payload, noteCount));
+  scheduleVisibleSessionRefresh();
 }
 
 function createTestNotePayload() {
@@ -5932,8 +5964,10 @@ function stopPlaybackVisualization({ redraw = true } = {}) {
       renderGeneratedStats(state.lastGeneratedPhrase);
     }
   }
-  elements.outputPlayhead.hidden = true;
-  elements.outputPlayhead.style.transform = "translateX(0)";
+  for (const playhead of [elements.inputPlayhead, elements.outputPlayhead]) {
+    playhead.hidden = true;
+    playhead.style.transform = "translateX(0)";
+  }
   state.currentPlaybackPayload = null;
   state.queuedPlaybackPayload = null;
   state.playbackVisualizationDisplayEndsAtMs = 0;
@@ -5941,8 +5975,12 @@ function stopPlaybackVisualization({ redraw = true } = {}) {
   renderPerformanceState();
 }
 
-function outputPlayheadMaxX() {
-  const width = elements.outputRoll.getBoundingClientRect().width || 0;
+function rollPlayhead(kind) {
+  return kind === "input" ? elements.inputPlayhead : elements.outputPlayhead;
+}
+
+function rollPlayheadMaxX(kind) {
+  const width = rollCanvas(kind).getBoundingClientRect().width || 0;
   return Math.max(0, width - 2);
 }
 
@@ -5995,7 +6033,9 @@ function startPlaybackVisualization(
   const rollDurationSeconds = pianoRollDurationSeconds(notes);
   const safeDurationMs = Math.max(1, Number(durationMs) || playbackDurationSeconds * 1000);
   state.playbackVisualizationDisplayEndsAtMs = startedAtMs + safeDurationMs;
-  elements.outputPlayhead.hidden = rollKind !== "output";
+  const playhead = rollPlayhead(rollKind);
+  const playheadMaxX = rollPlayheadMaxX(rollKind);
+  playhead.hidden = false;
 
   const tick = () => {
     if (token !== state.playbackVisualizationToken) {
@@ -6005,30 +6045,16 @@ function startPlaybackVisualization(
     const progressRatio = Math.min(1, elapsedMs / safeDurationMs);
     const playbackSeconds = progressRatio * playbackDurationSeconds;
     const rollProgressRatio = Math.min(1, playbackSeconds / rollDurationSeconds);
-    if (rollKind === "output") {
-      elements.outputPlayhead.hidden = false;
-      elements.outputPlayhead.style.transform = `translateX(${Math.round(
-        rollProgressRatio * outputPlayheadMaxX(),
-      )}px)`;
-    }
-    drawPianoRoll(
-      targetRoll,
-      notes,
-      accent,
-      emptyLabel,
-      {
-        ...rollAuditionOptions(rollKind),
-        progressRatio: rollProgressRatio,
-        playbackSeconds,
-      },
-    );
+    playhead.style.transform = `translateX(${Math.round(
+      rollProgressRatio * playheadMaxX,
+    )}px)`;
     if (progressRatio >= 1) {
       state.playbackVisualizationFrameId = null;
       window.setTimeout(() => {
         if (token === state.playbackVisualizationToken) {
           state.currentPlaybackPayload = null;
           state.playbackVisualizationDisplayEndsAtMs = 0;
-          elements.outputPlayhead.hidden = true;
+          playhead.hidden = true;
           renderPerformanceState();
           if (rollKind === "input") {
             drawPianoRoll(
@@ -6267,8 +6293,6 @@ async function runInfiniteStep(prefixPayload, runId) {
       startDelayMs,
       append: Boolean(state.activePlayback),
     });
-    await refreshSessionActivity();
-    await refreshSavedSessions();
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
       return true;
     }
@@ -6279,6 +6303,7 @@ async function runInfiniteStep(prefixPayload, runId) {
         `Infinite mode resumed from memory because ${reason}.`,
     );
     scheduleInfiniteStep(generatedPhrase, runId);
+    scheduleVisibleSessionRefresh();
     return true;
   };
 
@@ -6314,8 +6339,6 @@ async function runInfiniteStep(prefixPayload, runId) {
       startDelayMs,
       append: Boolean(state.activePlayback),
     });
-    await refreshSessionActivity();
-    await refreshSavedSessions();
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
       return;
     }
@@ -6325,6 +6348,7 @@ async function runInfiniteStep(prefixPayload, runId) {
       `Infinite mode running: ${generatedPhrase.note_count} notes queued from the latest continuation.`,
     );
     scheduleInfiniteStep(generatedPhrase, runId);
+    scheduleVisibleSessionRefresh();
   } catch (error) {
     if (error.name === "AbortError") {
       return;
@@ -6418,8 +6442,6 @@ async function startInfiniteMode() {
     }
 
     await playPayload(generatedPhrase);
-    await refreshSessionActivity();
-    await refreshSavedSessions();
     if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
       return;
     }
@@ -6428,6 +6450,7 @@ async function startInfiniteMode() {
     setPhraseMessage(
       `Infinite mode running: ${generatedPhrase.note_count} notes in the first continuation.`,
     );
+    scheduleVisibleSessionRefresh();
     scheduleInfiniteStep(generatedPhrase, runId);
   } catch (error) {
     if (error.name === "AbortError") {
@@ -6673,6 +6696,7 @@ function bindEvents() {
     node.addEventListener("click", () => {
       setAccountPanelOpen(false);
       setControlView(node.dataset.controlTab);
+      scheduleVisibleSessionRefresh();
     });
   });
 
@@ -6837,6 +6861,7 @@ function bindEvents() {
   elements.accountOpenSessionsButton.addEventListener("click", () => {
     setControlView("session");
     setAccountPanelOpen(false);
+    scheduleVisibleSessionRefresh();
     elements.controlWorkspace?.scrollIntoView({ behavior: "smooth", block: "start" });
   });
 
