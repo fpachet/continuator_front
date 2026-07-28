@@ -28,6 +28,9 @@ const ROLL_NOTE_AUDITION_MAX_SECONDS = 2;
 const ROLL_END_MARGIN_RATIO = 0.08;
 const ROLL_END_MARGIN_MIN_SECONDS = 0.18;
 const ROLL_END_MARGIN_MAX_SECONDS = 1.2;
+const ROLL_DENSE_NOTE_THRESHOLD = 128;
+const ROLL_DENSE_MAX_DPR = 1.5;
+const CAPTURE_PREVIEW_INTERVAL_MS = 250;
 const COMPUTER_KEYBOARD_OFFSETS = new Map([
   ["KeyA", 0],
   ["KeyW", 1],
@@ -264,6 +267,7 @@ const state = {
   accountPanelOpen: false,
   sessionConfiguration: null,
   lastCapturedPhrase: [],
+  lastCapturedNotes: [],
   lastGeneratedPhrase: null,
   lastCapturedAt: 0,
   lastGeneratedAt: 0,
@@ -283,6 +287,9 @@ const state = {
   queuedPlaybackPayload: null,
   lastGenerationMs: null,
   lastCaptureDurationMs: null,
+  capturePreviewTimerId: null,
+  pendingCapturePreviewNotes: null,
+  lastCapturePreviewAtMs: 0,
   phraseGapAnimationFrameId: null,
   serverWaitAnimationFrameId: null,
   playbackVisualizationFrameId: null,
@@ -1185,8 +1192,9 @@ class PhraseRecorder {
 
   reset() {
     this.events = [];
-    this.pendingNotes = new Set();
-    this.completedNoteCount = 0;
+    this.pendingNotes = new Map();
+    this.completedNotes = [];
+    this.currentTime = 0;
     this.lastTimestamp = null;
     if (this.timer) {
       window.clearTimeout(this.timer);
@@ -1232,22 +1240,42 @@ class PhraseRecorder {
       channel,
       delta_seconds: roundNumber(deltaSeconds),
     };
+    this.currentTime += event.delta_seconds;
 
     const key = `${channel}:${note}`;
     if (type === "note_on") {
-      this.pendingNotes.add(key);
+      const stack = this.pendingNotes.get(key) || [];
+      stack.push({
+        pitch: note,
+        channel,
+        velocity,
+        start_seconds: this.currentTime,
+      });
+      this.pendingNotes.set(key, stack);
       this.onGapUpdate?.({ active: false });
     } else {
-      const completedNote = this.pendingNotes.delete(key);
-      if (completedNote) {
-        this.completedNoteCount += 1;
+      const stack = this.pendingNotes.get(key);
+      if (stack?.length) {
+        const noteOn = stack.shift();
+        this.completedNotes.push({
+          ...noteOn,
+          start_seconds: roundNumber(noteOn.start_seconds),
+          duration_seconds: roundNumber(
+            Math.max(0, this.currentTime - noteOn.start_seconds),
+          ),
+          end_seconds: roundNumber(this.currentTime),
+        });
+        if (!stack.length) {
+          this.pendingNotes.delete(key);
+        }
       }
     }
 
     this.events.push(event);
     this.onUpdate?.({
       eventCount: this.events.length,
-      noteCount: this.completedNoteCount,
+      noteCount: this.completedNotes.length,
+      notes: this.completedNotes,
     });
     this.scheduleCompletionCheck(timestamp);
   }
@@ -1477,12 +1505,13 @@ const playbackRendererRegistry = new Map(
 );
 const recorder = new PhraseRecorder(
   PHRASE_TIMEOUT_MS,
-  ({ eventCount, noteCount }) => {
-    renderCapturedProgress(eventCount, noteCount);
+  ({ eventCount, noteCount, notes }) => {
+    renderCapturedProgress(eventCount, noteCount, notes);
   },
   async (phrase) => {
-    rememberCapturedPhrase(phrase);
+    stopCapturedPreviewRender();
     const notes = eventsToNotes(phrase);
+    rememberCapturedPhrase(phrase, notes);
     renderCapturedStats(phrase, notes, true);
     setPhraseMessage(
       `Phrase complete: ${phrase.length} events / ${notes.length} notes captured.`,
@@ -2414,6 +2443,9 @@ function pluralize(value, singular, plural = `${singular}s`) {
 
 function phraseNoteCount(payloadOrEvents) {
   if (Array.isArray(payloadOrEvents)) {
+    if (payloadOrEvents === state.lastCapturedPhrase) {
+      return state.lastCapturedNotes.length;
+    }
     return eventsToNotes(payloadOrEvents).length;
   }
   return Number(payloadOrEvents?.note_count || payloadOrEvents?.notes?.length || 0);
@@ -2421,6 +2453,12 @@ function phraseNoteCount(payloadOrEvents) {
 
 function phraseDurationMs(payloadOrEvents) {
   if (Array.isArray(payloadOrEvents)) {
+    if (
+      payloadOrEvents === state.lastCapturedPhrase &&
+      state.lastCaptureDurationMs != null
+    ) {
+      return state.lastCaptureDurationMs;
+    }
     return continuationDurationMs({ events: payloadOrEvents });
   }
   return continuationDurationMs(payloadOrEvents);
@@ -2444,12 +2482,16 @@ function setReadinessStep(element, active, label = null) {
   }
 }
 
-function rememberCapturedPhrase(events) {
-  state.lastCapturedPhrase = Array.isArray(events) ? events : [];
-  state.lastCapturedAt = Date.now();
-  state.lastCaptureDurationMs = state.lastCapturedPhrase.length
-    ? phraseDurationMs(state.lastCapturedPhrase)
+function rememberCapturedPhrase(events, notes = null) {
+  const capturedEvents = Array.isArray(events) ? events : [];
+  const capturedNotes = Array.isArray(notes) ? notes : eventsToNotes(capturedEvents);
+  const captureDurationMs = capturedEvents.length
+    ? continuationDurationMs({ events: capturedEvents })
     : null;
+  state.lastCapturedPhrase = capturedEvents;
+  state.lastCapturedNotes = capturedNotes;
+  state.lastCapturedAt = Date.now();
+  state.lastCaptureDurationMs = captureDurationMs;
   renderPerformanceState();
   updateInfiniteActionState();
 }
@@ -2463,6 +2505,7 @@ function rememberGeneratedPhrase(payload) {
 
 function clearRememberedPhrases() {
   state.lastCapturedPhrase = [];
+  state.lastCapturedNotes = [];
   state.lastGeneratedPhrase = null;
   state.lastCapturedAt = 0;
   state.lastGeneratedAt = 0;
@@ -2503,11 +2546,14 @@ function preferredGenerationNoteCount(referenceEvents = null) {
   }
 
   if (referenceEvents?.length) {
+    if (referenceEvents === state.lastCapturedPhrase) {
+      return Math.max(1, state.lastCapturedNotes.length);
+    }
     return Math.max(1, eventsToNotes(referenceEvents).length);
   }
 
   if (state.lastCapturedPhrase.length) {
-    return Math.max(1, eventsToNotes(state.lastCapturedPhrase).length);
+    return Math.max(1, state.lastCapturedNotes.length);
   }
 
   if (state.lastGeneratedPhrase?.note_count) {
@@ -2951,7 +2997,7 @@ function describeLoopSeed() {
     return `Seed: last continuation (${pluralize(state.lastGeneratedPhrase.note_count || 0, "note")})`;
   }
   if (state.lastCapturedPhrase.length) {
-    return `Seed: captured phrase (${pluralize(eventsToNotes(state.lastCapturedPhrase).length, "note")})`;
+    return `Seed: captured phrase (${pluralize(state.lastCapturedNotes.length, "note")})`;
   }
   return "Seed: play or preview a phrase";
 }
@@ -3222,6 +3268,7 @@ function sessionDisplayName(item) {
 function clearPhraseBuffers() {
   stopInfiniteMode({ stopPlayback: true, silent: true });
   stopPhraseGapCountdown();
+  stopCapturedPreviewRender();
   stopPlaybackVisualization({ redraw: false });
   clearRememberedPhrases();
   state.previewedHistoryIndex = null;
@@ -3591,7 +3638,7 @@ function previewPhrasePayload(payload, kind, message) {
     rememberGeneratedPhrase(payload);
     renderGeneratedStats(payload);
   } else {
-    rememberCapturedPhrase(payload.events);
+    rememberCapturedPhrase(payload.events, payload.notes);
     renderCapturedStats(payload.events, payload.notes, true);
   }
   setPhraseMessage(message);
@@ -3606,14 +3653,50 @@ function renderCapturedStats(events, notes, completed) {
   syncRollPlaybackState();
 }
 
-function renderCapturedProgress(eventCount, noteCount) {
+function stopCapturedPreviewRender() {
+  if (state.capturePreviewTimerId != null) {
+    window.clearTimeout(state.capturePreviewTimerId);
+    state.capturePreviewTimerId = null;
+  }
+  state.pendingCapturePreviewNotes = null;
+  state.lastCapturePreviewAtMs = 0;
+}
+
+function scheduleCapturedPreviewRender(notes) {
+  state.pendingCapturePreviewNotes = notes;
+  if (state.capturePreviewTimerId != null || !notes?.length) {
+    return;
+  }
+
+  const elapsedMs = window.performance.now() - state.lastCapturePreviewAtMs;
+  const delayMs = Math.max(0, CAPTURE_PREVIEW_INTERVAL_MS - elapsedMs);
+  state.capturePreviewTimerId = window.setTimeout(() => {
+    state.capturePreviewTimerId = null;
+    const previewNotes = state.pendingCapturePreviewNotes;
+    state.pendingCapturePreviewNotes = null;
+    state.lastCapturePreviewAtMs = window.performance.now();
+    if (!previewNotes?.length) {
+      return;
+    }
+    drawPianoRoll(
+      elements.inputRoll,
+      previewNotes,
+      "#6dd3ce",
+      "Capturing input phrase",
+    );
+  }, delayMs);
+}
+
+function renderCapturedProgress(eventCount, noteCount, notes) {
   elements.capturedEventCount.textContent = String(eventCount);
   elements.capturedNoteCount.textContent = String(noteCount);
   setPhraseStatus("Listening");
   if (eventCount === 1) {
+    stopCapturedPreviewRender();
     drawPianoRoll(elements.inputRoll, [], "#6dd3ce", "Capturing input phrase");
     syncRollPlaybackState();
   }
+  scheduleCapturedPreviewRender(notes);
 }
 
 function renderGeneratedStats(payload) {
@@ -3634,14 +3717,14 @@ function capturedRollPayload() {
   if (!events?.length) {
     return null;
   }
-  const notes = eventsToNotes(events);
+  const notes = state.lastCapturedNotes;
   if (!notes.length) {
     return null;
   }
   return {
     event_count: events.length,
     note_count: notes.length,
-    duration_seconds: phraseDurationMs(events) / 1000,
+    duration_seconds: (state.lastCaptureDurationMs || 0) / 1000,
     events,
     notes,
   };
@@ -4196,9 +4279,17 @@ function pianoRollEventPoint(canvas, event) {
 
 function drawPianoRoll(canvas, notes, accent, emptyLabel, options = {}) {
   const { width, height } = pianoRollCanvasSize(canvas);
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = width * dpr;
-  canvas.height = height * dpr;
+  const denseRoll = notes?.length >= ROLL_DENSE_NOTE_THRESHOLD;
+  const devicePixelRatio = window.devicePixelRatio || 1;
+  const dpr = denseRoll
+    ? Math.min(devicePixelRatio, ROLL_DENSE_MAX_DPR)
+    : devicePixelRatio;
+  const pixelWidth = Math.round(width * dpr);
+  const pixelHeight = Math.round(height * dpr);
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
 
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -4241,37 +4332,87 @@ function drawPianoRoll(canvas, notes, accent, emptyLabel, options = {}) {
     Number.isFinite(Number(options.playbackSeconds)) ? Number(options.playbackSeconds) : null;
   let highlightedNoteRect = null;
 
-  for (const noteRect of noteRects) {
-    const { note, noteEndSeconds } = noteRect;
-    const isPlaying =
-      playbackSeconds != null &&
-      playbackSeconds >= note.start_seconds &&
-      playbackSeconds <= noteEndSeconds;
-    const isHighlighted = noteRect.index === options.highlightedNoteIndex;
-    if (isHighlighted) {
-      highlightedNoteRect = noteRect;
+  if (denseRoll) {
+    const emphasizedNoteRects = [];
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = accent;
+    for (const noteRect of noteRects) {
+      const { note, noteEndSeconds } = noteRect;
+      const isPlaying =
+        playbackSeconds != null &&
+        playbackSeconds >= note.start_seconds &&
+        playbackSeconds <= noteEndSeconds;
+      const isHighlighted = noteRect.index === options.highlightedNoteIndex;
+      if (isHighlighted) {
+        highlightedNoteRect = noteRect;
+      }
+      if (isPlaying || isHighlighted) {
+        emphasizedNoteRects.push({ noteRect, isPlaying, isHighlighted });
+        continue;
+      }
+      ctx.fillRect(
+        noteRect.x,
+        noteRect.y,
+        noteRect.width,
+        noteRect.height,
+      );
     }
-    ctx.fillStyle = isPlaying ? "#fff5d4" : isHighlighted ? "#f9dcc4" : accent;
-    ctx.shadowBlur = isPlaying ? 26 : isHighlighted ? 24 : 18;
-    ctx.shadowColor = isPlaying
-      ? "rgba(255, 245, 212, 0.82)"
-      : isHighlighted
-        ? "rgba(249, 220, 196, 0.72)"
-        : accent;
-    roundRect(
-      ctx,
-      noteRect.x,
-      noteRect.y,
-      noteRect.width,
-      noteRect.height,
-      8,
-      true,
-    );
-    if (isHighlighted && !isPlaying) {
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.66)";
-      ctx.lineWidth = 1.5;
-      ctx.stroke();
+
+    for (const { noteRect, isPlaying, isHighlighted } of emphasizedNoteRects) {
+      ctx.fillStyle = isPlaying ? "#fff5d4" : "#f9dcc4";
+      ctx.shadowBlur = 10;
+      ctx.shadowColor = isPlaying
+        ? "rgba(255, 245, 212, 0.72)"
+        : "rgba(249, 220, 196, 0.62)";
+      roundRect(
+        ctx,
+        noteRect.x,
+        noteRect.y,
+        noteRect.width,
+        noteRect.height,
+        8,
+        true,
+      );
+      if (isHighlighted && !isPlaying) {
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.66)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+    }
+  } else {
+    for (const noteRect of noteRects) {
+      const { note, noteEndSeconds } = noteRect;
+      const isPlaying =
+        playbackSeconds != null &&
+        playbackSeconds >= note.start_seconds &&
+        playbackSeconds <= noteEndSeconds;
+      const isHighlighted = noteRect.index === options.highlightedNoteIndex;
+      if (isHighlighted) {
+        highlightedNoteRect = noteRect;
+      }
+      ctx.fillStyle = isPlaying ? "#fff5d4" : isHighlighted ? "#f9dcc4" : accent;
+      ctx.shadowBlur = isPlaying ? 26 : isHighlighted ? 24 : 18;
+      ctx.shadowColor = isPlaying
+        ? "rgba(255, 245, 212, 0.82)"
+        : isHighlighted
+          ? "rgba(249, 220, 196, 0.72)"
+          : accent;
+      roundRect(
+        ctx,
+        noteRect.x,
+        noteRect.y,
+        noteRect.width,
+        noteRect.height,
+        8,
+        true,
+      );
+      if (isHighlighted && !isPlaying) {
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.66)";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
     }
   }
 
@@ -5004,9 +5145,14 @@ function defaultContinuationMessage(payload, continuationNoteCount) {
   );
 }
 
-function applyContinuationPayload(payload, { renderGenerated = true } = {}) {
-  rememberCapturedPhrase(payload.input_phrase.events);
-  renderCapturedStats(payload.input_phrase.events, payload.input_phrase.notes, true);
+function applyContinuationPayload(
+  payload,
+  { renderCaptured = true, renderGenerated = true } = {},
+) {
+  rememberCapturedPhrase(payload.input_phrase.events, payload.input_phrase.notes);
+  if (renderCaptured) {
+    renderCapturedStats(payload.input_phrase.events, payload.input_phrase.notes, true);
+  }
   rememberGeneratedPhrase(payload.generated_phrase);
   renderConstraintStatus(payload.constraints, payload.generation_trace);
   if (renderGenerated) {
@@ -5135,7 +5281,7 @@ async function sendCurrentPhrase() {
     state.lastCapturedPhrase,
     { learnInput: elements.learnInputToggle.checked },
   );
-  applyContinuationPayload(payload);
+  applyContinuationPayload(payload, { renderCaptured: false });
   if (payload.generated_phrase.event_count > 0) {
     await playPayload(payload.generated_phrase);
   }
@@ -5956,7 +6102,7 @@ function stopPlaybackVisualization({ redraw = true } = {}) {
     if (rollKind === "input") {
       drawPianoRoll(
         elements.inputRoll,
-        eventsToNotes(state.lastCapturedPhrase),
+        state.lastCapturedNotes,
         "#6dd3ce",
         "Input phrase",
       );
@@ -6059,7 +6205,7 @@ function startPlaybackVisualization(
           if (rollKind === "input") {
             drawPianoRoll(
               elements.inputRoll,
-              eventsToNotes(state.lastCapturedPhrase),
+              state.lastCapturedNotes,
               "#6dd3ce",
               "Input phrase",
             );
@@ -7390,7 +7536,7 @@ function bindEvents() {
     renderVirtualKeyboard();
     drawPianoRoll(
       elements.inputRoll,
-      eventsToNotes(state.lastCapturedPhrase),
+      state.lastCapturedNotes,
       "#6dd3ce",
       "Input phrase",
     );

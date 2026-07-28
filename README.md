@@ -149,8 +149,11 @@ Long or dense phrases are handled without rebuilding the complete display for
 every MIDI event:
 
 - Live capture updates event and completed-note counters incrementally.
-- The captured piano roll is rendered once when the phrase closes, rather than
-  being copied, reconstructed, and redrawn after every `note_on` or `note_off`.
+- The captured piano roll uses the same incremental note cache for a throttled
+  live preview, then renders the final phrase when it closes. It does not copy
+  or reconstruct the full event history after every `note_on` or `note_off`.
+- Dense piano rolls use a reduced-effect drawing path that avoids an expensive
+  blurred shadow for every individual note.
 - Phrase playback keeps the piano-roll canvas stable and animates a lightweight
   playhead overlay for both captured and generated phrases.
 - `History`, `Memory`, and saved-session payloads refresh only when their
