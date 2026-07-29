@@ -86,10 +86,12 @@ The UX principle is to keep the performance flow visible at all times and hide l
 Phones use the same application and backend as desktop browsers. A compact,
 touch-oriented layout is selected from viewport and pointer capabilities rather
 than device names. Detection combines the current viewport, mobile browser
-client hints, touch-pointer capability, and physical CSS screen dimensions so
-Android phones still select the phone surface when the browser reports a
-desktop-sized viewport. The phone surface contains only the virtual keyboard,
-a small live-status message, and the captured/generated piano rolls.
+client hints, phone browser identification, touch-pointer capability, and
+physical CSS screen dimensions so Android phones still select the phone surface
+when the browser reports a desktop-sized viewport. The layout class is applied
+before styles load to avoid briefly showing the full desktop controls. The phone
+surface contains only the virtual keyboard, a small live-status message, and the
+captured/generated piano rolls.
 Configuration, accounts, memory inspection, hardware MIDI, and device routing
 remain available in the unchanged desktop/tablet layout.
 

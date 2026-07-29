@@ -6,7 +6,23 @@
     <meta name="color-scheme" content="only light" />
     <meta name="theme-color" content="#071217" />
     <title>Web Continuator</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260729-phone5" />
+    <script>
+      (() => {
+        const requestedLayout = new URLSearchParams(window.location.search).get("layout");
+        const phoneUserAgent = /Android.+Mobile|iPhone|iPod/i.test(
+          navigator.userAgent || "",
+        );
+        const narrowViewport = window.matchMedia?.("(max-width: 700px)").matches;
+        const phoneLayout =
+          requestedLayout === "phone" ||
+          (requestedLayout !== "desktop" &&
+            (phoneUserAgent ||
+              navigator.userAgentData?.mobile === true ||
+              narrowViewport));
+        document.documentElement.classList.toggle("phone-layout", phoneLayout);
+      })();
+    </script>
+    <link rel="stylesheet" href="/assets/styles.css?v=20260729-phone6" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -1198,6 +1214,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20260729-phone4"></script>
+    <script type="module" src="/assets/app.js?v=20260729-phone6"></script>
   </body>
 </html>

@@ -105,7 +105,10 @@ def require_current_user(
 
 @app.get("/", include_in_schema=False)
 def read_index() -> FileResponse:
-    return FileResponse(settings.frontend_dir / "index.html")
+    return FileResponse(
+        settings.frontend_dir / "index.html",
+        headers={"Cache-Control": "no-cache, must-revalidate"},
+    )
 
 
 @app.get("/health", tags=["system"])

@@ -1626,6 +1626,9 @@ function isPhoneLayout() {
     window.matchMedia?.(PHONE_LAYOUT_MEDIA_QUERY).matches,
   );
   const mobileClientHint = navigator.userAgentData?.mobile === true;
+  const phoneUserAgent = /Android.+Mobile|iPhone|iPod/i.test(
+    navigator.userAgent || "",
+  );
   const coarseTouch =
     Boolean(window.matchMedia?.("(pointer: coarse)").matches) ||
     navigator.maxTouchPoints > 0;
@@ -1639,6 +1642,7 @@ function isPhoneLayout() {
   return (
     responsiveMatch ||
     mobileClientHint ||
+    phoneUserAgent ||
     (coarseTouch && compactPhysicalScreen)
   );
 }
