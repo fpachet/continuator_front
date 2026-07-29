@@ -85,10 +85,13 @@ The UX principle is to keep the performance flow visible at all times and hide l
 
 Phones use the same application and backend as desktop browsers. A compact,
 touch-oriented layout is selected from viewport and pointer capabilities rather
-than device names. The phone surface contains only the virtual keyboard, a
-small live-status message, and the captured/generated piano rolls. Configuration,
-accounts, memory inspection, hardware MIDI, and device routing remain available
-in the unchanged desktop/tablet layout.
+than device names. Detection combines the current viewport, mobile browser
+client hints, touch-pointer capability, and physical CSS screen dimensions so
+Android phones still select the phone surface when the browser reports a
+desktop-sized viewport. The phone surface contains only the virtual keyboard,
+a small live-status message, and the captured/generated piano rolls.
+Configuration, accounts, memory inspection, hardware MIDI, and device routing
+remain available in the unchanged desktop/tablet layout.
 
 Phone interaction is deliberately automatic:
 
@@ -103,6 +106,9 @@ Phone interaction is deliberately automatic:
 Phone mode is intended for playing and listening. Use the desktop/tablet layout
 when you need session management, model settings, memory inspection, MIDI
 hardware, or sound routing.
+
+For troubleshooting, append `?layout=phone` to force the phone surface or
+`?layout=desktop` to force the complete interface.
 
 ## Saving Session MIDI
 

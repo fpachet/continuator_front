@@ -18,6 +18,7 @@ const VIRTUAL_KEYBOARD_DESKTOP_OCTAVES = 2;
 const VIRTUAL_KEYBOARD_PHONE_OCTAVES = 1;
 const PHONE_LAYOUT_MEDIA_QUERY =
   "(max-width: 640px), (pointer: coarse) and (max-height: 500px)";
+const PHONE_SCREEN_MAX_CSS_PX = 700;
 const VIRTUAL_KEYBOARD_DEFAULT_BASE_NOTE = 60;
 const VIRTUAL_KEYBOARD_MIN_BASE_NOTE = 24;
 const VIRTUAL_KEYBOARD_MAX_BASE_NOTE = 96;
@@ -1613,7 +1614,33 @@ function virtualKeyboardOctaves() {
 }
 
 function isPhoneLayout() {
-  return Boolean(window.matchMedia?.(PHONE_LAYOUT_MEDIA_QUERY).matches);
+  const requestedLayout = new URLSearchParams(window.location.search).get("layout");
+  if (requestedLayout === "phone") {
+    return true;
+  }
+  if (requestedLayout === "desktop") {
+    return false;
+  }
+
+  const responsiveMatch = Boolean(
+    window.matchMedia?.(PHONE_LAYOUT_MEDIA_QUERY).matches,
+  );
+  const mobileClientHint = navigator.userAgentData?.mobile === true;
+  const coarseTouch =
+    Boolean(window.matchMedia?.("(pointer: coarse)").matches) ||
+    navigator.maxTouchPoints > 0;
+  const screenDimensions = [window.screen?.width, window.screen?.height]
+    .map(Number)
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const compactPhysicalScreen =
+    screenDimensions.length > 0 &&
+    Math.min(...screenDimensions) <= PHONE_SCREEN_MAX_CSS_PX;
+
+  return (
+    responsiveMatch ||
+    mobileClientHint ||
+    (coarseTouch && compactPhysicalScreen)
+  );
 }
 
 function syncPhoneLayout() {
