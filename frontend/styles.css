@@ -934,6 +934,18 @@ input[type="password"]:disabled {
   white-space: nowrap;
 }
 
+.phone-output-label {
+  display: none;
+}
+
+.phone-collapsible > summary {
+  display: none;
+}
+
+.phone-message-box {
+  display: none;
+}
+
 .virtual-keyboard-panel {
   display: grid;
   gap: 10px;
@@ -2446,4 +2458,137 @@ input[type="password"]:disabled {
   .piano-roll {
     height: 206px;
   }
+}
+
+html.phone-layout .hero,
+html.phone-layout .desktop-midi-control,
+html.phone-layout .desktop-output-label,
+html.phone-layout .phone-secondary-card,
+html.phone-layout .snapshot-card,
+html.phone-layout .control-workspace > .card-head,
+html.phone-layout .workspace-tabs,
+html.phone-layout .performance-strip,
+html.phone-layout .live-input-actions,
+html.phone-layout .input-options,
+html.phone-layout #control-perform-panel .panel-stack > .panel-section:not(:first-child),
+html.phone-layout #control-perform-panel .panel-section:first-child > .section-head,
+html.phone-layout #control-memory-panel,
+html.phone-layout #control-session-panel {
+  display: none !important;
+}
+
+html.phone-layout .phone-output-label {
+  display: inline;
+}
+
+html.phone-layout .layout {
+  gap: 10px;
+  padding:
+    max(8px, env(safe-area-inset-top))
+    max(8px, env(safe-area-inset-right))
+    max(12px, env(safe-area-inset-bottom))
+    max(8px, env(safe-area-inset-left));
+}
+
+html.phone-layout .card {
+  width: 100%;
+}
+
+html.phone-layout .column {
+  gap: 10px;
+}
+
+html.phone-layout button,
+html.phone-layout select,
+html.phone-layout input[type="number"] {
+  min-height: 44px;
+}
+
+html.phone-layout .control-workspace {
+  overflow: visible;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+
+html.phone-layout #control-perform-panel .panel-stack > .panel-section:first-child {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+html.phone-layout .virtual-keyboard-panel {
+  gap: 9px;
+  margin: 0;
+  padding: 10px 8px;
+  border-radius: 16px;
+}
+
+html.phone-layout .virtual-keyboard-viewport,
+html.phone-layout .virtual-keyboard {
+  width: 100%;
+  height: 118px;
+}
+
+html.phone-layout .black-key {
+  width: calc((100% / var(--white-key-count)) * 0.7);
+}
+
+html.phone-layout .virtual-octave-controls .compact-button,
+html.phone-layout .virtual-keyboard-actions .compact-button {
+  min-height: 44px;
+}
+
+html.phone-layout .virtual-keyboard-controls,
+html.phone-layout .virtual-keyboard-actions {
+  display: none;
+}
+
+html.phone-layout .phone-message-box {
+  display: block;
+  min-height: 38px;
+  margin-top: 8px;
+  padding: 9px 12px;
+  overflow: hidden;
+  border: 1px solid rgba(109, 211, 206, 0.16);
+  border-radius: 13px;
+  background: rgba(109, 211, 206, 0.065);
+  font-size: 0.82rem;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+}
+
+html.phone-layout .wide-column .input-card {
+  order: -2;
+}
+
+html.phone-layout .wide-column .output-card {
+  order: -1;
+}
+
+html.phone-layout .roll-card {
+  padding: 12px;
+  border-radius: 16px;
+}
+
+html.phone-layout .roll-card .card-head .small-copy {
+  display: none;
+}
+
+html.phone-layout .roll-card .card-head {
+  margin-bottom: 8px;
+}
+
+html.phone-layout .roll-card .card-head h2 {
+  font-size: 1rem;
+}
+
+html.phone-layout .piano-roll {
+  height: 164px;
+  border-radius: 13px;
 }

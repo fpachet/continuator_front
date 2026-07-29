@@ -16,7 +16,8 @@ const VIRTUAL_MIDI_INPUT_ID = "__virtual_keyboard__";
 const VIRTUAL_MIDI_INPUT_NAME = "Virtual MIDI Keyboard";
 const VIRTUAL_KEYBOARD_DESKTOP_OCTAVES = 2;
 const VIRTUAL_KEYBOARD_PHONE_OCTAVES = 1;
-const VIRTUAL_KEYBOARD_PHONE_MEDIA_QUERY = "(max-width: 640px)";
+const PHONE_LAYOUT_MEDIA_QUERY =
+  "(max-width: 640px), (pointer: coarse) and (max-height: 500px)";
 const VIRTUAL_KEYBOARD_DEFAULT_BASE_NOTE = 60;
 const VIRTUAL_KEYBOARD_MIN_BASE_NOTE = 24;
 const VIRTUAL_KEYBOARD_MAX_BASE_NOTE = 96;
@@ -153,6 +154,7 @@ const elements = {
   generatedEventCount: document.querySelector("#generated-event-count"),
   generatedNoteCount: document.querySelector("#generated-note-count"),
   messageBox: document.querySelector("#message-box"),
+  phoneMessageBox: document.querySelector("#phone-message-box"),
   constraintStatus: document.querySelector("#constraint-status"),
   globalPanicButton: document.querySelector("#global-panic-button"),
   readySessionStep: document.querySelector("#ready-session-step"),
@@ -1605,9 +1607,40 @@ function virtualKeyboardRangeLabel() {
 }
 
 function virtualKeyboardOctaves() {
-  return window.matchMedia?.(VIRTUAL_KEYBOARD_PHONE_MEDIA_QUERY).matches
+  return isPhoneLayout()
     ? VIRTUAL_KEYBOARD_PHONE_OCTAVES
     : VIRTUAL_KEYBOARD_DESKTOP_OCTAVES;
+}
+
+function isPhoneLayout() {
+  return Boolean(window.matchMedia?.(PHONE_LAYOUT_MEDIA_QUERY).matches);
+}
+
+function syncPhoneLayout() {
+  const phoneLayout = isPhoneLayout();
+  document.documentElement.classList.toggle("phone-layout", phoneLayout);
+  document.querySelectorAll("[data-phone-collapsible]").forEach((details) => {
+    if (!(details instanceof HTMLDetailsElement)) {
+      return;
+    }
+    if (!phoneLayout) {
+      details.open = true;
+      details.dataset.phoneInitialized = "false";
+      return;
+    }
+    if (details.dataset.phoneInitialized !== "true") {
+      details.open = false;
+      details.dataset.phoneInitialized = "true";
+    }
+  });
+  return phoneLayout;
+}
+
+async function initializePhoneInput() {
+  if (!isPhoneLayout() || isVirtualMidiInputSelected()) {
+    return;
+  }
+  await attachInput(VIRTUAL_MIDI_INPUT_ID, { savePreference: false });
 }
 
 function getVirtualVelocity() {
@@ -2316,9 +2349,13 @@ function updatePhraseGapCountdown(update) {
 
 function setPhraseMessage(message, danger = false) {
   setTextContentIfChanged(elements.messageBox, message);
+  setTextContentIfChanged(elements.phoneMessageBox, message);
   const color = danger ? "var(--danger)" : "var(--muted)";
   if (elements.messageBox.style.color !== color) {
     elements.messageBox.style.color = color;
+  }
+  if (elements.phoneMessageBox.style.color !== color) {
+    elements.phoneMessageBox.style.color = color;
   }
 }
 
@@ -7934,6 +7971,7 @@ function bindEvents() {
   });
 
   window.addEventListener("resize", () => {
+    syncPhoneLayout();
     if (state.graphOpen && state.graphPanelPosition) {
       applyGraphPanelPosition(state.graphPanelPosition);
     }
@@ -7949,6 +7987,7 @@ function bindEvents() {
 }
 
 async function initialize() {
+  syncPhoneLayout();
   bindEvents();
   state.userMidiCopyOutputPreference = loadStoredMidiCopyOutputPreference();
   state.userAudioOutputPreference = loadStoredAudioOutputPreference();
@@ -7982,6 +8021,7 @@ async function initialize() {
   renderVirtualKeyboard();
   elements.virtualVelocityValue.textContent = String(getVirtualVelocity());
   await populateMidiSelectors();
+  await initializePhoneInput();
   updateKeepLastFieldState();
   renderSessionSettingsSummary();
   updateSessionActionState();

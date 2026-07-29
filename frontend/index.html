@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Web Continuator</title>
-    <link rel="stylesheet" href="/assets/styles.css?v=20260728-midi-copy2" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20260729-phone2" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -411,19 +411,19 @@
                     <h3>Live Input</h3>
                   </div>
                 </div>
-                <div class="button-row">
-                  <button id="connect-midi-button">Connect MIDI</button>
-                  <button id="refresh-midi-button" class="ghost">Refresh Ports</button>
+                <div class="button-row live-input-actions">
+                  <button id="connect-midi-button" class="desktop-midi-control">Connect MIDI</button>
+                  <button id="refresh-midi-button" class="ghost desktop-midi-control">Refresh Ports</button>
                   <label class="toggle">
                     <input id="auto-send-toggle" type="checkbox" checked />
                     <span>Auto-send phrase</span>
                   </label>
-                  <label class="toggle">
+                  <label class="toggle desktop-midi-control">
                     <input id="input-monitor-toggle" type="checkbox" />
                     <span>Monitor input</span>
                   </label>
                 </div>
-                <div class="field">
+                <div class="field desktop-midi-control">
                   <label for="midi-input-select">MIDI Input</label>
                   <select id="midi-input-select" disabled>
                     <option>Connect MIDI first</option>
@@ -496,34 +496,47 @@
                     </button>
                   </div>
                 </div>
-                <div class="field">
-                  <label for="phrase-timeout-input">Phrase gap (seconds)</label>
-                  <input
-                    id="phrase-timeout-input"
-                    type="number"
-                    min="0.2"
-                    max="5"
-                    step="0.1"
-                    value="1"
-                    inputmode="decimal"
-                  />
-                  <p class="field-hint">
-                    Capture completes after this delay once all notes are released.
-                  </p>
-                  <div id="phrase-gap-meter" class="phrase-gap-meter" hidden>
-                    <div class="phrase-gap-meter-head">
-                      <span id="phrase-gap-meter-label">Listening for more notes</span>
-                      <strong id="phrase-gap-meter-copy">1.0s</strong>
-                    </div>
-                    <div class="phrase-gap-track" aria-hidden="true">
-                      <div id="phrase-gap-meter-bar" class="phrase-gap-bar"></div>
-                    </div>
-                  </div>
+                <div
+                  id="phone-message-box"
+                  class="phone-message-box"
+                  role="status"
+                  aria-live="polite"
+                >
+                  Preparing your session…
                 </div>
-                <label class="toggle">
-                  <input id="learn-input-toggle" type="checkbox" checked />
-                  <span>Learn the played phrase before generating</span>
-                </label>
+                <details class="phone-collapsible input-options" data-phone-collapsible open>
+                  <summary>Input options</summary>
+                  <div class="phone-collapsible-body">
+                    <div class="field">
+                      <label for="phrase-timeout-input">Phrase gap (seconds)</label>
+                      <input
+                        id="phrase-timeout-input"
+                        type="number"
+                        min="0.2"
+                        max="5"
+                        step="0.1"
+                        value="1"
+                        inputmode="decimal"
+                      />
+                      <p class="field-hint">
+                        Capture completes after this delay once all notes are released.
+                      </p>
+                      <div id="phrase-gap-meter" class="phrase-gap-meter" hidden>
+                        <div class="phrase-gap-meter-head">
+                          <span id="phrase-gap-meter-label">Listening for more notes</span>
+                          <strong id="phrase-gap-meter-copy">1.0s</strong>
+                        </div>
+                        <div class="phrase-gap-track" aria-hidden="true">
+                          <div id="phrase-gap-meter-bar" class="phrase-gap-bar"></div>
+                        </div>
+                      </div>
+                    </div>
+                    <label class="toggle">
+                      <input id="learn-input-toggle" type="checkbox" checked />
+                      <span>Learn the played phrase before generating</span>
+                    </label>
+                  </div>
+                </details>
               </section>
 
               <section class="panel-section">
@@ -536,7 +549,7 @@
                     </p>
                   </div>
                 </div>
-                <div class="button-row">
+                <div class="button-row phrase-actions">
                   <button id="send-phrase-button">Send Phrase</button>
                   <button id="generate-memory-button" class="ghost">
                     Generate From Memory
@@ -544,44 +557,49 @@
                   <button id="replay-generated-button" class="ghost">Replay Output</button>
                   <button id="clear-phrase-button" class="ghost">Clear</button>
                 </div>
-                <div class="generation-grid">
-                  <div class="field generation-field">
-                    <label for="continuation-length-input">Continuation length (notes)</label>
-                    <input
-                      id="continuation-length-input"
-                      type="number"
-                      min="1"
-                      step="1"
-                      inputmode="numeric"
-                      placeholder="Same as input"
-                    />
-                    <p class="field-hint">
-                      Leave empty to match the captured phrase note count.
-                    </p>
-                  </div>
-                  <div class="field generation-field">
-                    <label>Infinite mode</label>
-                    <div class="infinite-transport">
-                      <div class="transport-copy">
-                        <strong id="infinite-state-label">Idle</strong>
-                        <span id="infinite-seed-label">Seed: play or preview a phrase</span>
+                <details class="phone-collapsible generation-options" data-phone-collapsible open>
+                  <summary>Generation options</summary>
+                  <div class="phone-collapsible-body">
+                    <div class="generation-grid">
+                      <div class="field generation-field">
+                        <label for="continuation-length-input">Continuation length (notes)</label>
+                        <input
+                          id="continuation-length-input"
+                          type="number"
+                          min="1"
+                          step="1"
+                          inputmode="numeric"
+                          placeholder="Same as input"
+                        />
+                        <p class="field-hint">
+                          Leave empty to match the captured phrase note count.
+                        </p>
                       </div>
-                      <div class="transport-actions">
-                        <button id="start-infinite-button" class="ghost transport-button" type="button">
-                          Play
-                        </button>
-                        <button
-                          id="stop-infinite-button"
-                          class="ghost danger-button transport-button"
-                          type="button"
-                          disabled
-                        >
-                          Stop
-                        </button>
+                      <div class="field generation-field">
+                        <label>Infinite mode</label>
+                        <div class="infinite-transport">
+                          <div class="transport-copy">
+                            <strong id="infinite-state-label">Idle</strong>
+                            <span id="infinite-seed-label">Seed: play or preview a phrase</span>
+                          </div>
+                          <div class="transport-actions">
+                            <button id="start-infinite-button" class="ghost transport-button" type="button">
+                              Play
+                            </button>
+                            <button
+                              id="stop-infinite-button"
+                              class="ghost danger-button transport-button"
+                              type="button"
+                              disabled
+                            >
+                              Stop
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
+                </details>
               </section>
               <section class="panel-section accent-section">
                 <div class="section-head">
@@ -590,18 +608,21 @@
                   </div>
                 </div>
                 <div class="route-picker">
-                  <label class="route-picker-label" for="midi-output-select">Renderer</label>
+                  <label class="route-picker-label" for="midi-output-select">
+                    <span class="desktop-output-label">Renderer</span>
+                    <span class="phone-output-label">Instrument</span>
+                  </label>
                   <select id="midi-output-select" disabled>
                     <option>Browser Triangle</option>
                   </select>
                 </div>
-                <div class="route-picker">
+                <div class="route-picker desktop-midi-control">
                   <label class="route-picker-label" for="audio-output-select">Sound Output</label>
                   <select id="audio-output-select" disabled>
                     <option>System default</option>
                   </select>
                 </div>
-                <div class="route-picker">
+                <div class="route-picker desktop-midi-control">
                   <label class="route-picker-label" for="midi-copy-output-select">
                     Also send MIDI to
                   </label>
@@ -627,7 +648,7 @@
                     Panic
                   </button>
                 </div>
-                <p class="field-hint compact-hint">
+                <p class="field-hint compact-hint desktop-midi-control">
                   External MIDI appears after MIDI is connected. The secondary
                   output mirrors playback and monitored live input.
                 </p>
@@ -1090,7 +1111,7 @@
       </section>
 
       <section class="column wide-column">
-        <article class="card timeline-card">
+        <article class="card timeline-card phone-secondary-card">
           <div class="card-head">
             <h2>Phrase Timeline</h2>
           </div>
@@ -1110,7 +1131,7 @@
           </div>
         </article>
 
-        <article class="card roll-card">
+        <article class="card roll-card input-card">
           <div class="card-head">
             <h2>Captured Phrase</h2>
             <span class="small-copy">Detected from browser MIDI events</span>
@@ -1144,7 +1165,7 @@
           </div>
         </article>
 
-        <article class="card">
+        <article class="card snapshot-card">
           <div class="card-head">
             <h2>Live Snapshot</h2>
             <span class="small-copy">Always-visible capture and generation feedback</span>
@@ -1175,6 +1196,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20260728-midi-copy2"></script>
+    <script type="module" src="/assets/app.js?v=20260729-phone2"></script>
   </body>
 </html>

@@ -24,6 +24,7 @@ It lets a user play a MIDI phrase in the browser, send that phrase to a Python C
 The current implementation is meant as an MVP for experimentation, demos, and architecture validation. It already supports:
 
 - Browser-side real-time MIDI capture with the Web MIDI API.
+- A touch-oriented virtual keyboard that works without Web MIDI hardware.
 - A `FastAPI` backend that wraps the Python Continuator engine.
 - One isolated Continuator engine per live session.
 - SQLite logging for captured and generated phrases.
@@ -80,6 +81,29 @@ The UX principle is to keep the performance flow visible at all times and hide l
 - Advanced model controls live in the `Advanced Continuator Settings` drawer.
 - Memory inspection stays inside a local tabbed card rather than taking over the page.
 
+### Phone Layout
+
+Phones use the same application and backend as desktop browsers. A compact,
+touch-oriented layout is selected from viewport and pointer capabilities rather
+than device names. The phone surface contains only the virtual keyboard, a
+small live-status message, and the captured/generated piano rolls. Configuration,
+accounts, memory inspection, hardware MIDI, and device routing remain available
+in the unchanged desktop/tablet layout.
+
+Phone interaction is deliberately automatic:
+
+1. Open the app in Safari on iPhone or Chrome on Android.
+2. The app creates a guest session and selects the virtual keyboard.
+3. Play a phrase, then release all notes.
+4. After the phrase gap, the phrase is submitted automatically and the
+   Continuator response plays through the browser instrument.
+5. Tap either piano roll to replay the captured phrase or generated response.
+6. Use `Oct -` and `Oct +` to move the one-octave keyboard range.
+
+Phone mode is intended for playing and listening. Use the desktop/tablet layout
+when you need session management, model settings, memory inspection, MIDI
+hardware, or sound routing.
+
 ## Saving Session MIDI
 
 The Session panel includes `Save Session MIDI`.
@@ -129,7 +153,8 @@ At a high level:
 
 The phrase pipeline is:
 
-1. A user clicks `Connect MIDI` and chooses a browser MIDI input.
+1. A desktop user connects and chooses a MIDI input, or a phone user plays the
+   automatically selected virtual keyboard.
 2. The browser receives `note_on` and `note_off` events in real time.
 3. The front-end keeps a phrase open while notes are still active.
 4. A phrase closes when all notes are released and the selected phrase gap has passed since the final note event. The UI defaults this gap to 1 second after the final `note_off`.
@@ -310,10 +335,12 @@ Recommended browser support:
 
 - Chrome
 - Edge
+- Safari on iPhone
+- Chrome on Android
 
 `localhost` is a valid secure context for Web MIDI, so HTTPS is not required for local development.
 
-Typical local interaction:
+Typical desktop interaction:
 
 1. Click `Create Session`.
 2. Click `Connect MIDI`.
@@ -326,6 +353,13 @@ Typical local interaction:
 9. Let auto-send submit the phrase, or click `Send Phrase`.
 10. Inspect `History` or `Memory` in the `Session Activity` card.
 11. Use `Save Session MIDI` in the Session panel to export the played/generated phrases as a ZIP archive of MIDI files.
+
+Typical phone interaction:
+
+1. Open the local-network URL on a phone connected to the same network.
+2. Play the virtual keyboard; no MIDI connection step is required.
+3. Release the notes and wait for auto-send to generate the response.
+4. Tap the captured or generated piano roll to replay it.
 
 When you change frontend code, a normal refresh is usually enough.
 When you change backend models or routes, restarting the server and refreshing the page is the safest option.
