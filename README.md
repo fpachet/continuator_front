@@ -455,7 +455,7 @@ Environment variables currently supported:
 - `CONTINUATOR_SESSION_EXPORT_DIR`: choose where fallback backend-side MIDI exports are written.
 - `CONTINUATOR_SEED_MIDI_FILE`: preload each new session with one MIDI file.
 - `CONTINUATOR_SEED_MIDI_FOLDER`: preload each new session with a folder of MIDI files.
-- `CONTINUATOR_BACKUP_BUCKET`: optional private bucket ID, for example `pachet/continuator-front-backups`.
+- `CONTINUATOR_BACKUP_BUCKET`: optional private bucket ID, for example `pachet/continuator_front-storage`.
 - `CONTINUATOR_BACKUP_TOKEN`: backend-only secret with read/write access to that bucket. Falls back to the standard Hub `HF_TOKEN` or cached login for local development.
 - `CONTINUATOR_BACKUP_INTERVAL_SECONDS`: background backup interval, default `5`, minimum `1` second.
 
@@ -524,6 +524,13 @@ revalidate against the server so the split frontend loads the current release.
 2. In the Space settings, add the variable `CONTINUATOR_BACKUP_BUCKET` with the bucket ID.
 3. Add `CONTINUATOR_BACKUP_TOKEN` as a **secret**, using a token with read/write access to the bucket. A dedicated token scoped to this bucket is preferable.
 4. Deploy and wait for **Cloud saved** in the bar above the workspace.
+
+The deployed `pachet/continuator_front` Space uses the private bucket
+`pachet/continuator_front-storage`. Its bucket-scoped credential is stored only
+in the Space's `CONTINUATOR_BACKUP_TOKEN` secret. The bucket is also attached at
+`/data`, but the live SQLite database stays on the container's local disk;
+snapshots are uploaded and restored through the Hub API. Do not move the live
+SQLite database onto the object-storage mount.
 
 The live SQLite database stays on the local filesystem. SQLite's backup API
 captures committed WAL changes consistently, then a single background worker
