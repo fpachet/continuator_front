@@ -518,6 +518,20 @@ use a persistent filesystem when saved sessions must survive a Space rebuild.
 After a deploy, refresh the browser. HTML, JavaScript modules, and stylesheets
 revalidate against the server so the split frontend loads the current release.
 
+### Signing in inside the Hugging Face page
+
+The embedded app uses a separate, secure, HTTP-only partitioned cookie so sign-in
+can persist when ordinary third-party cookies are blocked. Direct app visits use
+the existing first-party cookie. These views have separate browser sign-ins but
+share the same Continuator accounts and saved sessions. Embedded authentication
+requires the `X-Continuator-Embedded` request header; ordinary cross-site forms
+cannot supply it, and the API does not enable cross-origin requests.
+
+After login or registration, the frontend confirms the cookie with `/api/auth/me`
+before attaching the guest session. If the browser still rejects it, the guest
+session stays open and the dialog offers **Open the app in its own tab**. These
+are Continuator accounts; Hugging Face account credentials are separate.
+
 ### Private cloud backups on free hardware
 
 1. Create a **private** [Hugging Face Storage Bucket](https://huggingface.co/docs/hub/storage-buckets).
@@ -657,13 +671,14 @@ Natural next steps for this project:
 | Cloud recovery on ephemeral hardware | Complete | Private bucket snapshots include accounts, phrases and exact memory; validated startup recovery, upload retries, three-snapshot retention and honest save status. Requires a bucket-scoped backend secret. |
 | Account and save UX | Complete | Native modal appears above graph windows, sign-in can claim the existing guest session, and account/reopen controls work on desktop and phone. |
 
-Validation: 45 backend integration/regression tests and 9 frontend module tests,
+Validation: 48 backend integration/regression tests and 12 frontend module tests,
 plus Python/JavaScript static checks and browser checks of capture, generation,
 playback, memory and graph views. Tests cover same-second reset/relearn,
 legacy-schema migration, transposed deletion, seed eviction, polyphonic timing,
 transaction failure recovery, concurrent requests, backup recovery/corruption,
 upload failures and retries, writes during uploads, ownership conflicts, and
-stale frontend save-status responses.
+stale frontend save-status responses, embedded cookie login/logout and isolation,
+and preservation of guest state when browser cookies are rejected.
 
 Existing databases upgrade automatically in a transaction. Legacy phrase order
 is recovered from SQLite insertion order; the first restoration creates exact

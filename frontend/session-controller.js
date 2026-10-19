@@ -13,6 +13,7 @@ export function createSessionController(dependencies) {
     downloadZipBlob,
     elements,
     filePickerBlockedByFrame,
+    fetchApi = (...args) => fetch(...args),
     hasMidiFileExtension,
     hasPendingSessionSettings,
     isVirtualMidiInputId,
@@ -81,7 +82,7 @@ export function createSessionController(dependencies) {
   }
 
   async function fetchJson(url, options = {}) {
-    const response = await fetch(url, options);
+    const response = await fetchApi(url, options);
     const rawText = await response.text();
     let payload = null;
 
@@ -285,6 +286,15 @@ export function createSessionController(dependencies) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
+
+    // A successful password check does not prove that an embedded browser kept
+    // the cookie. Check it before changing ownership or discarding guest state.
+    const confirmed = await requestJson("/api/auth/me");
+    if (confirmed.user?.id !== payload.user?.id) {
+      throw new Error(
+        "Your browser did not retain the sign-in cookie. Open the app in its own tab using the link below, then sign in there. Your current guest session is still open.",
+      );
+    }
 
     state.authUser = payload.user;
     state.userMidiCopyOutputPreference = loadStoredMidiCopyOutputPreference();

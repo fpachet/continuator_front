@@ -1,7 +1,9 @@
 import { state, elements } from "./app-state.js";
 import { createBackupStatus } from "./backup-status.js";
+import { createApiFetch } from "./auth-transport.js";
 
 const backupStatus = createBackupStatus(elements.cloudSaveStatus);
+const fetchApi = createApiFetch(isCrossOriginSubframe);
 import {
   DEFAULT_PLAYBACK_CHOICE,
   FAUST_CLAVIER_ID,
@@ -691,7 +693,7 @@ function fileNameFromContentDisposition(value) {
 }
 
 async function requestSessionMidiZip() {
-  const response = await fetch(`/api/sessions/${state.sessionId}/midi.zip`);
+  const response = await fetchApi(`/api/sessions/${state.sessionId}/midi.zip`);
   const blob = await response.blob();
   if (!response.ok) {
     let detail = `MIDI export failed (${response.status}).`;
@@ -1790,7 +1792,7 @@ async function updateSessionGraphImage(
   }
 
   try {
-    const response = await fetch(graphKindEndpoint(graphKind), {
+    const response = await fetchApi(graphKindEndpoint(graphKind), {
       headers: { Accept: "image/svg+xml" },
     });
     const rawText = await response.text();
@@ -3567,6 +3569,7 @@ const {
   generateFreshPhrase,
   importSelectedMidiFiles,
 } = createSessionController({
+  fetchApi,
   backupStatus,
   applyPreferredAudioOutput: (...args) => applyPreferredAudioOutput(...args),
   attachInput: (...args) => attachInput(...args),

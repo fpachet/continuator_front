@@ -3,7 +3,6 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import (
-    Cookie,
     Depends,
     FastAPI,
     File,
@@ -18,13 +17,12 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from .auth import (
-    AUTH_COOKIE_NAME,
-    AUTH_TOKEN_MAX_AGE_SECONDS,
     AuthenticationError,
     AuthManager,
     AuthenticatedUser,
     UsernameTakenError,
 )
+from .auth_cookies import auth_token_from_request, clear_auth_cookie, set_auth_cookie
 from .config import load_settings
 from .cloud_backup import CloudBackup, HubBucket
 from .continuator_runtime import continuator_runtime_info
@@ -118,26 +116,10 @@ def auth_user_to_schema(user: AuthenticatedUser) -> AuthUser:
     return AuthUser(id=user.id, username=user.username, created_at=user.created_at)
 
 
-def set_auth_cookie(response: Response, request: Request, raw_token: str) -> None:
-    response.set_cookie(
-        key=AUTH_COOKIE_NAME,
-        value=raw_token,
-        httponly=True,
-        samesite="lax",
-        secure=request.url.scheme == "https",
-        max_age=AUTH_TOKEN_MAX_AGE_SECONDS,
-        path="/",
-    )
-
-
-def clear_auth_cookie(response: Response) -> None:
-    response.delete_cookie(key=AUTH_COOKIE_NAME, path="/")
-
-
 def get_optional_current_user(
-    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
+    request: Request,
 ) -> AuthenticatedUser | None:
-    return auth_manager.get_user_from_token(auth_token)
+    return auth_manager.get_user_from_token(auth_token_from_request(request))
 
 
 def require_current_user(
@@ -187,12 +169,13 @@ def backup_status() -> dict:
 
 @app.get("/api/auth/me", response_model=AuthStatusResponse, tags=["auth"])
 def auth_me(
+    request: Request,
     response: Response,
-    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> AuthStatusResponse:
+    auth_token = auth_token_from_request(request)
     user = auth_manager.get_user_from_token(auth_token)
     if auth_token and user is None:
-        clear_auth_cookie(response)
+        clear_auth_cookie(response, request)
     return AuthStatusResponse(user=None if user is None else auth_user_to_schema(user))
 
 
@@ -229,11 +212,11 @@ def login(
 
 @app.post("/api/auth/logout", response_model=LogoutResponse, tags=["auth"])
 def logout(
+    request: Request,
     response: Response,
-    auth_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME),
 ) -> LogoutResponse:
-    auth_manager.logout(auth_token)
-    clear_auth_cookie(response)
+    auth_manager.logout(auth_token_from_request(request))
+    clear_auth_cookie(response, request)
     return LogoutResponse()
 
 
