@@ -69,12 +69,7 @@ const PLAYBACK_PREFERENCE_STORAGE_PREFIX = "continuator.playback.preference";
 const MIDI_COPY_OUTPUT_PREFERENCE_STORAGE_PREFIX =
   "continuator.midi.copy.output.preference";
 const AUDIO_OUTPUT_PREFERENCE_STORAGE_PREFIX = "continuator.audio.output.preference";
-const DEFAULT_ENGINE_KIND = "classic";
-const ENGINE_KIND_LABELS = new Map([
-  ["classic", "Classic"],
-  ["context_bp", "Context BP"],
-  ["vo_regular_bp", "VO Regular BP"],
-]);
+const ENGINE_LABEL = "VO Regular BP";
 const GRAPH_MODES = new Set(["slice", "all", "most_used", "neighborhood"]);
 const FAUST_UI_CONTROL_TYPES = new Set([
   "hslider",
@@ -214,12 +209,10 @@ const elements = {
   faustCustomControlsHint: document.querySelector("#faust-custom-controls-hint"),
   learnInputToggle: document.querySelector("#learn-input-toggle"),
   autoSendToggle: document.querySelector("#auto-send-toggle"),
-  engineKindSelect: document.querySelector("#engine-kind-select"),
   transposeToggle: document.querySelector("#transpose-toggle"),
   forgetToggle: document.querySelector("#forget-toggle"),
   markovOrderInput: document.querySelector("#markov-order-input"),
   keepLastInput: document.querySelector("#keep-last-input"),
-  decayModeSelect: document.querySelector("#decay-mode-select"),
   continuationLengthInput: document.querySelector("#continuation-length-input"),
   infiniteStateLabel: document.querySelector("#infinite-state-label"),
   infiniteSeedLabel: document.querySelector("#infinite-seed-label"),
@@ -2409,14 +2402,6 @@ function constraintPillClass(state) {
   return "constraint-pill";
 }
 
-function activeEngineKind() {
-  return normalizedEngineKind(
-    state.sessionConfiguration?.engine_kind ||
-      elements.engineKindSelect?.value ||
-      DEFAULT_ENGINE_KIND,
-  );
-}
-
 function comparableSessionSettings(settings) {
   if (!settings) {
     return null;
@@ -2425,10 +2410,8 @@ function comparableSessionSettings(settings) {
     learn_input: Boolean(settings.learn_input),
     transposition: Boolean(settings.transposition),
     forget_past: Boolean(settings.forget_past),
-    engine_kind: normalizedEngineKind(settings.engine_kind),
     markov_order: normalizedMarkovOrder(settings.markov_order),
     keep_last_inputs: normalizedKeepLastInputs(settings.keep_last_inputs),
-    decay_mode: settings.decay_mode || "full",
   };
 }
 
@@ -2440,14 +2423,10 @@ function sessionSettingValueLabel(key, value) {
       return value ? "Transpose on" : "Transpose off";
     case "forget_past":
       return value ? "Rolling memory on" : "Full memory";
-    case "engine_kind":
-      return engineKindLabel(value);
     case "markov_order":
       return `K=${normalizedMarkovOrder(value)}`;
     case "keep_last_inputs":
       return `Keep last ${normalizedKeepLastInputs(value)}`;
-    case "decay_mode":
-      return `Decay ${value || "full"}`;
     default:
       return String(value);
   }
@@ -2460,12 +2439,10 @@ function pendingSessionSettingChanges() {
   const active = comparableSessionSettings(state.sessionConfiguration);
   const draft = comparableSessionSettings(readSessionSettingsFromControls());
   return [
-    ["engine_kind", "Engine"],
     ["markov_order", "K"],
     ["transposition", "Transpose"],
     ["forget_past", "Memory"],
     ["keep_last_inputs", "Keep last"],
-    ["decay_mode", "Decay"],
     ["learn_input", "Learn input"],
   ]
     .filter(([key]) => active[key] !== draft[key])
@@ -2493,11 +2470,8 @@ function hasGenerationTrace(trace) {
   return Array.isArray(trace) && trace.length > 0;
 }
 
-function generationTracePillText(trace, engineKind) {
+function generationTracePillText(trace) {
   if (!Array.isArray(trace) || !trace.length) {
-    if (engineKind === "context_bp") {
-      return "Trace orders: not returned";
-    }
     return null;
   }
   const orders = trace
@@ -2515,11 +2489,8 @@ function generationTracePillText(trace, engineKind) {
   return `Trace orders: ${orders}${suffix}${skipped}`;
 }
 
-function generationTraceTitle(trace, engineKind) {
+function generationTraceTitle(trace) {
   if (!Array.isArray(trace) || !trace.length) {
-    if (engineKind === "context_bp") {
-      return "Context BP is active, but this response did not include generation_trace.";
-    }
     return "";
   }
   return trace
@@ -2544,8 +2515,7 @@ function renderConstraintStatus(constraints, generationTrace = null) {
     return;
   }
   elements.constraintStatus.replaceChildren();
-  const engineKind = activeEngineKind();
-  const traceText = generationTracePillText(generationTrace, engineKind);
+  const traceText = generationTracePillText(generationTrace);
   const pendingChanges = pendingSessionSettingChanges();
   if (!constraints && !traceText && !pendingChanges.length) {
     elements.constraintStatus.hidden = true;
@@ -2554,7 +2524,7 @@ function renderConstraintStatus(constraints, generationTrace = null) {
 
   const enginePill = document.createElement("span");
   enginePill.className = "constraint-pill is-off";
-  enginePill.textContent = `Active engine: ${engineKindLabel(engineKind)}`;
+  enginePill.textContent = `Active engine: ${ENGINE_LABEL}`;
   elements.constraintStatus.append(enginePill);
 
   if (pendingChanges.length) {
@@ -2587,7 +2557,7 @@ function renderConstraintStatus(constraints, generationTrace = null) {
       ? "constraint-pill"
       : "constraint-pill is-relaxed";
     pill.textContent = traceText;
-    pill.title = generationTraceTitle(generationTrace, engineKind);
+    pill.title = generationTraceTitle(generationTrace);
     elements.constraintStatus.append(pill);
   }
   elements.constraintStatus.hidden = false;
@@ -3064,16 +3034,6 @@ function normalizedMarkovOrder(value) {
   return Math.min(16, Math.max(1, Math.round(parsed)));
 }
 
-function normalizedEngineKind(value) {
-  return value === "context_bp" || value === "vo_regular_bp"
-    ? value
-    : DEFAULT_ENGINE_KIND;
-}
-
-function engineKindLabel(value) {
-  return ENGINE_KIND_LABELS.get(normalizedEngineKind(value)) || "Classic";
-}
-
 function normalizedContinuationNoteCount(value) {
   if (value == null || value === "") {
     return null;
@@ -3239,22 +3199,18 @@ function readSessionSettingsFromControls() {
     learn_input: elements.learnInputToggle.checked,
     transposition: elements.transposeToggle.checked,
     forget_past: elements.forgetToggle.checked,
-    engine_kind: normalizedEngineKind(elements.engineKindSelect.value),
     markov_order: normalizedMarkovOrder(elements.markovOrderInput.value),
     keep_last_inputs: normalizedKeepLastInputs(elements.keepLastInput.value),
-    decay_mode: elements.decayModeSelect.value,
   };
 }
 
 function describeSessionSettings(settings) {
-  const engineLabel = engineKindLabel(settings?.engine_kind);
   const orderLabel = `K=${normalizedMarkovOrder(settings?.markov_order)}`;
   const transposeLabel = settings?.transposition ? "Transpose on" : "Transpose off";
   const memoryLabel = settings?.forget_past
     ? `Keep last ${normalizedKeepLastInputs(settings?.keep_last_inputs)} phrases`
     : "Keep full memory";
-  const decayLabel = `Decay ${settings?.decay_mode || "full"}`;
-  return [engineLabel, orderLabel, transposeLabel, memoryLabel, decayLabel];
+  return [ENGINE_LABEL, orderLabel, transposeLabel, memoryLabel];
 }
 
 function settingsChipHtml(label, className = "") {
@@ -3330,14 +3286,12 @@ function syncSettingsControls(configuration) {
 
   state.sessionConfiguration = configuration;
   elements.learnInputToggle.checked = configuration.learn_input;
-  elements.engineKindSelect.value = normalizedEngineKind(configuration.engine_kind);
   elements.transposeToggle.checked = configuration.transposition;
   elements.forgetToggle.checked = configuration.forget_past;
   elements.markovOrderInput.value = String(
     normalizedMarkovOrder(configuration.markov_order),
   );
   elements.keepLastInput.value = String(configuration.keep_last_inputs);
-  elements.decayModeSelect.value = configuration.decay_mode;
   updateKeepLastFieldState();
   renderSessionSettingsSummary();
 }
@@ -3416,7 +3370,7 @@ function formatShortTimestamp(value) {
 
 function generatedSessionName(item) {
   const settings = item?.configuration || {};
-  const kLabel = `${engineKindLabel(settings.engine_kind)} K${normalizedMarkovOrder(
+  const kLabel = `${ENGINE_LABEL} K${normalizedMarkovOrder(
     settings.markov_order,
   )}`;
   const timeLabel = formatShortTimestamp(item?.created_at || item?.last_seen_at);
@@ -4161,7 +4115,7 @@ function createMemorySummaryMarkup(memory) {
     chips.push(`${memory.summary.seeded_phrase_count} seed`);
   }
   chips.push(
-    `${engineKindLabel(memory.configuration.engine_kind)} / K=${memory.configuration.markov_order}`,
+    `${ENGINE_LABEL} / K=${memory.configuration.markov_order}`,
   );
 
   return chips.map((label) => `<span class="settings-chip">${label}</span>`).join("");
@@ -6866,7 +6820,8 @@ async function runInfiniteStep(prefixPayload, runId) {
 
     setPhraseStatus("Infinite");
     setPhraseMessage(
-      `Infinite mode running: ${generatedPhrase.note_count} notes queued from the latest continuation.`,
+      payload.status_message ||
+        `Infinite mode running: ${generatedPhrase.note_count} notes queued from the latest continuation.`,
     );
     scheduleInfiniteStep(generatedPhrase, runId);
     scheduleVisibleSessionRefresh();
@@ -7889,13 +7844,6 @@ function bindEvents() {
     renderSessionSettingsSummary();
   });
 
-  elements.engineKindSelect.addEventListener("change", () => {
-    elements.engineKindSelect.value = normalizedEngineKind(
-      elements.engineKindSelect.value,
-    );
-    renderSessionSettingsSummary();
-  });
-
   elements.transposeToggle.addEventListener("change", () => {
     renderSessionSettingsSummary();
   });
@@ -7922,10 +7870,6 @@ function bindEvents() {
     renderSessionSettingsSummary();
   });
   elements.keepLastInput.addEventListener("input", () => {
-    renderSessionSettingsSummary();
-  });
-
-  elements.decayModeSelect.addEventListener("change", () => {
     renderSessionSettingsSummary();
   });
 

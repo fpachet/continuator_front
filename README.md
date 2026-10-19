@@ -211,7 +211,17 @@ Each session contains:
 - Logged phrase history in SQLite.
 - A live memory view derived from the engine state.
 
-Changing engine/model controls in the browser stages them until `Apply Settings` is pressed. Switching engine or Markov order `K` requires Apply Settings because the backend rebuilds the live session engine, then restores the existing session memory into the rebuilt engine.
+All sessions use Continuator 2.0's VO Regular BP engine through its public
+`Continuator2` facade. The engine selector and retired decay controls have been
+removed. Legacy saved metadata containing `engine_kind` or `decay_mode` is
+accepted and ignored when opening or listing sessions; restored sessions use
+VO Regular BP.
+
+Changing model/memory controls in the browser stages them until `Apply Settings`
+is pressed. Changing Markov order `K` rebuilds the live engine while preserving
+its existing note sequences, including transposed variants, without applying
+transposition or rolling-memory limits a second time. Rolling-memory limits
+continue to apply to newly learned input.
 
 Important distinction:
 
@@ -315,12 +325,22 @@ API payloads use JSON and expose both:
 
 - event-level timing data for playback
 - note-level timing data for visualization
-- constraint status, plus optional per-step `generation_trace` diagnostics for engines that expose it
+- constraint status and native per-step `generation_trace` diagnostics from VO Regular BP
 
 `Generate From Memory` requests both beginning and ending constraints by default
-and reports when either constraint has to be relaxed. Infinite-mode chaining uses
+and reports when either constraint has to be relaxed. `Send Phrase` conditions
+generation on the played phrase as a prefix; the variable-order model uses up
+to K preceding viewpoints and can back off to a shorter context. The prefix
+is not replayed in the output. If the requested ending is infeasible, the
+backend retries with the same prefix and no hard end constraint before trying
+unprompted generation. Only when the prefix cannot produce the requested note
+count does it fall back to a fresh phrase from memory, with an explicit status
+message and a relaxed start indicator.
+
+Infinite-mode chaining uses
 the continuation endpoint with the previous phrase as context; its memory
-re-seed fallback disables the beginning constraint.
+re-seed fallback disables the beginning constraint. A preserved handoff viewpoint
+restores the final note's overlap state while retaining earlier prefix context.
 
 ## Local Development
 
@@ -331,6 +351,14 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r backend/requirements.txt
 python -m uvicorn app.main:app --app-dir backend --reload
+```
+
+Run integration checks against the pinned Continuator dependency:
+
+```bash
+pip install -r backend/requirements-dev.txt
+PYTHONPATH=backend python -m pytest backend/tests -q
+node --input-type=module --check < frontend/app.js
 ```
 
 Open:
@@ -355,7 +383,7 @@ Typical desktop interaction:
 3. Choose a MIDI input.
 4. Choose `Browser Synth` or a hardware output.
 5. Optionally choose another hardware or virtual port under `Also send MIDI to`.
-6. Optionally open `Advanced Continuator Settings`.
+6. Optionally open `Model and Memory Settings`.
 7. Play a phrase.
 8. Wait until the selected phrase gap has elapsed after the final note release. The default gap is 1 second.
 9. Let auto-send submit the phrase, or click `Send Phrase`.
@@ -499,8 +527,8 @@ The Hugging Face YAML block is only repository metadata for the Space platform. 
 ## Current Limitations
 
 - Session engines are in memory only.
-- Memory does not survive a backend restart unless re-created from a seed corpus.
-- There is no user account layer yet.
+- Signed-in sessions are restored from logged learned input after a backend restart.
+- Guest sessions cannot be reopened through the saved-session account interface.
 - The `Memory` tab shows session memory, not cross-session user memory.
 - Web MIDI support depends on browser support and user permission.
 - The built-in sampled piano and violin are loaded lazily from the [FluidR3 General MIDI browser soundfont](https://github.com/gleitz/midi-js-soundfonts) on first use.
@@ -511,9 +539,39 @@ The Hugging Face YAML block is only repository metadata for the Space platform. 
 Natural next steps for this project:
 
 - Persistent per-user memory across sessions.
-- Authentication or signed session tokens.
 - A shared session store for multi-instance deployments.
 - PostgreSQL instead of SQLite when concurrent writes matter.
 - Inline piano-roll thumbnails in the `Memory` list.
 - Stronger observability for generation behavior and debugging.
 - A richer corpus management workflow for seed material.
+
+### Code review follow-ups (October 2026)
+
+- **High priority — durable learning order and reset boundaries.**
+  `session_manager.utc_now_iso()` records only seconds, while storage rebuilds
+  memory in `(created_at, id)` order and filters with `created_at > last_reset_at`.
+  UUIDs can reorder phrases learned in the same second, and a phrase learned
+  immediately after Reset can disappear on restoration. Store a monotonic
+  learning sequence and an explicit reset revision instead of deriving memory
+  membership/order from timestamps.
+- **High priority — serialize complete session operations.** The adapter locks
+  engine calls, but `SessionManager` updates configuration, generation traces,
+  and SQLite history after that lock is released. Concurrent reset, settings,
+  and generation requests can leave these views inconsistent. Add a lock per
+  `SessionState` covering each complete operation and group related database
+  writes in one transaction.
+- **Medium priority — track phrase identity through transposition.** One learned
+  input can produce twelve memory variants but only one SQLite phrase record.
+  `_memory_response()` and `delete_memory_phrase()` infer identity from list
+  offsets, so transposed memory can have no deletable entries. Record the source
+  phrase ID with each variant and update seed membership when rolling memory
+  removes old sequences.
+- **Organization.** Split `frontend/app.js` into MIDI capture, playback/renderers,
+  session/API state, and view modules. Move SVG graph layout/rendering out of
+  `ContinuatorSessionEngine`, passing snapshots and native traces into a pure
+  renderer. This will make performance work and isolated testing easier.
+
+The 2.0 migration removes obsolete engine/decay branches and inferred trace
+generation. It also fixes K-change rebuilds pruning transposed memory, normalizes
+trace boundary markers, and moves synchronous MIDI import/learning off the async
+HTTP event loop. The follow-ups above remain open.

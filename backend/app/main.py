@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import Cookie, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
 from .auth import (
     AUTH_COOKIE_NAME,
@@ -526,7 +527,10 @@ async def import_session_midi(
         for index, upload in enumerate(files):
             file_name = upload.filename or f"imported_{index + 1}.mid"
             uploaded_files.append((file_name, await upload.read()))
-        return session_manager.import_midi_files(
+        # MIDI parsing and model learning are synchronous CPU/file work. Keep
+        # them off the event loop so other sessions can continue responding.
+        return await run_in_threadpool(
+            session_manager.import_midi_files,
             session_id,
             None if current_user is None else current_user.id,
             uploaded_files,

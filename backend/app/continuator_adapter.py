@@ -6,27 +6,13 @@ from html import escape
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import threading
-from typing import Any, get_args
+from typing import Any
 
 import mido
 
-try:
-    from ctor.classic import ClassicContinuator
-except ImportError:
-    from ctor.continuator import Continuator2 as ClassicContinuator
-
-try:
-    from ctor.context_bp import ContextBPContinuator
-except ImportError:
-    ContextBPContinuator = None
-
-try:
-    from ctor.vo_regular_bp import VORegularBPContinuator
-except ImportError:
-    VORegularBPContinuator = None
+from ctor.continuator import Continuator2
 
 from .schemas import (
-    EngineKind,
     GenerationConstraintsStatus,
     GenerationConstraintState,
     GenerationTraceStep,
@@ -46,7 +32,6 @@ class MidiImportError(RuntimeError):
     """Raised when uploaded MIDI files cannot be imported."""
 
 
-ENGINE_KINDS: set[str] = set(get_args(EngineKind))
 GRAPH_SELECTION_MODES = {"slice", "all", "most_used", "neighborhood"}
 
 
@@ -296,20 +281,14 @@ class ContinuatorSessionEngine:
         transposition: bool = False,
         forget_past: bool = False,
         keep_last_inputs: int = 20,
-        decay_mode: str = "full",
-        engine_kind: EngineKind = "classic",
         markov_order: int = 4,
         seed_midi_file: Path | None = None,
         seed_midi_folder: Path | None = None,
     ) -> None:
-        if engine_kind not in ENGINE_KINDS:
-            raise ValueError(f"Unknown Continuator engine kind: {engine_kind}")
         self._default_learn_input = learn_input
         self._transposition = transposition
         self._forget_past = forget_past
         self._keep_last_inputs = keep_last_inputs
-        self._decay_mode = decay_mode
-        self._engine_kind = engine_kind
         self._markov_order = markov_order
         self._seed_midi_file = seed_midi_file
         self._seed_midi_folder = seed_midi_folder
@@ -317,31 +296,12 @@ class ContinuatorSessionEngine:
         self._lock = threading.RLock()
         self._continuator = self._create_engine()
 
-    def _engine_class(self) -> type[Any]:
-        if self._engine_kind == "classic":
-            return ClassicContinuator
-        if self._engine_kind == "context_bp":
-            if ContextBPContinuator is None:
-                raise RuntimeError(
-                    "ContextBPContinuator is not available. Install a continuator "
-                    "package revision that includes ctor.context_bp."
-                )
-            return ContextBPContinuator
-        if self._engine_kind == "vo_regular_bp":
-            if VORegularBPContinuator is None:
-                raise RuntimeError(
-                    "VORegularBPContinuator is not available. Install a continuator "
-                    "package revision that includes ctor.vo_regular_bp and vo_regular_bp."
-                )
-            return VORegularBPContinuator
-        raise ValueError(f"Unknown Continuator engine kind: {self._engine_kind}")
-
-    def _create_engine(self, *, load_seed_material: bool = True) -> Any:
+    def _create_engine(self, *, load_seed_material: bool = True) -> Continuator2:
         midi_file = None
         if load_seed_material and self._seed_midi_file:
             midi_file = str(self._seed_midi_file)
 
-        engine = self._engine_class()(
+        engine = Continuator2(
             midi_file=midi_file,
             kmax=self._markov_order,
             transposition=self._transposition,
@@ -352,45 +312,16 @@ class ContinuatorSessionEngine:
         engine.set_transpose(self._transposition)
         engine.set_forget(self._forget_past)
         engine.set_keep_last(self._keep_last_inputs)
-        set_decay_mode = getattr(engine, "set_decay_mode", None)
-        if callable(set_decay_mode):
-            set_decay_mode(self._decay_mode)
-        midi_store = self._engine_midi_store(engine)
         self._seed_sequence_count = (
-            len(getattr(midi_store, "input_sequences", [])) if load_seed_material else 0
+            len(engine.realization_store.input_sequences) if load_seed_material else 0
         )
         return engine
 
-    @staticmethod
-    def _engine_midi_store(engine: object) -> object | None:
-        store_for_engine = getattr(engine, "_midi_store", None)
-        if callable(store_for_engine):
-            try:
-                return store_for_engine()
-            except AttributeError:
-                pass
-        store = getattr(engine, "realization_store", None)
-        if store is not None:
-            return store
-        return getattr(engine, "vom", None)
-
-    def _midi_store(self) -> object | None:
-        return self._engine_midi_store(self._continuator)
-
     def _input_sequences(self) -> list[object]:
-        store = self._midi_store()
-        if store is None:
-            return []
-        return list(getattr(store, "input_sequences", []))
+        return list(self._continuator.realization_store.input_sequences)
 
     def _has_viewpoint(self, viewpoint: object) -> bool:
-        store = self._midi_store()
-        if store is None:
-            return False
-        has_viewpoint = getattr(store, "has_viewpoint", None)
-        if callable(has_viewpoint):
-            return bool(has_viewpoint(viewpoint))
-        return viewpoint in getattr(store, "viewpoints_realizations", {})
+        return viewpoint in self._continuator.realization_store.viewpoints_realizations
 
     def _realize_vp_sequence(
         self,
@@ -405,92 +336,26 @@ class ContinuatorSessionEngine:
         return self._continuator.realize_vp_sequence(vp_sequence)
 
     def _last_generation_trace(self) -> list[GenerationTraceStep] | None:
-        get_trace = getattr(self._continuator, "get_last_generation_trace", None)
-        if get_trace is None:
-            return None
-        trace = get_trace()
+        trace = self._continuator.get_last_generation_trace()
         if not trace:
             return None
-        return [GenerationTraceStep.model_validate(step) for step in trace]
+        # The core serializes marker objects with repr(); expose stable labels
+        # so graph highlighting and tooltips match the live model's markers.
+        markers = {
+            repr(self._continuator.get_start_vp()): "START",
+            repr(self._continuator.get_end_vp()): "END",
+        }
 
-    def _trace_value(self, value: object) -> object:
-        if self._is_start_symbol(value):
-            return "START"
-        if self._is_end_symbol(value):
-            return "END"
-        if value is None or isinstance(value, (bool, int, float, str)):
+        def normalize(value: Any) -> Any:
+            if isinstance(value, str):
+                return markers.get(value, value)
+            if isinstance(value, list):
+                return [normalize(item) for item in value]
+            if isinstance(value, dict):
+                return {key: normalize(item) for key, item in value.items()}
             return value
-        if hasattr(value, "item"):
-            try:
-                scalar_value = value.item()
-            except ValueError:
-                scalar_value = None
-            if isinstance(scalar_value, (bool, int, float, str)):
-                return scalar_value
-        if isinstance(value, tuple):
-            return [self._trace_value(item) for item in value]
-        if isinstance(value, list):
-            return [self._trace_value(item) for item in value]
-        return repr(value)
 
-    def _synthetic_generation_trace(
-        self,
-        sequence: list[object] | None,
-        *,
-        initial_context: list[object] | None = None,
-    ) -> list[GenerationTraceStep] | None:
-        if not sequence:
-            return None
-
-        graph_counts, _model_label = self._graph_counts()
-        raw_context = list(initial_context or [])
-        kmax = max(1, int(self._markov_order))
-        trace: list[GenerationTraceStep] = []
-        for position, symbol in enumerate(sequence):
-            effective_order = min(kmax, len(raw_context))
-            candidate_orders: list[int] = []
-            candidate_counts: list[int] = []
-            chosen_order = 0
-            for order in range(effective_order, 0, -1):
-                candidate_context = tuple(raw_context[-order:])
-                continuations = graph_counts.get(candidate_context)
-                if not continuations:
-                    continue
-                candidate_orders.append(order)
-                candidate_counts.append(len(continuations))
-                if not chosen_order and symbol in continuations:
-                    chosen_order = order
-
-            if not chosen_order and candidate_orders:
-                chosen_order = candidate_orders[0]
-
-            context = raw_context[-effective_order:] if effective_order else []
-            trace.append(
-                GenerationTraceStep(
-                    position=position,
-                    symbol=self._trace_value(symbol),
-                    order=chosen_order,
-                    effective_order=effective_order,
-                    context=[self._trace_value(value) for value in context],
-                    policy="generated path",
-                    candidate_orders=candidate_orders,
-                    candidate_counts=candidate_counts,
-                )
-            )
-            raw_context.append(symbol)
-
-        return trace
-
-    def _generation_trace_or_path(
-        self,
-        sequence: list[object] | None,
-        *,
-        initial_context: list[object] | None = None,
-    ) -> list[GenerationTraceStep] | None:
-        return self._last_generation_trace() or self._synthetic_generation_trace(
-            sequence,
-            initial_context=initial_context,
-        )
+        return [GenerationTraceStep.model_validate(normalize(step)) for step in trace]
 
     def _sample_memory_sequence(
         self,
@@ -506,20 +371,11 @@ class ContinuatorSessionEngine:
                 constraints=constraints,
             )
 
-        if self._engine_kind == "context_bp":
-            return self._continuator.sample_sequence(
-                prefix=[],
-                length=length,
-                constraints=constraints,
-            )
-
         return self._continuator.sample_sequence(
             prefix=None,
             start_vp=self._continuator.get_start_vp(),
             length=length,
             constraints=constraints,
-            relax_prefix_on_fail=False,
-            relax_pos0_on_fail=False,
         )
 
     def apply_settings(
@@ -529,21 +385,14 @@ class ContinuatorSessionEngine:
         transposition: bool | None = None,
         forget_past: bool | None = None,
         keep_last_inputs: int | None = None,
-        decay_mode: str | None = None,
-        engine_kind: EngineKind | None = None,
         markov_order: int | None = None,
     ) -> None:
         with self._lock:
-            if engine_kind is not None and engine_kind not in ENGINE_KINDS:
-                raise ValueError(f"Unknown Continuator engine kind: {engine_kind}")
-            rebuild_required = (
-                (markov_order is not None and markov_order != self._markov_order)
-                or (engine_kind is not None and engine_kind != self._engine_kind)
-            )
-            preserved_payloads: list[PhrasePayload] = []
+            rebuild_required = markov_order is not None and markov_order != self._markov_order
+            preserved_sequences: list[object] = []
             preserved_seed_count = self._seed_sequence_count
             if rebuild_required:
-                preserved_payloads, preserved_seed_count = self.get_memory_snapshot()
+                preserved_sequences = self._input_sequences()
 
             if learn_input is not None:
                 self._default_learn_input = learn_input
@@ -553,22 +402,20 @@ class ContinuatorSessionEngine:
                 self._forget_past = forget_past
             if keep_last_inputs is not None:
                 self._keep_last_inputs = keep_last_inputs
-            if decay_mode is not None:
-                self._decay_mode = decay_mode
-            if engine_kind is not None:
-                self._engine_kind = engine_kind
             if markov_order is not None:
                 self._markov_order = markov_order
 
             if rebuild_required:
                 self._continuator = self._create_engine(load_seed_material=False)
-                for payload in preserved_payloads:
-                    phrase_events = [MidiEvent.model_validate(event) for event in payload.events]
-                    try:
-                        self._learn_phrase_events_locked(phrase_events, transpose=False)
-                    except NoContinuationAvailable:
-                        continue
-                self._seed_sequence_count = min(preserved_seed_count, len(preserved_payloads))
+                # Replay the existing notes exactly once. Memory limits and
+                # transposition apply to new input, not to a model rebuild.
+                self._continuator.set_forget(False)
+                try:
+                    for sequence in preserved_sequences:
+                        self._continuator.learn_phrase(sequence, False)
+                finally:
+                    self._continuator.set_forget(self._forget_past)
+                self._seed_sequence_count = min(preserved_seed_count, len(preserved_sequences))
                 return
 
             if learn_input is not None:
@@ -579,10 +426,6 @@ class ContinuatorSessionEngine:
                 self._continuator.set_forget(forget_past)
             if keep_last_inputs is not None:
                 self._continuator.set_keep_last(keep_last_inputs)
-            if decay_mode is not None:
-                set_decay_mode = getattr(self._continuator, "set_decay_mode", None)
-                if callable(set_decay_mode):
-                    set_decay_mode(decay_mode)
 
     def reset(self) -> None:
         with self._lock:
@@ -719,56 +562,6 @@ class ContinuatorSessionEngine:
             self._truncate_graph_label(label, limit)
         ]
 
-    def _extract_classic_graph_counts(self, store: object) -> dict[tuple[object, ...], Counter]:
-        raw_contexts = getattr(store, "ctx_to_continuations", {})
-        unique_viewpoints = list(getattr(store, "all_unique_viewpoints", []))
-        now = getattr(store, "global_step", 0)
-        if getattr(store, "decay_freeze_at", None) is not None:
-            now = getattr(store, "decay_freeze_at")
-
-        graph_counts: dict[tuple[object, ...], Counter] = {}
-        for raw_context, multi_counter in raw_contexts.items():
-            weights = {}
-            counter_weights = getattr(multi_counter, "weights", None)
-            if callable(counter_weights):
-                weights = counter_weights(now, self._decay_mode)
-            elif hasattr(multi_counter, "full"):
-                weights = getattr(multi_counter, "full")
-            edge_counts = Counter()
-            for raw_index, raw_weight in weights.items():
-                try:
-                    symbol = unique_viewpoints[int(raw_index)]
-                    weight = float(raw_weight)
-                except (IndexError, TypeError, ValueError):
-                    continue
-                if weight > 0:
-                    edge_counts[symbol] += weight
-            if edge_counts:
-                graph_counts[tuple(raw_context)] = edge_counts
-        return graph_counts
-
-    @staticmethod
-    def _extract_context_bp_graph_counts(model: object) -> dict[tuple[object, ...], Counter]:
-        vocabulary = getattr(model, "vocabulary", None)
-        raw_counts = getattr(getattr(model, "counts", None), "counts", {})
-        if vocabulary is None:
-            return {}
-        decode = getattr(vocabulary, "decode", None)
-        if not callable(decode):
-            return {}
-
-        graph_counts: dict[tuple[object, ...], Counter] = {}
-        for raw_context, raw_counter in raw_counts.items():
-            context = tuple(decode(symbol_id) for symbol_id in raw_context)
-            counter = Counter()
-            for raw_symbol, raw_weight in raw_counter.items():
-                weight = float(raw_weight)
-                if weight > 0:
-                    counter[decode(raw_symbol)] += weight
-            if counter:
-                graph_counts[context] = counter
-        return graph_counts
-
     @staticmethod
     def _extract_order_model_graph_counts(model: object) -> dict[tuple[object, ...], Counter]:
         raw_counts = getattr(model, "counts", {})
@@ -784,19 +577,10 @@ class ContinuatorSessionEngine:
         return graph_counts
 
     def _graph_counts(self) -> tuple[dict[tuple[object, ...], Counter], str]:
-        store = self._midi_store()
-        if store is not None and hasattr(store, "ctx_to_continuations"):
-            return self._extract_classic_graph_counts(store), "Classic variable-order model"
-
-        context_model = getattr(self._continuator, "context_model", None)
-        if context_model is not None:
-            return self._extract_context_bp_graph_counts(context_model), "Context BP model"
-
-        order_model = getattr(self._continuator, "order_model", None)
-        if order_model is not None:
-            return self._extract_order_model_graph_counts(order_model), "VO regular BP order model"
-
-        return {}, "Unknown model"
+        return (
+            self._extract_order_model_graph_counts(self._continuator.order_model),
+            "VO Regular BP order model",
+        )
 
     def _graph_focus_symbol_keys(
         self,
@@ -1660,16 +1444,10 @@ class ContinuatorSessionEngine:
                 rendered_vp_sequence,
                 force_ending_realization=ends_with_end_marker,
             )
-            trace_initial_context = (
-                [self._continuator.get_start_vp()] if applied_start_constraint else []
-            )
             return (
                 _build_phrase_payload(rendered_sequence),
                 constraints_status,
-                self._generation_trace_or_path(
-                    generated_sequence,
-                    initial_context=trace_initial_context,
-                ),
+                self._last_generation_trace(),
                 " ".join(status_messages) or None,
             )
 
@@ -1703,122 +1481,82 @@ class ContinuatorSessionEngine:
                 self._continuator.learn_phrase(input_phrase, self._continuator.transpose)
 
             status_messages: list[str] = []
-            prefix_for_generation = input_phrase
-            start_viewpoint = None
+            prefix_for_generation = [
+                self._continuator.get_viewpoint(note) for note in input_phrase
+            ]
             requested_handoff_viewpoint = _schema_to_viewpoint(handoff_viewpoint)
-            input_handoff_viewpoint = self._continuator.get_viewpoint(input_phrase[-1])
-            displayed_start_viewpoint = requested_handoff_viewpoint or input_handoff_viewpoint
+            if requested_handoff_viewpoint is not None:
+                if self._has_viewpoint(requested_handoff_viewpoint):
+                    # Serialized playback can lose the last note's overlap
+                    # state. Restore that state without discarding the rest
+                    # of the played phrase's context.
+                    prefix_for_generation[-1] = requested_handoff_viewpoint
+                else:
+                    status_messages.append(
+                        "Ignored the preserved handoff viewpoint because it was outside "
+                        "the learned vocabulary; using the played phrase instead."
+                    )
+
+            handoff = prefix_for_generation[-1]
+            has_prefix = self._has_viewpoint(handoff)
             constraints_status = GenerationConstraintsStatus(
                 start=GenerationConstraintState(
                     requested=True,
-                    applied=True,
-                    value=_viewpoint_label(displayed_start_viewpoint),
-                    reason=(
-                        "Using preserved handoff viewpoint."
-                        if requested_handoff_viewpoint is not None
-                        else "Using final input viewpoint."
-                    ),
+                    value=_viewpoint_label(handoff),
                 ),
                 end=GenerationConstraintState(
                     requested=enforce_end_constraint,
-                    applied=enforce_end_constraint,
                     value="ending marker" if enforce_end_constraint else None,
                     reason=None if enforce_end_constraint else "Ending constraint was disabled.",
                 ),
             )
-            if requested_handoff_viewpoint is not None:
-                if self._has_viewpoint(requested_handoff_viewpoint):
-                    prefix_for_generation = None
-                    start_viewpoint = requested_handoff_viewpoint
-                else:
-                    constraints_status.start.applied = False
-                    constraints_status.start.relaxed = True
-                    constraints_status.start.reason = (
-                        "Preserved handoff viewpoint was outside the learned vocabulary."
-                    )
-                    status_messages.append(
-                        "Ignored the preserved handoff viewpoint because it was outside "
-                        "the learned vocabulary."
-                    )
 
-            if start_viewpoint is None:
-                if not self._has_viewpoint(input_handoff_viewpoint):
-                    prefix_for_generation = None
-                    constraints_status.start.applied = False
-                    constraints_status.start.relaxed = True
-                    constraints_status.start.reason = (
-                        "Final input viewpoint was outside the learned vocabulary."
-                    )
-                    status_messages.append(
-                        "Relaxed the continuation handoff because the final input state "
-                        "was outside the learned vocabulary."
-                    )
-
-            def sample_with_current_start(length: int, constraints: dict[int, object]):
-                return self._continuator.sample_sequence(
-                    prefix=prefix_for_generation,
-                    start_vp=start_viewpoint,
-                    length=length,
-                    constraints=constraints,
-                    relax_prefix_on_fail=False,
+            # The played prefix takes priority over the requested ending.
+            # Exhaust its attempts before falling back to an unprompted phrase.
+            ending_attempts = [True, False] if enforce_end_constraint else [False]
+            attempts = [
+                (use_prefix, use_end)
+                for use_prefix in ([True, False] if has_prefix else [False])
+                for use_end in ending_attempts
+            ]
+            generated_sequence = None
+            for use_prefix, use_end in attempts:
+                generated_sequence = self._continuator.sample_sequence(
+                    prefix=prefix_for_generation if use_prefix else None,
+                    length=target_note_count + int(use_end),
+                    constraints=(
+                        {target_note_count: self._continuator.get_end_vp()}
+                        if use_end else {}
+                    ),
                 )
-
-            def sample_with_relaxed_start(length: int, constraints: dict[int, object]):
-                return self._continuator.sample_sequence(
-                    prefix=None,
-                    start_vp=None,
-                    length=length,
-                    constraints=constraints,
-                )
-
-            def relax_start_constraint(reason: str) -> None:
-                if constraints_status.start.applied:
-                    constraints_status.start.applied = False
-                    constraints_status.start.relaxed = True
-                    constraints_status.start.reason = reason
-                    status_messages.append(
-                        "Relaxed the continuation handoff because the requested start "
-                        "had no valid continuation."
-                    )
-
-            if enforce_end_constraint:
-                constraints = {target_note_count: self._continuator.get_end_vp()}
-                generated_sequence = sample_with_current_start(
-                    target_note_count + 1,
-                    constraints,
-                )
-                if generated_sequence is None and constraints_status.start.applied:
-                    relax_start_constraint(
-                        "The requested handoff had no exact-ending continuation."
-                    )
-                    generated_sequence = sample_with_relaxed_start(
-                        target_note_count + 1,
-                        constraints,
-                    )
-                if generated_sequence is None:
-                    generated_sequence = (
-                        sample_with_current_start(target_note_count, {})
-                        if constraints_status.start.applied
-                        else sample_with_relaxed_start(target_note_count, {})
-                    )
-                    status_messages.append(
-                        "Used a same-length continuation without the hard end constraint "
-                        "because the exact-ending version had no solution."
-                    )
-                    constraints_status.end.applied = False
-                    constraints_status.end.relaxed = True
-                    constraints_status.end.reason = "The exact-ending version had no solution."
-                if generated_sequence is None:
-                    relax_start_constraint("The requested handoff had no valid continuation.")
-                    generated_sequence = sample_with_relaxed_start(target_note_count, {})
-            else:
-                generated_sequence = sample_with_current_start(target_note_count, {})
-                if generated_sequence is None:
-                    relax_start_constraint("The requested handoff had no valid continuation.")
-                    generated_sequence = sample_with_relaxed_start(target_note_count, {})
+                if generated_sequence is not None:
+                    constraints_status.start.applied = use_prefix
+                    constraints_status.end.applied = use_end
+                    break
 
             if generated_sequence is None:
                 raise NoContinuationAvailable("The Continuator could not find a valid continuation.")
+
+            if not constraints_status.start.applied:
+                constraints_status.start.relaxed = True
+                constraints_status.start.reason = (
+                    "The final input viewpoint was outside the learned vocabulary."
+                    if not has_prefix
+                    else "The played prefix had no continuation of the requested length."
+                )
+                status_messages.append(
+                    "Generated a fresh phrase from memory because "
+                    "the played prefix had no valid continuation of the requested length."
+                )
+            if enforce_end_constraint and not constraints_status.end.applied:
+                constraints_status.end.relaxed = True
+                constraints_status.end.reason = (
+                    "No exact-ending continuation of the requested length was available."
+                )
+                status_messages.append(
+                    "Used a same-length continuation without the hard end constraint "
+                    "because the exact-ending version had no solution."
+                )
 
             rendered_vp_sequence = generated_sequence
             ends_with_end_marker = bool(
@@ -1833,21 +1571,10 @@ class ContinuatorSessionEngine:
                 force_ending_realization=ends_with_end_marker,
             )
             status_message = " ".join(status_messages) or None
-            trace_initial_context: list[object] = []
-            if constraints_status.start.applied:
-                if start_viewpoint is not None:
-                    trace_initial_context = [start_viewpoint]
-                elif prefix_for_generation is not None:
-                    trace_initial_context = [
-                        self._continuator.get_viewpoint(note) for note in prefix_for_generation
-                    ]
             return (
                 input_payload,
                 _build_phrase_payload(rendered_sequence),
                 constraints_status,
-                self._generation_trace_or_path(
-                    generated_sequence,
-                    initial_context=trace_initial_context,
-                ),
+                self._last_generation_trace(),
                 status_message,
             )
