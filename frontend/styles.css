@@ -52,6 +52,21 @@ body.sheet-open {
   overflow: hidden;
 }
 
+a:any-link {
+  color: var(--secondary);
+  text-underline-offset: 0.18em;
+}
+
+a:hover {
+  color: #a5efe9;
+}
+
+a:focus-visible {
+  outline: 2px solid var(--secondary);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
 .page-aura,
 .page-grid {
   position: fixed;
