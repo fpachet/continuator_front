@@ -298,6 +298,7 @@ class AuthUser(BaseModel):
     id: str
     username: str
     created_at: str
+    is_admin: bool = False
 
 
 class AuthStatusResponse(BaseModel):

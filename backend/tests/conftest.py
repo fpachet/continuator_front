@@ -20,6 +20,7 @@ def api(tmp_path, monkeypatch):
     monkeypatch.delenv("CONTINUATOR_SEED_MIDI_FILE", raising=False)
     monkeypatch.delenv("CONTINUATOR_SEED_MIDI_FOLDER", raising=False)
     monkeypatch.delenv("CONTINUATOR_BACKUP_BUCKET", raising=False)
+    monkeypatch.delenv("CONTINUATOR_ADMIN_USER_IDS", raising=False)
     from app import main
 
     importlib.reload(main)

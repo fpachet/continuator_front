@@ -23,6 +23,7 @@ from .auth import (
     UsernameTakenError,
 )
 from .auth_cookies import auth_token_from_request, clear_auth_cookie, set_auth_cookie
+from .admin_routes import create_admin_router
 from .config import load_settings
 from .cloud_backup import CloudBackup, HubBucket
 from .continuator_runtime import continuator_runtime_info
@@ -109,11 +110,18 @@ async def revalidate_frontend_modules(request: Request, call_next):
         (".js", ".css")
     ):
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    if request.url.path.startswith(("/api/auth/", "/api/admin/")):
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
 def auth_user_to_schema(user: AuthenticatedUser) -> AuthUser:
-    return AuthUser(id=user.id, username=user.username, created_at=user.created_at)
+    return AuthUser(
+        id=user.id,
+        username=user.username,
+        created_at=user.created_at,
+        is_admin=user.id in settings.admin_user_ids,
+    )
 
 
 def get_optional_current_user(
@@ -128,6 +136,37 @@ def require_current_user(
     if current_user is None:
         raise HTTPException(status_code=401, detail="Sign in to access saved sessions.")
     return current_user
+
+
+def require_admin(
+    current_user: AuthenticatedUser = Depends(require_current_user),
+) -> AuthenticatedUser:
+    if current_user.id not in settings.admin_user_ids:
+        raise HTTPException(status_code=403, detail="Administrator access is required.")
+    return current_user
+
+
+app.include_router(create_admin_router(storage, auth_manager, require_admin))
+
+
+@app.get("/admin", include_in_schema=False)
+def admin_page() -> FileResponse:
+    return FileResponse(
+        settings.frontend_dir / "admin.html",
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+
+
+@app.get("/reset-password", include_in_schema=False)
+def reset_password_page() -> FileResponse:
+    return FileResponse(
+        settings.frontend_dir / "reset-password.html",
+        headers={
+            "Cache-Control": "no-store",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; form-action 'self'",
+        },
+    )
 
 
 @app.get("/", include_in_schema=False)

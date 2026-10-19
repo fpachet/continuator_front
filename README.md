@@ -334,6 +334,8 @@ Main responsibilities:
 - `backend/app/continuator_adapter.py`: bridge between web JSON payloads and the Continuator Python engine.
 - `backend/app/storage.py`: transactional SQLite history, reset revisions, learning order, and exact variant persistence.
 - `backend/app/cloud_backup.py`: consistent snapshots, private bucket uploads, retention, and validated startup recovery.
+- `backend/app/admin_routes.py` and `admin_queries.py`: administrator authorization, user/activity reporting, and password reset requests.
+- `frontend/admin.html` and `reset-password.html`: administration dashboard and standalone one-use password reset flow.
 - `frontend/backup-status.js`: cloud durability feedback that accounts for pending browser writes.
 - `backend/app/memory.py`: stable variant identity and lossless note snapshots.
 - `backend/app/session_operations.py`: per-session operation locking and rollback recovery.
@@ -458,6 +460,7 @@ Environment variables currently supported:
 - `CONTINUATOR_BACKUP_BUCKET`: optional private bucket ID, for example `pachet/continuator_front-storage`.
 - `CONTINUATOR_BACKUP_TOKEN`: backend-only secret with read/write access to that bucket. Falls back to the standard Hub `HF_TOKEN` or cached login for local development.
 - `CONTINUATOR_BACKUP_INTERVAL_SECONDS`: background backup interval, default `5`, minimum `1` second.
+- `CONTINUATOR_ADMIN_USER_IDS`: comma-separated IDs of existing accounts allowed to administer users. Empty by default; usernames and newly registered accounts never receive admin access automatically.
 
 Examples:
 
@@ -531,6 +534,39 @@ After login or registration, the frontend confirms the cookie with `/api/auth/me
 before attaching the guest session. If the browser still rejects it, the guest
 session stays open and the dialog offers **Open the app in its own tab**. These
 are Continuator accounts; Hugging Face account credentials are separate.
+
+### Administration and password recovery
+
+Sign in, open the account dialog, and choose **Administration · users and
+activity**, or visit `/admin` in the same browser context. The deployed Space
+grants this role only to the existing `fpachet` account ID through
+`CONTINUATOR_ADMIN_USER_IDS`. Every administration API checks the authenticated
+account ID on the server. The page shell contains no user data before that check.
+
+The dashboard shows registered users, registration/last-sign-in dates, session
+and input/output counts, guest usage, recent sessions and memory sizes, and a
+filtered activity feed. Existing registration, session and phrase history is
+available immediately. Sign-in and recovery events are recorded from this
+release onward; earlier sign-ins cannot be reconstructed. Usernames can be
+searched and the user list is paginated.
+
+Passwords are stored as salted scrypt hashes and cannot be displayed or
+recovered. Select a user and confirm your own administrator password to create
+a one-use reset link, valid for 30 minutes. A new link invalidates the previous
+link for that user. Share it privately with the verified account owner; email
+delivery is not configured. No message is sent automatically.
+
+The recipient opens the standalone `/reset-password` page and enters the new
+password twice. The random token travels in the link fragment, is removed from
+the address bar immediately, and is sent only in the reset request body. Only
+its hash is stored. Successful use atomically consumes the link, changes the
+password, and revokes all of that user's sign-in tokens while preserving their
+musical sessions. The recipient then signs in normally. Creating a link alone
+does not change the password or sign the user out.
+
+Reset tokens and audit events are included in cloud backups. Reset and
+administration responses are not cached. An administrator who has lost their
+own password needs another configured administrator or server-operator recovery.
 
 ### Private cloud backups on free hardware
 
@@ -671,14 +707,16 @@ Natural next steps for this project:
 | Cloud recovery on ephemeral hardware | Complete | Private bucket snapshots include accounts, phrases and exact memory; validated startup recovery, upload retries, three-snapshot retention and honest save status. Requires a bucket-scoped backend secret. |
 | Account and save UX | Complete | Native modal appears above graph windows, sign-in can claim the existing guest session, and account/reopen controls work on desktop and phone. |
 
-Validation: 48 backend integration/regression tests and 12 frontend module tests,
+Validation: 55 backend integration/regression tests and 14 frontend module tests,
 plus Python/JavaScript static checks and browser checks of capture, generation,
 playback, memory and graph views. Tests cover same-second reset/relearn,
 legacy-schema migration, transposed deletion, seed eviction, polyphonic timing,
 transaction failure recovery, concurrent requests, backup recovery/corruption,
 upload failures and retries, writes during uploads, ownership conflicts, and
 stale frontend save-status responses, embedded cookie login/logout and isolation,
-and preservation of guest state when browser cookies are rejected.
+preservation of guest state when browser cookies are rejected, admin access
+control, usage aggregation, reset-link expiry/reissue/concurrency, token
+revocation, and reset/audit recovery through cloud snapshots.
 
 Existing databases upgrade automatically in a transaction. Legacy phrase order
 is recovered from SQLite insertion order; the first restoration creates exact

@@ -57,6 +57,25 @@ CREATE TABLE IF NOT EXISTS phrases (
 
 CREATE INDEX IF NOT EXISTS idx_phrases_session_created
     ON phrases(session_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_by_user_id TEXT NOT NULL REFERENCES users(id),
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_password_resets_user ON password_reset_tokens(user_id);
+
+CREATE TABLE IF NOT EXISTS audit_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_type TEXT NOT NULL,
+    user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_audit_user_created ON audit_events(user_id, created_at DESC);
 """
 
 
@@ -105,6 +124,7 @@ class PhraseStorage:
             self._migrate_schema(connection)
 
     def _migrate_schema(self, connection: sqlite3.Connection) -> None:
+        self._ensure_column(connection, "users", "last_login_at", "TEXT")
         self._ensure_column(connection, "sessions", "user_id", "TEXT")
         self._ensure_column(connection, "sessions", "last_reset_at", "TEXT")
         legacy_revision = "memory_revision" not in {
@@ -179,7 +199,15 @@ class PhraseStorage:
         )
         # Revisions live in SQLite, so a snapshot identifies exactly which
         # committed writes it contains, including writes during an upload.
-        for table in ("users", "auth_tokens", "sessions", "phrases", "memory_variants"):
+        for table in (
+            "users",
+            "auth_tokens",
+            "sessions",
+            "phrases",
+            "memory_variants",
+            "password_reset_tokens",
+            "audit_events",
+        ):
             for operation in ("INSERT", "UPDATE", "DELETE"):
                 connection.execute(f"""
                     CREATE TRIGGER IF NOT EXISTS backup_{table}_{operation.lower()}
@@ -821,3 +849,80 @@ class PhraseStorage:
                     (session_id,),
                 )
             ]
+
+    def record_audit(
+        self, event_type: str, user_id: str, actor_user_id: str, created_at: str
+    ) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                "INSERT INTO audit_events(event_type, user_id, actor_user_id, created_at) VALUES (?, ?, ?, ?)",
+                (event_type, user_id, actor_user_id, created_at),
+            )
+
+    def record_login(self, user_id: str, created_at: str) -> None:
+        with self.transaction():
+            with self._connect() as connection:
+                connection.execute(
+                    "UPDATE users SET last_login_at = ? WHERE id = ?",
+                    (created_at, user_id),
+                )
+            self.record_audit("signed_in", user_id, user_id, created_at)
+
+    def create_password_reset(
+        self,
+        *,
+        token_hash: str,
+        user_id: str,
+        actor_user_id: str,
+        created_at: str,
+        expires_at: str,
+    ) -> None:
+        with self.transaction():
+            with self._connect() as connection:
+                connection.execute(
+                    "DELETE FROM password_reset_tokens WHERE user_id = ?", (user_id,)
+                )
+                connection.execute(
+                    "INSERT INTO password_reset_tokens(token_hash, user_id, created_by_user_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)",
+                    (token_hash, user_id, actor_user_id, created_at, expires_at),
+                )
+            self.record_audit("reset_link_created", user_id, actor_user_id, created_at)
+
+    def valid_password_reset(self, token_hash: str, now: str) -> bool:
+        with self._connect() as connection:
+            return (
+                connection.execute(
+                    "SELECT 1 FROM password_reset_tokens WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
+                    (token_hash, now),
+                ).fetchone()
+                is not None
+            )
+
+    def consume_password_reset(
+        self, *, token_hash: str, now: str, password_hash: str, password_salt: str
+    ) -> bool:
+        with self._connect() as connection:
+            # Serialize validation and consumption so simultaneous submissions
+            # cannot both change the password with the same link.
+            connection.execute("BEGIN IMMEDIATE")
+            reset = connection.execute(
+                "SELECT user_id FROM password_reset_tokens WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
+                (token_hash, now),
+            ).fetchone()
+            if reset is None:
+                return False
+            user_id = reset["user_id"]
+            connection.execute(
+                "UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?",
+                (password_hash, password_salt, user_id),
+            )
+            connection.execute(
+                "UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
+                (now, user_id),
+            )
+            connection.execute("DELETE FROM auth_tokens WHERE user_id = ?", (user_id,))
+            connection.execute(
+                "INSERT INTO audit_events(event_type, user_id, actor_user_id, created_at) VALUES ('password_reset', ?, ?, ?)",
+                (user_id, user_id, now),
+            )
+            return True

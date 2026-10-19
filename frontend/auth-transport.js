@@ -1,3 +1,13 @@
+export function isEmbeddedView(windowLike = window) {
+  if (windowLike.self === windowLike.top) return false;
+  try {
+    void windowLike.top.location.href;
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 export function createApiFetch(isEmbedded = () => false) {
   return (url, options = {}) => {
     const headers = new Headers(options.headers);

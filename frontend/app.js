@@ -1,6 +1,9 @@
 import { state, elements } from "./app-state.js";
 import { createBackupStatus } from "./backup-status.js";
-import { createApiFetch } from "./auth-transport.js";
+import {
+  createApiFetch,
+  isEmbeddedView as isCrossOriginSubframe,
+} from "./auth-transport.js";
 
 const backupStatus = createBackupStatus(elements.cloudSaveStatus);
 const fetchApi = createApiFetch(isCrossOriginSubframe);
@@ -71,18 +74,6 @@ function safeLocalStorageSet(key, value) {
     window.localStorage.setItem(key, value);
   } catch {
     // Ignore private-browsing or storage-denied failures.
-  }
-}
-
-function isCrossOriginSubframe() {
-  if (window.self === window.top) {
-    return false;
-  }
-  try {
-    void window.top.location.href;
-    return false;
-  } catch {
-    return true;
   }
 }
 
@@ -1052,6 +1043,7 @@ function preferredGenerationNoteCount(referenceEvents = null) {
 }
 
 function renderAccountTrigger() {
+  elements.adminLink.hidden = !state.authUser?.is_admin;
   const sessionSelect = elements.accountSessionSelect;
   const selectedId =
     state.accountSelectedSessionId || state.sessionId || sessionSelect.value;

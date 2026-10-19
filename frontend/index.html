@@ -25,7 +25,7 @@
         document.documentElement.classList.toggle("phone-layout", phoneLayout);
       })();
     </script>
-    <link rel="stylesheet" href="/assets/styles.css?v=20261019-embedded-auth" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261019-admin" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -147,6 +147,9 @@
               placeholder="At least 8 characters"
             />
             <p class="field-hint">Passwords need at least 8 characters.</p>
+            <p class="field-hint">
+              Forgot your password? Ask the administrator for a reset link.
+            </p>
           </div>
         </div>
         <label class="account-save-choice"
@@ -183,6 +186,11 @@
         No account is needed to play. Signing in can save the phrases you have
         already played.
       </div>
+      <p>
+        <a id="admin-link" href="/admin" hidden
+          >Administration · users and activity</a
+        >
+      </p>
       <p class="field-hint">
         <a
           id="auth-standalone-link"
@@ -1436,9 +1444,6 @@
       </section>
     </main>
 
-    <script
-      type="module"
-      src="/assets/app.js?v=20261019-embedded-auth"
-    ></script>
+    <script type="module" src="/assets/app.js?v=20261019-admin"></script>
   </body>
 </html>

@@ -12,6 +12,7 @@ from .storage import PhraseStorage
 
 AUTH_COOKIE_NAME = "continuator_auth"
 AUTH_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30
+PASSWORD_RESET_MAX_AGE_SECONDS = 30 * 60
 
 
 def utc_now_iso() -> str:
@@ -47,18 +48,34 @@ class AuthManager:
         user_id = uuid.uuid4().hex
         salt = secrets.token_bytes(16)
         password_hash = self._hash_password(password, salt)
-        self.storage.create_user(
-            user_id=user_id,
-            username=prepared_username,
-            username_normalized=prepared_username.casefold(),
-            password_hash=password_hash,
-            password_salt=salt.hex(),
-            created_at=created_at,
+        with self.storage.transaction():
+            self.storage.create_user(
+                user_id=user_id,
+                username=prepared_username,
+                username_normalized=prepared_username.casefold(),
+                password_hash=password_hash,
+                password_salt=salt.hex(),
+                created_at=created_at,
+            )
+            self.storage.record_login(user_id, created_at)
+            raw_token = self._issue_token(user_id)
+        user = AuthenticatedUser(
+            id=user_id, username=prepared_username, created_at=created_at
         )
-        user = AuthenticatedUser(id=user_id, username=prepared_username, created_at=created_at)
-        return user, self._issue_token(user_id)
+        return user, raw_token
 
     def login(self, username: str, password: str) -> tuple[AuthenticatedUser, str]:
+        with self.storage.transaction():
+            # A reset must not revoke tokens just before an in-flight login
+            # issues another token using the superseded password.
+            with self.storage._connect() as connection:
+                connection.execute("BEGIN IMMEDIATE")
+            user = self.verify_password(username, password)
+            self.storage.record_login(user.id, utc_now_iso())
+            raw_token = self._issue_token(user.id)
+        return user, raw_token
+
+    def verify_password(self, username: str, password: str) -> AuthenticatedUser:
         prepared_username = self._prepare_username(username)
         user_record = self.storage.get_user_by_username(prepared_username.casefold())
         if user_record is None:
@@ -75,7 +92,42 @@ class AuthManager:
             username=str(user_record["username"]),
             created_at=str(user_record["created_at"]),
         )
-        return user, self._issue_token(user.id)
+        return user
+
+    def create_password_reset(
+        self, user_id: str, actor_user_id: str
+    ) -> tuple[str, str]:
+        raw_token = secrets.token_urlsafe(32)
+        expires_at = (
+            (datetime.now(UTC) + timedelta(seconds=PASSWORD_RESET_MAX_AGE_SECONDS))
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
+        self.storage.create_password_reset(
+            token_hash=self._hash_token(raw_token),
+            user_id=user_id,
+            actor_user_id=actor_user_id,
+            created_at=utc_now_iso(),
+            expires_at=expires_at,
+        )
+        return raw_token, expires_at
+
+    def reset_password(self, raw_token: str, password: str) -> None:
+        token_hash = self._hash_token(raw_token)
+        if not self.storage.valid_password_reset(token_hash, utc_now_iso()):
+            raise AuthenticationError(
+                "This reset link has expired or has already been used. Ask the administrator for a new link."
+            )
+        salt = secrets.token_bytes(16)
+        if not self.storage.consume_password_reset(
+            token_hash=token_hash,
+            now=utc_now_iso(),
+            password_hash=self._hash_password(password, salt),
+            password_salt=salt.hex(),
+        ):
+            raise AuthenticationError(
+                "This reset link has expired or has already been used. Ask the administrator for a new link."
+            )
 
     def get_user_from_token(self, raw_token: str | None) -> AuthenticatedUser | None:
         if not raw_token:
@@ -101,8 +153,10 @@ class AuthManager:
     def _issue_token(self, user_id: str) -> str:
         created_at = utc_now_iso()
         expires_at = (
-            datetime.now(UTC) + timedelta(seconds=AUTH_TOKEN_MAX_AGE_SECONDS)
-        ).isoformat(timespec="seconds").replace("+00:00", "Z")
+            (datetime.now(UTC) + timedelta(seconds=AUTH_TOKEN_MAX_AGE_SECONDS))
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
+        )
         raw_token = secrets.token_urlsafe(32)
         self.storage.create_auth_token(
             token_hash=self._hash_token(raw_token),

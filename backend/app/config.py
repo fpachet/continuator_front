@@ -21,6 +21,7 @@ class Settings:
     seed_midi_folder: Path | None
     backup_bucket: str | None
     backup_interval_seconds: float
+    admin_user_ids: frozenset[str]
 
 
 def _env_path(name: str) -> Path | None:
@@ -42,5 +43,10 @@ def load_settings() -> Settings:
         backup_bucket=os.getenv("CONTINUATOR_BACKUP_BUCKET") or None,
         backup_interval_seconds=max(
             1, float(os.getenv("CONTINUATOR_BACKUP_INTERVAL_SECONDS", "5"))
+        ),
+        admin_user_ids=frozenset(
+            value.strip()
+            for value in os.getenv("CONTINUATOR_ADMIN_USER_IDS", "").split(",")
+            if value.strip()
         ),
     )

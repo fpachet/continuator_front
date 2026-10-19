@@ -25,6 +25,7 @@ export const elements = {
   graphModeSelect: document.querySelector("#graph-mode-select"),
   graphOrderSelect: document.querySelector("#graph-order-select"),
   accountPanel: document.querySelector("#account-panel"),
+  adminLink: document.querySelector("#admin-link"),
   accountTitle: document.querySelector("#account-title"),
   accountSessionSelect: document.querySelector("#account-session-select"),
   closeAccountButton: document.querySelector("#close-account-button"),

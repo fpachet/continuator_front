@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Administration · Web Continuator</title>
+    <link rel="stylesheet" href="/assets/styles.css" />
+    <link rel="stylesheet" href="/assets/admin.css" />
+    <script type="module" src="/assets/admin.js"></script>
+  </head>
+  <body class="admin-document">
+    <header class="admin-header">
+      <div>
+        <p class="admin-eyebrow">Web Continuator</p>
+        <h1>Administration</h1>
+        <p id="admin-identity">Checking access…</p>
+      </div>
+      <div class="admin-header-actions">
+        <span id="admin-backup-status" role="status"
+          >Checking cloud backup…</span
+        ><a href="/">Back to instrument</a>
+      </div>
+    </header>
+    <main class="admin-layout">
+      <p id="admin-message" role="status" class="message-box">
+        Loading administration…
+      </p>
+      <p id="admin-signin-help" hidden>
+        <a href="/"
+          >Open the instrument and sign in with an administrator account.</a
+        >
+      </p>
+      <div id="admin-content" hidden>
+        <section
+          id="admin-overview"
+          class="admin-metrics"
+          aria-label="Usage overview"
+        ></section>
+        <section class="admin-card">
+          <div class="admin-section-head">
+            <h2>Registered users</h2>
+            <button id="admin-refresh" class="ghost" type="button">
+              Refresh
+            </button>
+          </div>
+          <form id="user-search-form" class="admin-search">
+            <label for="user-search">Find a username</label
+            ><input
+              id="user-search"
+              type="search"
+              maxlength="64"
+              placeholder="All users"
+            /><button type="submit">Search</button>
+          </form>
+          <div class="admin-table-scroll">
+            <table>
+              <caption class="admin-caption">
+                Select a username to inspect sessions and activity.
+              </caption>
+              <thead>
+                <tr>
+                  <th>Username</th>
+                  <th>Registered</th>
+                  <th>Last sign-in</th>
+                  <th>Sessions</th>
+                  <th>Inputs</th>
+                  <th>Outputs</th>
+                  <th>Last activity</th>
+                </tr>
+              </thead>
+              <tbody id="admin-users"></tbody>
+            </table>
+          </div>
+          <div class="admin-pagination">
+            <span id="admin-user-count"></span
+            ><button id="users-previous" class="ghost" type="button">
+              Previous</button
+            ><button id="users-next" class="ghost" type="button">Next</button>
+          </div>
+        </section>
+        <section id="user-detail" class="admin-card" hidden>
+          <h2 id="selected-user-name"></h2>
+          <p id="selected-user-summary" class="section-copy"></p>
+          <div class="admin-detail-grid">
+            <div>
+              <h3>Recent sessions</h3>
+              <div class="admin-table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Session</th>
+                      <th>Last activity</th>
+                      <th>Inputs</th>
+                      <th>Outputs</th>
+                      <th>Memory variants</th>
+                    </tr>
+                  </thead>
+                  <tbody id="admin-user-sessions"></tbody>
+                </table>
+              </div>
+            </div>
+            <div class="admin-reset-card">
+              <h3>Password recovery</h3>
+              <p>
+                Passwords cannot be displayed. Create a one-use reset link valid
+                for 30 minutes.
+              </p>
+              <form id="create-reset-form">
+                <label for="admin-password"
+                  >Confirm your administrator password</label
+                ><input
+                  id="admin-password"
+                  type="password"
+                  autocomplete="current-password"
+                  minlength="8"
+                  maxlength="128"
+                  required
+                /><button id="create-reset-button" type="submit">
+                  Create reset link
+                </button>
+              </form>
+              <div id="reset-link-output" hidden>
+                <label for="reset-link-input">Password reset link</label
+                ><input id="reset-link-input" type="text" readonly /><button
+                  id="copy-reset-link"
+                  type="button"
+                  class="ghost"
+                >
+                  Copy link
+                </button>
+                <p id="reset-link-expiry"></p>
+                <p>
+                  Share privately with the verified account owner. Using this
+                  link will sign them out on all devices.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section class="admin-card">
+          <div class="admin-section-head">
+            <h2 id="admin-activity-title">Recent activity</h2>
+            <button id="all-activity-button" class="ghost" type="button">
+              All activity
+            </button>
+          </div>
+          <p class="section-copy">
+            Registrations, recorded sign-ins, sessions, phrases, and password
+            recovery. Earlier sign-ins were not logged.
+          </p>
+          <div class="admin-table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>When</th>
+                  <th>User</th>
+                  <th>Activity</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody id="admin-activity"></tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>
