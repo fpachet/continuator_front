@@ -217,6 +217,7 @@ class DownloadSessionMidiResponse(BaseModel):
 
 class MemoryPhraseItem(BaseModel):
     slot: int = Field(ge=1)
+    memory_id: str | None = None
     source: MemoryPhraseSource
     phrase_id: str | None = None
     deletable: bool = False

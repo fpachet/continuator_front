@@ -1,537 +1,50 @@
+import { state, elements } from "./app-state.js";
+import {
+  DEFAULT_PLAYBACK_CHOICE,
+  FAUST_CLAVIER_ID,
+  FAUST_CUSTOM_ID,
+  WEB_MIDI_RENDERER_ID,
+  PHRASE_TIMEOUT_MS,
+  INFINITE_MIN_LOOKAHEAD_MS,
+  INFINITE_MAX_LOOKAHEAD_MS,
+  ROLL_NOTE_AUDITION_MIN_SECONDS,
+  ROLL_NOTE_AUDITION_MAX_SECONDS,
+  STATUS_INDICATOR_INTERVAL_MS,
+  PHRASE_GAP_VISIBILITY_DELAY_MS,
+  FAUST_CLAVIER_DSP_URL,
+  FAUST_CUSTOM_TEMPLATE_DSP_URL,
+  PHRASE_TIMEOUT_STORAGE_KEY,
+  MIDI_INPUT_MONITOR_STORAGE_KEY,
+  MIDI_EXPORT_FILE_DB_NAME,
+  MIDI_EXPORT_FILE_STORE_NAME,
+  MIDI_EXPORT_FILE_HANDLE_KEY,
+  FAUST_CUSTOM_SOURCE_STORAGE_KEY,
+  FAUST_CUSTOM_VALUES_STORAGE_KEY,
+  PLAYBACK_PREFERENCE_STORAGE_PREFIX,
+  MIDI_COPY_OUTPUT_PREFERENCE_STORAGE_PREFIX,
+  AUDIO_OUTPUT_PREFERENCE_STORAGE_PREFIX,
+  GRAPH_MODES,
+  FAUST_UI_CONTROL_TYPES,
+  FAUST_POLY_RESERVED_SUFFIXES,
+} from "./constants.js";
+import { PhraseRecorder, roundNumber, eventsToNotes } from "./midi-capture.js";
+import {
+  createTriangleVoice,
+  createElectricVoice,
+  BrowserAudioRenderer,
+  walkFaustUi,
+  FaustPolyRenderer,
+} from "./playback-renderers.js";
+import { drawPianoRoll } from "./piano-roll.js";
+import { createViews } from "./views.js";
+import { createSessionController } from "./session-controller.js";
+import { createPlaybackController } from "./playback-controller.js";
+import { createMidiInput } from "./midi-input.js";
+
 import {
   MidiJsSampleRenderer,
   SAMPLE_INSTRUMENTS,
 } from "./sample-renderer.js?v=20260504-sample-timeout";
-
-const DEFAULT_PLAYBACK_CHOICE = "sample_piano";
-const FAUST_CLAVIER_ID = "faust_clavier";
-const FAUST_CUSTOM_ID = "faust_custom";
-const WEB_MIDI_RENDERER_ID = "web_midi";
-const PLAYBACK_CHOICE_SEPARATOR = "::";
-const PHRASE_TIMEOUT_MS = 1000;
-const PLAYBACK_START_DELAY_MS = 80;
-const INFINITE_MIN_LOOKAHEAD_MS = 600;
-const INFINITE_MAX_LOOKAHEAD_MS = 2200;
-const VIRTUAL_MIDI_INPUT_ID = "__virtual_keyboard__";
-const VIRTUAL_MIDI_INPUT_NAME = "Virtual MIDI Keyboard";
-const VIRTUAL_KEYBOARD_DESKTOP_OCTAVES = 2;
-const VIRTUAL_KEYBOARD_PHONE_OCTAVES = 1;
-const PHONE_LAYOUT_MEDIA_QUERY =
-  "(max-width: 640px), (pointer: coarse) and (max-height: 500px)";
-const PHONE_SCREEN_MAX_CSS_PX = 700;
-const VIRTUAL_KEYBOARD_DEFAULT_BASE_NOTE = 60;
-const VIRTUAL_KEYBOARD_MIN_BASE_NOTE = 24;
-const VIRTUAL_KEYBOARD_MAX_BASE_NOTE = 96;
-const VIRTUAL_CHORD_QUANTIZE_MS = 20;
-const VIRTUAL_KEYBOARD_CHANNEL = 0;
-const ROLL_NOTE_HIT_PADDING_PX = 6;
-const ROLL_NOTE_AUDITION_MIN_SECONDS = 0.12;
-const ROLL_NOTE_AUDITION_MAX_SECONDS = 2;
-const ROLL_END_MARGIN_RATIO = 0.08;
-const ROLL_END_MARGIN_MIN_SECONDS = 0.18;
-const ROLL_END_MARGIN_MAX_SECONDS = 1.2;
-const ROLL_DENSE_NOTE_THRESHOLD = 128;
-const ROLL_DENSE_MAX_DPR = 1.5;
-const CAPTURE_PREVIEW_INTERVAL_MS = 250;
-const STATUS_INDICATOR_INTERVAL_MS = 100;
-const PHRASE_GAP_VISIBILITY_DELAY_MS = 150;
-const COMPUTER_KEYBOARD_OFFSETS = new Map([
-  ["KeyA", 0],
-  ["KeyW", 1],
-  ["KeyS", 2],
-  ["KeyE", 3],
-  ["KeyD", 4],
-  ["KeyF", 5],
-  ["KeyT", 6],
-  ["KeyG", 7],
-  ["KeyY", 8],
-  ["KeyH", 9],
-  ["KeyU", 10],
-  ["KeyJ", 11],
-  ["KeyK", 12],
-]);
-const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-const BLACK_KEY_OFFSETS = new Set([1, 3, 6, 8, 10]);
-const FAUST_WASM_ESM_URL = "/assets/vendor/faustwasm/esm/index.js";
-const FAUST_WASM_JS_URL = "/assets/vendor/faustwasm/libfaust-wasm/libfaust-wasm.js";
-const FAUST_WASM_DATA_URL = "/assets/vendor/faustwasm/libfaust-wasm/libfaust-wasm.data";
-const FAUST_WASM_BINARY_URL = "/assets/vendor/faustwasm/libfaust-wasm/libfaust-wasm.wasm";
-const FAUST_CLAVIER_DSP_URL = "/assets/faust/continuator-clavier.dsp";
-const FAUST_CUSTOM_TEMPLATE_DSP_URL = "/assets/faust/custom-poly-template.dsp";
-const PHRASE_TIMEOUT_STORAGE_KEY = "continuator.phrase.timeout.ms";
-const MIDI_INPUT_MONITOR_STORAGE_KEY = "continuator.midi.input.monitor";
-const MIDI_EXPORT_FILE_DB_NAME = "continuator-midi-zip-export";
-const MIDI_EXPORT_FILE_STORE_NAME = "file-handles";
-const MIDI_EXPORT_FILE_HANDLE_KEY = "session-midi-export-zip";
-const FAUST_CUSTOM_SOURCE_STORAGE_KEY = "continuator.faust.custom.source";
-const FAUST_CUSTOM_VALUES_STORAGE_KEY = "continuator.faust.custom.values";
-const PLAYBACK_PREFERENCE_STORAGE_PREFIX = "continuator.playback.preference";
-const MIDI_COPY_OUTPUT_PREFERENCE_STORAGE_PREFIX =
-  "continuator.midi.copy.output.preference";
-const AUDIO_OUTPUT_PREFERENCE_STORAGE_PREFIX = "continuator.audio.output.preference";
-const ENGINE_LABEL = "VO Regular BP";
-const GRAPH_MODES = new Set(["slice", "all", "most_used", "neighborhood"]);
-const FAUST_UI_CONTROL_TYPES = new Set([
-  "hslider",
-  "vslider",
-  "nentry",
-  "checkbox",
-  "button",
-]);
-const FAUST_POLY_RESERVED_SUFFIXES = [
-  "/gate",
-  "/freq",
-  "/gain",
-  "/key",
-  "/vel",
-  "/velocity",
-];
-
-const elements = {
-  serverStatus: document.querySelector("#server-status"),
-  continuatorVersion: document.querySelector("#continuator-version"),
-  controlWorkspace: document.querySelector(".control-workspace"),
-  openReadmeButton: document.querySelector("#open-readme-button"),
-  closeReadmeButton: document.querySelector("#close-readme-button"),
-  readmePanel: document.querySelector("#readme-panel"),
-  readmeOverlay: document.querySelector("#readme-overlay"),
-  showGraphButton: document.querySelector("#show-graph-button"),
-  closeGraphButton: document.querySelector("#close-graph-button"),
-  graphHead: document.querySelector(".graph-head"),
-  graphPanel: document.querySelector("#graph-panel"),
-  graphOverlay: document.querySelector("#graph-overlay"),
-  graphImage: document.querySelector("#graph-image"),
-  graphImageFrame: document.querySelector(".graph-image-frame"),
-  graphMeta: document.querySelector("#graph-meta"),
-  graphTitle: document.querySelector("#graph-title"),
-  graphKindTabs: document.querySelectorAll("[data-graph-kind]"),
-  graphControls: document.querySelector("#graph-controls"),
-  graphModeSelect: document.querySelector("#graph-mode-select"),
-  graphOrderSelect: document.querySelector("#graph-order-select"),
-  accountPanel: document.querySelector("#account-panel"),
-  accountPanelCopy: document.querySelector("#account-panel-copy"),
-  authStatus: document.querySelector("#auth-status"),
-  authAvatar: document.querySelector("#auth-avatar"),
-  authStatusLabel: document.querySelector("#auth-status-label"),
-  authStatusCopy: document.querySelector("#auth-status-copy"),
-  authUsernameInput: document.querySelector("#auth-username-input"),
-  authPasswordInput: document.querySelector("#auth-password-input"),
-  loginButton: document.querySelector("#login-button"),
-  registerButton: document.querySelector("#register-button"),
-  logoutButton: document.querySelector("#logout-button"),
-  authSignedOutPanel: document.querySelector("#auth-signed-out-panel"),
-  authSignedInPanel: document.querySelector("#auth-signed-in-panel"),
-  accountOpenSessionsButton: document.querySelector("#account-open-sessions-button"),
-  authMessageBox: document.querySelector("#auth-message-box"),
-  authUserName: document.querySelector("#auth-user-name"),
-  savedSessionCount: document.querySelector("#saved-session-count"),
-  savedSessionsCopy: document.querySelector("#saved-sessions-copy"),
-  mySessionsList: document.querySelector("#my-sessions-list"),
-  savedSessionPreview: document.querySelector("#saved-session-preview"),
-  savedSessionPreviewName: document.querySelector("#saved-session-preview-name"),
-  savedSessionPreviewOpenButton: document.querySelector("#saved-session-preview-open-button"),
-  savedSessionNameInput: document.querySelector("#saved-session-name-input"),
-  renameSessionButton: document.querySelector("#rename-session-button"),
-  savedSessionPreviewMemory: document.querySelector("#saved-session-preview-memory"),
-  savedSessionPreviewHistory: document.querySelector("#saved-session-preview-history"),
-  savedSessionPreviewSettings: document.querySelector("#saved-session-preview-settings"),
-  savedSessionPreviewSeen: document.querySelector("#saved-session-preview-seen"),
-  refreshSessionsButton: document.querySelector("#refresh-sessions-button"),
-  sessionStatus: document.querySelector("#session-status"),
-  sessionId: document.querySelector("#session-id"),
-  midiStatus: document.querySelector("#midi-status"),
-  phraseStatus: document.querySelector("#phrase-status"),
-  phraseGapMeter: document.querySelector("#phrase-gap-meter"),
-  phraseGapMeterLabel: document.querySelector("#phrase-gap-meter-label"),
-  phraseGapMeterBar: document.querySelector("#phrase-gap-meter-bar"),
-  phraseGapMeterCopy: document.querySelector("#phrase-gap-meter-copy"),
-  capturedEventCount: document.querySelector("#captured-event-count"),
-  capturedNoteCount: document.querySelector("#captured-note-count"),
-  generatedEventCount: document.querySelector("#generated-event-count"),
-  generatedNoteCount: document.querySelector("#generated-note-count"),
-  messageBox: document.querySelector("#message-box"),
-  phoneMessageBox: document.querySelector("#phone-message-box"),
-  constraintStatus: document.querySelector("#constraint-status"),
-  globalPanicButton: document.querySelector("#global-panic-button"),
-  readySessionStep: document.querySelector("#ready-session-step"),
-  readyMidiStep: document.querySelector("#ready-midi-step"),
-  readyPhraseStep: document.querySelector("#ready-phrase-step"),
-  readyOutputStep: document.querySelector("#ready-output-step"),
-  rendererHealth: document.querySelector("#renderer-health"),
-  midiCopyStatusChip: document.querySelector("#midi-copy-status-chip"),
-  midiCopyStatus: document.querySelector("#midi-copy-status"),
-  sessionSaveNote: document.querySelector("#session-save-note"),
-  sessionMidiSaveResult: document.querySelector("#session-midi-save-result"),
-  rememberMidiExportFileToggle: document.querySelector("#remember-midi-export-file-toggle"),
-  timingReadout: document.querySelector("#timing-readout"),
-  timelineCaptured: document.querySelector("#timeline-captured"),
-  timelineGenerated: document.querySelector("#timeline-generated"),
-  timelineQueued: document.querySelector("#timeline-queued"),
-  historyList: document.querySelector("#history-list"),
-  memoryList: document.querySelector("#memory-list"),
-  memorySummary: document.querySelector("#memory-summary"),
-  memoryHint: document.querySelector("#memory-hint"),
-  memoryRibbon: document.querySelector("#memory-ribbon"),
-  inputRoll: document.querySelector("#input-roll"),
-  inputPlayhead: document.querySelector("#input-playhead"),
-  outputRoll: document.querySelector("#output-roll"),
-  outputPlayhead: document.querySelector("#output-playhead"),
-  settingsSummary: document.querySelector("#settings-summary"),
-  controlTabs: document.querySelectorAll("[data-control-tab]"),
-  controlPanels: document.querySelectorAll("[data-control-panel]"),
-  midiInputSelect: document.querySelector("#midi-input-select"),
-  phraseTimeoutInput: document.querySelector("#phrase-timeout-input"),
-  midiOutputSelect: document.querySelector("#midi-output-select"),
-  midiCopyOutputSelect: document.querySelector("#midi-copy-output-select"),
-  audioOutputSelect: document.querySelector("#audio-output-select"),
-  faustRendererPanel: document.querySelector("#faust-renderer-panel"),
-  faustClavierPanel: document.querySelector("#faust-clavier-panel"),
-  faustCustomPanel: document.querySelector("#faust-custom-panel"),
-  faustRendererStatus: document.querySelector("#faust-renderer-status"),
-  faustRendererHint: document.querySelector("#faust-renderer-hint"),
-  faustBrightnessInput: document.querySelector("#faust-brightness-input"),
-  faustBrightnessValue: document.querySelector("#faust-brightness-value"),
-  faustHardnessInput: document.querySelector("#faust-hardness-input"),
-  faustHardnessValue: document.querySelector("#faust-hardness-value"),
-  faustDampingInput: document.querySelector("#faust-damping-input"),
-  faustDampingValue: document.querySelector("#faust-damping-value"),
-  faustReleaseInput: document.querySelector("#faust-release-input"),
-  faustReleaseValue: document.querySelector("#faust-release-value"),
-  faustBodyInput: document.querySelector("#faust-body-input"),
-  faustBodyValue: document.querySelector("#faust-body-value"),
-  faustStereoInput: document.querySelector("#faust-stereo-input"),
-  faustStereoValue: document.querySelector("#faust-stereo-value"),
-  faustCustomCodeInput: document.querySelector("#faust-custom-code-input"),
-  faustCustomCompileButton: document.querySelector("#faust-custom-compile-button"),
-  faustCustomResetButton: document.querySelector("#faust-custom-reset-button"),
-  faustCustomDirtyState: document.querySelector("#faust-custom-dirty-state"),
-  faustCustomControls: document.querySelector("#faust-custom-controls"),
-  faustCustomControlsHint: document.querySelector("#faust-custom-controls-hint"),
-  learnInputToggle: document.querySelector("#learn-input-toggle"),
-  autoSendToggle: document.querySelector("#auto-send-toggle"),
-  transposeToggle: document.querySelector("#transpose-toggle"),
-  forgetToggle: document.querySelector("#forget-toggle"),
-  markovOrderInput: document.querySelector("#markov-order-input"),
-  keepLastInput: document.querySelector("#keep-last-input"),
-  continuationLengthInput: document.querySelector("#continuation-length-input"),
-  infiniteStateLabel: document.querySelector("#infinite-state-label"),
-  infiniteSeedLabel: document.querySelector("#infinite-seed-label"),
-  startInfiniteButton: document.querySelector("#start-infinite-button"),
-  stopInfiniteButton: document.querySelector("#stop-infinite-button"),
-  testNoteButton: document.querySelector("#test-note-button"),
-  panicButton: document.querySelector("#panic-button"),
-  createSessionButton: document.querySelector("#create-session-button"),
-  resetSessionButton: document.querySelector("#reset-session-button"),
-  saveSessionMidiButton: document.querySelector("#save-session-midi-button"),
-  applySettingsButton: document.querySelector("#apply-settings-button"),
-  importMidiFilesButton: document.querySelector("#import-midi-files-button"),
-  importMidiFolderButton: document.querySelector("#import-midi-folder-button"),
-  midiImportInput: document.querySelector("#midi-import-input"),
-  midiFolderImportInput: document.querySelector("#midi-folder-import-input"),
-  connectMidiButton: document.querySelector("#connect-midi-button"),
-  refreshMidiButton: document.querySelector("#refresh-midi-button"),
-  inputMonitorToggle: document.querySelector("#input-monitor-toggle"),
-  virtualKeyboardPanel: document.querySelector("#virtual-keyboard-panel"),
-  virtualKeyboard: document.querySelector("#virtual-keyboard"),
-  virtualOctaveLabel: document.querySelector("#virtual-octave-label"),
-  virtualOctaveDownButton: document.querySelector("#virtual-octave-down-button"),
-  virtualOctaveUpButton: document.querySelector("#virtual-octave-up-button"),
-  virtualVelocityInput: document.querySelector("#virtual-velocity-input"),
-  virtualVelocityValue: document.querySelector("#virtual-velocity-value"),
-  virtualSustainToggle: document.querySelector("#virtual-sustain-toggle"),
-  virtualLatchToggle: document.querySelector("#virtual-latch-toggle"),
-  virtualClearLatchButton: document.querySelector("#virtual-clear-latch-button"),
-  virtualPanicButton: document.querySelector("#virtual-panic-button"),
-  sendPhraseButton: document.querySelector("#send-phrase-button"),
-  generateMemoryButton: document.querySelector("#generate-memory-button"),
-  replayGeneratedButton: document.querySelector("#replay-generated-button"),
-  clearPhraseButton: document.querySelector("#clear-phrase-button"),
-};
-
-const state = {
-  midiAccess: null,
-  activeInputId: null,
-  authUser: null,
-  sessionId: null,
-  sessionIsOwned: false,
-  sessionMidiSaving: false,
-  midiExportFileHandle: null,
-  selectedInputLabel: "No MIDI input selected",
-  lastMidiEventLabel: "None yet",
-  readmeOpen: false,
-  graphOpen: false,
-  graphImageUrl: null,
-  graphLoading: false,
-  activeGraphKind: "memory",
-  graphMode: "slice",
-  graphOrder: "all",
-  graphPanelPosition: null,
-  graphDragState: null,
-  accountPanelOpen: false,
-  sessionConfiguration: null,
-  lastCapturedPhrase: [],
-  lastCapturedNotes: [],
-  lastGeneratedPhrase: null,
-  lastCapturedAt: 0,
-  lastGeneratedAt: 0,
-  historyItems: [],
-  memoryItems: [],
-  savedSessions: [],
-  activeControlView: "perform",
-  previewedHistoryIndex: null,
-  previewedMemoryIndex: null,
-  previewedSavedSessionId: null,
-  previewPulseTimeoutId: null,
-  activePlayback: null,
-  activeMemoryPlaybackIndex: null,
-  activeRollPlaybackKind: null,
-  activeRollAudition: null,
-  currentPlaybackPayload: null,
-  queuedPlaybackPayload: null,
-  lastGenerationMs: null,
-  lastCaptureDurationMs: null,
-  capturePreviewTimerId: null,
-  pendingCapturePreviewNotes: null,
-  lastCapturePreviewAtMs: 0,
-  phraseGapTimerId: null,
-  serverWaitTimerId: null,
-  playbackVisualizationFrameId: null,
-  playbackVisualizationStartTimerId: null,
-  playbackVisualizationDisplayEndsAtMs: 0,
-  playbackVisualizationRollKind: "output",
-  playbackVisualizationToken: 0,
-  phraseTimeoutMs: PHRASE_TIMEOUT_MS,
-  infiniteModeEnabled: false,
-  infiniteRequestInFlight: false,
-  infiniteScheduleTimerId: null,
-  infiniteAbortController: null,
-  infiniteRunId: 0,
-  customFaustSource: "",
-  customFaustTemplateSource: "",
-  customFaustControlDescriptors: [],
-  customFaustControlBindings: [],
-  virtualKeyboardBaseNote: VIRTUAL_KEYBOARD_DEFAULT_BASE_NOTE,
-  virtualHeldSourcesByNote: new Map(),
-  virtualSustainedNotes: new Set(),
-  virtualLatchedNotes: new Set(),
-  virtualActivePointers: new Map(),
-  virtualActiveComputerKeys: new Map(),
-  virtualQuantizedTimestamp: null,
-  virtualQuantizedAt: 0,
-  activeVisualMidiNotes: new Set(),
-  liveMonitorPlayback: null,
-  liveMonitorPlaybackPromise: null,
-  liveMonitorChoiceValue: null,
-  liveMonitorToken: 0,
-  inputMonitorEnabled: false,
-  userPlaybackPreference: null,
-  userMidiCopyOutputPreference: null,
-  userAudioOutputPreference: null,
-  audioOutputDevices: [],
-  lastConstraints: null,
-  lastGenerationTrace: null,
-};
-
-function midiToFrequency(note) {
-  return 440 * 2 ** ((note - 69) / 12);
-}
-
-function createTriangleVoice(context, destination, note, velocity, at) {
-  const oscillator = new OscillatorNode(context, {
-    type: "triangle",
-    frequency: midiToFrequency(note),
-  });
-  const gain = new GainNode(context, { gain: 0.0001 });
-  oscillator.connect(gain).connect(destination);
-  gain.gain.setValueAtTime(0.0001, at);
-  gain.gain.exponentialRampToValueAtTime(
-    Math.max(0.03, (velocity / 127) * 0.2),
-    at + 0.015,
-  );
-  oscillator.start(at);
-
-  return {
-    release(releaseAt, releaseSeconds = 0.08) {
-      gain.gain.cancelScheduledValues(releaseAt);
-      gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), releaseAt);
-      gain.gain.exponentialRampToValueAtTime(0.0001, releaseAt + releaseSeconds);
-      oscillator.stop(releaseAt + releaseSeconds + 0.02);
-    },
-  };
-}
-
-function createElectricVoice(context, destination, note, velocity, at) {
-  const frequency = midiToFrequency(note);
-  const filter = new BiquadFilterNode(context, {
-    type: "lowpass",
-    frequency: 3200,
-    Q: 0.8,
-  });
-  const gain = new GainNode(context, { gain: 0.0001 });
-  const bodyGain = new GainNode(context, { gain: 0.82 });
-  const shimmerGain = new GainNode(context, { gain: 0.18 });
-  const bodyOscillator = new OscillatorNode(context, {
-    type: "triangle",
-    frequency,
-  });
-  const shimmerOscillator = new OscillatorNode(context, {
-    type: "sine",
-    frequency: frequency * 2,
-  });
-
-  bodyOscillator.connect(bodyGain).connect(filter);
-  shimmerOscillator.connect(shimmerGain).connect(filter);
-  filter.connect(gain).connect(destination);
-
-  const peak = Math.max(0.025, (velocity / 127) * 0.17);
-  const sustain = Math.max(0.015, peak * 0.55);
-  gain.gain.setValueAtTime(0.0001, at);
-  gain.gain.exponentialRampToValueAtTime(peak, at + 0.01);
-  gain.gain.exponentialRampToValueAtTime(sustain, at + 0.12);
-  filter.frequency.setValueAtTime(3200, at);
-  filter.frequency.exponentialRampToValueAtTime(1500, at + 0.18);
-
-  bodyOscillator.start(at);
-  shimmerOscillator.start(at);
-
-  return {
-    release(releaseAt, releaseSeconds = 0.16) {
-      gain.gain.cancelScheduledValues(releaseAt);
-      gain.gain.setValueAtTime(Math.max(0.0001, gain.gain.value), releaseAt);
-      gain.gain.exponentialRampToValueAtTime(0.0001, releaseAt + releaseSeconds);
-      bodyOscillator.stop(releaseAt + releaseSeconds + 0.03);
-      shimmerOscillator.stop(releaseAt + releaseSeconds + 0.03);
-    },
-  };
-}
-
-class BrowserAudioRenderer {
-  constructor({
-    id,
-    label,
-    masterGain = 0.18,
-    createVoice,
-    groupLabel = "Browser Renderers",
-  }) {
-    this.id = id;
-    this.label = label;
-    this.masterGain = masterGain;
-    this.createVoice = createVoice;
-    this.groupLabel = groupLabel;
-    this.context = null;
-    this.master = null;
-    this.activeVoices = new Map();
-  }
-
-  async ensureContext() {
-    if (!this.context) {
-      this.context = new window.AudioContext();
-      this.master = new GainNode(this.context, { gain: this.masterGain });
-      this.master.connect(this.context.destination);
-      await applyAudioOutputToContext(this.context);
-    }
-    if (this.context.state === "suspended") {
-      await this.context.resume();
-    }
-  }
-
-  async applyAudioOutputPreference() {
-    return applyAudioOutputToContext(this.context);
-  }
-
-  async createPlaybackSession() {
-    await this.ensureContext();
-    return {};
-  }
-
-  getDisplayName() {
-    return this.label;
-  }
-
-  key(note, channel) {
-    return `${channel}:${note}`;
-  }
-
-  noteOn(note, channel, velocity) {
-    if (!this.context || !this.master) {
-      return;
-    }
-
-    const at = this.context.currentTime + 0.001;
-    const key = this.key(note, channel);
-    const voice = this.createVoice(this.context, this.master, note, velocity, at);
-    const existing = this.activeVoices.get(key) || [];
-    existing.push(voice);
-    this.activeVoices.set(key, existing);
-  }
-
-  noteOff(note, channel) {
-    if (!this.context) {
-      return;
-    }
-
-    const key = this.key(note, channel);
-    const voices = this.activeVoices.get(key);
-    if (!voices?.length) {
-      return;
-    }
-
-    const voice = voices.shift();
-    voice.release(this.context.currentTime + 0.001);
-    if (!voices.length) {
-      this.activeVoices.delete(key);
-    }
-  }
-
-  dispatchEvent(playback, event) {
-    if (event.type === "note_on" && event.velocity > 0) {
-      this.noteOn(event.note, event.channel, event.velocity);
-      return;
-    }
-    this.noteOff(event.note, event.channel);
-  }
-
-  stopVoices(releaseSeconds = 0.04) {
-    if (!this.context) {
-      return false;
-    }
-
-    const at = this.context.currentTime + 0.001;
-    const hadVoices = this.activeVoices.size > 0;
-    for (const voices of this.activeVoices.values()) {
-      for (const voice of voices) {
-        voice.release(at, releaseSeconds);
-      }
-    }
-    this.activeVoices.clear();
-    return hadVoices;
-  }
-
-  stopPlayback() {
-    this.stopVoices(0.04);
-  }
-
-  panicPlayback() {
-    return this.stopVoices(0.02);
-  }
-
-  panicTarget() {
-    return this.stopVoices(0.02);
-  }
-}
-
-function walkFaustUi(items, visit) {
-  for (const item of items || []) {
-    if (Array.isArray(item?.items)) {
-      walkFaustUi(item.items, visit);
-      continue;
-    }
-    visit(item);
-  }
-}
-
-let faustApiPromise = null;
-let faustCompilerBundlePromise = null;
 
 function safeLocalStorageGet(key) {
   try {
@@ -574,13 +87,14 @@ function filePickerBlockedByFrame(error) {
 
 function midiExportZipSaveSupported() {
   return (
-    typeof window.showSaveFilePicker === "function" &&
-    !isCrossOriginSubframe()
+    typeof window.showSaveFilePicker === "function" && !isCrossOriginSubframe()
   );
 }
 
 function midiExportZipRememberSupported() {
-  return midiExportZipSaveSupported() && typeof window.indexedDB !== "undefined";
+  return (
+    midiExportZipSaveSupported() && typeof window.indexedDB !== "undefined"
+  );
 }
 
 function openMidiExportFileDb() {
@@ -594,7 +108,8 @@ function openMidiExportFileDb() {
       request.result.createObjectStore(MIDI_EXPORT_FILE_STORE_NAME);
     };
     request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("Could not open export file storage."));
+    request.onerror = () =>
+      reject(request.error || new Error("Could not open export file storage."));
   });
 }
 
@@ -606,7 +121,8 @@ async function withMidiExportFileStore(mode, callback) {
       const store = transaction.objectStore(MIDI_EXPORT_FILE_STORE_NAME);
       const request = callback(store);
       request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error || new Error("Export file storage failed."));
+      request.onerror = () =>
+        reject(request.error || new Error("Export file storage failed."));
     });
   } finally {
     db.close();
@@ -666,7 +182,10 @@ function applyInputMonitorPreference(
   state.inputMonitorEnabled = nextValue;
   elements.inputMonitorToggle.checked = nextValue;
   if (persist) {
-    safeLocalStorageSet(MIDI_INPUT_MONITOR_STORAGE_KEY, nextValue ? "true" : "false");
+    safeLocalStorageSet(
+      MIDI_INPUT_MONITOR_STORAGE_KEY,
+      nextValue ? "true" : "false",
+    );
   }
   if (!nextValue) {
     stopLiveMonitorPlayback();
@@ -723,7 +242,9 @@ function parseStoredPlaybackPreference(value) {
 }
 
 function loadStoredPlaybackPreference() {
-  return parseStoredPlaybackPreference(safeLocalStorageGet(playbackPreferenceStorageKey()));
+  return parseStoredPlaybackPreference(
+    safeLocalStorageGet(playbackPreferenceStorageKey()),
+  );
 }
 
 function rememberPlaybackPreference(preference) {
@@ -791,8 +312,7 @@ function latestSavedPlaybackPreference(items = state.savedSessions) {
     items.find((candidate) => {
       const choice = candidate?.configuration?.playback_choice;
       return parsePlaybackChoice(choice).rendererId === WEB_MIDI_RENDERER_ID;
-    }) ||
-    items.find((candidate) => candidate?.configuration?.playback_choice);
+    }) || items.find((candidate) => candidate?.configuration?.playback_choice);
   if (!item) {
     return null;
   }
@@ -802,11 +322,17 @@ function latestSavedPlaybackPreference(items = state.savedSessions) {
   };
 }
 
-function refreshUserPlaybackPreferenceFromSavedSessions(items = state.savedSessions) {
+function refreshUserPlaybackPreferenceFromSavedSessions(
+  items = state.savedSessions,
+) {
   const storedPreference = loadStoredPlaybackPreference();
   const savedPreference = latestSavedPlaybackPreference(items);
-  const storedRendererId = parsePlaybackChoice(storedPreference?.playback_choice).rendererId;
-  const savedRendererId = parsePlaybackChoice(savedPreference?.playback_choice).rendererId;
+  const storedRendererId = parsePlaybackChoice(
+    storedPreference?.playback_choice,
+  ).rendererId;
+  const savedRendererId = parsePlaybackChoice(
+    savedPreference?.playback_choice,
+  ).rendererId;
   if (
     savedPreference &&
     storedRendererId !== WEB_MIDI_RENDERER_ID &&
@@ -890,7 +416,11 @@ async function applyAudioOutputToContext(context) {
 }
 
 async function applyPreferredAudioOutput() {
-  const renderers = [...localPlaybackRenderers, faustClavierRenderer, customFaustRenderer];
+  const renderers = [
+    ...localPlaybackRenderers,
+    faustClavierRenderer,
+    customFaustRenderer,
+  ];
   await Promise.all(
     renderers.map((renderer) =>
       renderer.applyAudioOutputPreference?.().catch((error) => {
@@ -942,443 +472,10 @@ async function refreshAudioOutputDevices() {
     return;
   }
   const devices = await navigator.mediaDevices.enumerateDevices();
-  state.audioOutputDevices = devices.filter((device) => device.kind === "audiooutput");
+  state.audioOutputDevices = devices.filter(
+    (device) => device.kind === "audiooutput",
+  );
   populateAudioOutputChoices();
-}
-
-function createFaustParamPathMap(ui) {
-  const paramPaths = new Map();
-  walkFaustUi(ui, (item) => {
-    const shortname = String(item?.shortname || "");
-    const address = String(item?.address || "");
-    const label = String(item?.label || "");
-    if (!address) {
-      return;
-    }
-    paramPaths.set(address, address);
-    if (shortname && !paramPaths.has(shortname)) {
-      paramPaths.set(shortname, address);
-    }
-    if (label) {
-      const labelTail = label.split("/").pop() || label;
-      const simplifiedLabel = labelTail.replace(/[^a-zA-Z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-      if (labelTail && !paramPaths.has(labelTail)) {
-        paramPaths.set(labelTail, address);
-      }
-      if (simplifiedLabel && !paramPaths.has(simplifiedLabel)) {
-        paramPaths.set(simplifiedLabel, address);
-      }
-      const lowercaseLabel = simplifiedLabel.toLowerCase();
-      if (lowercaseLabel && !paramPaths.has(lowercaseLabel)) {
-        paramPaths.set(lowercaseLabel, address);
-      }
-    }
-  });
-  return paramPaths;
-}
-
-async function loadFaustApi() {
-  if (!faustApiPromise) {
-    faustApiPromise = import(FAUST_WASM_ESM_URL);
-  }
-  return faustApiPromise;
-}
-
-async function getFaustCompilerBundle() {
-  if (!faustCompilerBundlePromise) {
-    faustCompilerBundlePromise = (async () => {
-      const api = await loadFaustApi();
-      const faustModule = await api.instantiateFaustModuleFromFile(
-        FAUST_WASM_JS_URL,
-        FAUST_WASM_DATA_URL,
-        FAUST_WASM_BINARY_URL,
-      );
-      return {
-        api,
-        compiler: new api.FaustCompiler(new api.LibFaust(faustModule)),
-      };
-    })();
-  }
-  return faustCompilerBundlePromise;
-}
-
-class FaustPolyRenderer {
-  constructor({
-    id,
-    label,
-    dspUrl,
-    getCode = null,
-    voices = 24,
-    controlDefaults = {},
-    groupLabel = "Faust Instruments",
-    idleDetail = "Ready when you route playback here.",
-  }) {
-    this.id = id;
-    this.label = label;
-    this.dspUrl = dspUrl;
-    this.getCode = getCode;
-    this.voices = voices;
-    this.groupLabel = groupLabel;
-    this.context = null;
-    this.generator = null;
-    this.node = null;
-    this.codePromise = null;
-    this.initializationPromise = null;
-    this.paramPaths = new Map();
-    this.controlValues = new Map(Object.entries(controlDefaults));
-    this.ui = [];
-    this.status = "Idle";
-    this.statusDetail = idleDetail;
-    this.lastError = null;
-    this.lastCompiledCode = null;
-  }
-
-  getDisplayName() {
-    return this.label;
-  }
-
-  setStatus(status, detail) {
-    this.status = status;
-    if (detail != null) {
-      this.statusDetail = detail;
-    }
-    syncFaustRendererPanel();
-  }
-
-  async ensureContext() {
-    if (!this.context) {
-      this.context = new window.AudioContext();
-      await applyAudioOutputToContext(this.context);
-    }
-    if (this.context.state === "suspended") {
-      await this.context.resume();
-    }
-  }
-
-  async applyAudioOutputPreference() {
-    return applyAudioOutputToContext(this.context);
-  }
-
-  async loadCode(forceRefresh = false) {
-    if (this.getCode) {
-      const code = await this.getCode();
-      if (!String(code || "").trim()) {
-        throw new Error("No Faust DSP source is available.");
-      }
-      return code;
-    }
-
-    if (!this.codePromise || forceRefresh) {
-      this.codePromise = fetch(this.dspUrl).then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`Unable to load the Faust DSP (${response.status}).`);
-        }
-        return response.text();
-      });
-    }
-    return this.codePromise;
-  }
-
-  captureParamPaths(ui) {
-    this.paramPaths = createFaustParamPathMap(ui);
-  }
-
-  applyControlValues() {
-    if (!this.node) {
-      return;
-    }
-
-    this.controlValues.forEach((value, key) => {
-      const path = this.paramPaths.get(key);
-      if (path) {
-        this.node.setParamValue(path, Number(value));
-      }
-    });
-  }
-
-  getUi() {
-    return this.ui;
-  }
-
-  async ensureNode({ forceRecompile = false } = {}) {
-    await this.ensureContext();
-    if (this.node && !forceRecompile) {
-      return this.node;
-    }
-    if (this.initializationPromise) {
-      return this.initializationPromise;
-    }
-
-    const previousNode = this.node;
-    const previousGenerator = this.generator;
-    const previousUi = this.ui;
-    const previousParamPaths = this.paramPaths;
-    this.initializationPromise = (async () => {
-      this.lastError = null;
-      this.setStatus("Loading", `Compiling ${this.label}…`);
-      const [{ api, compiler }, code] = await Promise.all([
-        getFaustCompilerBundle(),
-        this.loadCode(forceRecompile),
-      ]);
-      const generator = new api.FaustPolyDspGenerator();
-      const compiledGenerator = await generator.compile(compiler, this.id, code, "-ftz 2");
-      if (!compiledGenerator) {
-        throw new Error("Faust compilation returned no renderer.");
-      }
-      const nextNode = await compiledGenerator.createNode(this.context, this.voices, this.id);
-      if (!nextNode) {
-        throw new Error("Faust could not create a playable WebAudio node.");
-      }
-      nextNode.connect(this.context.destination);
-      const nextUi = compiledGenerator.getUI();
-      const nextParamPaths = createFaustParamPathMap(nextUi);
-      this.generator = compiledGenerator;
-      this.node = nextNode;
-      this.ui = nextUi;
-      this.paramPaths = nextParamPaths;
-      this.lastCompiledCode = code;
-      this.applyControlValues();
-      if (previousNode && previousNode !== nextNode) {
-        previousNode.allNotesOff?.(true);
-        previousNode.disconnect?.();
-      }
-      this.setStatus("Ready", `${this.voices} polyphonic voices are ready.`);
-      return nextNode;
-    })()
-      .catch((error) => {
-        if (this.node && this.node !== previousNode) {
-          this.node.allNotesOff?.(true);
-          this.node.disconnect?.();
-        }
-        this.node = previousNode;
-        this.generator = previousGenerator;
-        this.ui = previousUi;
-        this.paramPaths = previousParamPaths;
-        this.lastError = error instanceof Error ? error : new Error(String(error));
-        this.setStatus("Error", this.lastError.message);
-        throw this.lastError;
-      })
-      .finally(() => {
-        this.initializationPromise = null;
-      });
-
-    return this.initializationPromise;
-  }
-
-  async prepare(options = {}) {
-    await this.ensureNode(options);
-  }
-
-  setControlValue(key, value) {
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue)) {
-      return;
-    }
-
-    this.controlValues.set(key, numericValue);
-    const path = this.paramPaths.get(key);
-    if (this.node && path) {
-      this.node.setParamValue(path, numericValue);
-    }
-    syncFaustRendererPanel();
-  }
-
-  getControlValue(key) {
-    return Number(this.controlValues.get(key));
-  }
-
-  async createPlaybackSession() {
-    const node = await this.ensureNode();
-    return { node };
-  }
-
-  dispatchEvent(playback, event) {
-    if (!playback?.node) {
-      return;
-    }
-
-    if (event.type === "note_on" && event.velocity > 0) {
-      playback.node.keyOn(event.channel, event.note, event.velocity);
-      return;
-    }
-
-    playback.node.keyOff(event.channel, event.note, event.velocity || 0);
-  }
-
-  stopPlayback(playback) {
-    playback?.node?.allNotesOff?.(false);
-  }
-
-  panicPlayback(playback) {
-    if (!playback?.node) {
-      return false;
-    }
-    playback.node.allNotesOff?.(true);
-    return true;
-  }
-
-  panicTarget() {
-    if (!this.node) {
-      return false;
-    }
-    this.node.allNotesOff?.(true);
-    return true;
-  }
-}
-
-class PhraseRecorder {
-  constructor(timeoutMs, onUpdate, onComplete, onGapUpdate = null) {
-    this.timeoutMs = timeoutMs;
-    this.onUpdate = onUpdate;
-    this.onComplete = onComplete;
-    this.onGapUpdate = onGapUpdate;
-    this.reset();
-  }
-
-  setTimeoutMs(timeoutMs) {
-    this.timeoutMs = timeoutMs;
-    if (!this.events.length || this.lastTimestamp == null || this.pendingNotes.size) {
-      return;
-    }
-    this.scheduleCompletionCheck(window.performance.now());
-  }
-
-  reset() {
-    this.events = [];
-    this.pendingNotes = new Map();
-    this.completedNotes = [];
-    this.currentTime = 0;
-    this.lastTimestamp = null;
-    if (this.timer) {
-      window.clearTimeout(this.timer);
-    }
-    this.timer = null;
-    this.onGapUpdate?.({ active: false });
-  }
-
-  snapshot() {
-    return this.events.map((event) => ({ ...event }));
-  }
-
-  handleMessage(messageEvent) {
-    const [statusByte, note, rawVelocity = 0] = [...messageEvent.data];
-    const status = statusByte & 0xf0;
-    const channel = statusByte & 0x0f;
-    let type = null;
-    let velocity = rawVelocity;
-
-    if (status === 0x90 && velocity > 0) {
-      type = "note_on";
-    } else if (status === 0x80 || (status === 0x90 && velocity === 0)) {
-      type = "note_off";
-      velocity = 0;
-    } else {
-      return;
-    }
-
-    const timestamp =
-      typeof messageEvent.receivedTime === "number"
-        ? messageEvent.receivedTime
-        : window.performance.now();
-    const deltaSeconds =
-      this.lastTimestamp == null
-        ? 0
-        : Math.max(0, (timestamp - this.lastTimestamp) / 1000);
-    this.lastTimestamp = timestamp;
-
-    const event = {
-      type,
-      note,
-      velocity,
-      channel,
-      delta_seconds: roundNumber(deltaSeconds),
-    };
-    this.currentTime += event.delta_seconds;
-
-    const key = `${channel}:${note}`;
-    if (type === "note_on") {
-      const stack = this.pendingNotes.get(key) || [];
-      stack.push({
-        pitch: note,
-        channel,
-        velocity,
-        start_seconds: this.currentTime,
-      });
-      this.pendingNotes.set(key, stack);
-      this.onGapUpdate?.({ active: false });
-    } else {
-      const stack = this.pendingNotes.get(key);
-      if (stack?.length) {
-        const noteOn = stack.shift();
-        this.completedNotes.push({
-          ...noteOn,
-          start_seconds: roundNumber(noteOn.start_seconds),
-          duration_seconds: roundNumber(
-            Math.max(0, this.currentTime - noteOn.start_seconds),
-          ),
-          end_seconds: roundNumber(this.currentTime),
-        });
-        if (!stack.length) {
-          this.pendingNotes.delete(key);
-        }
-      }
-    }
-
-    this.events.push(event);
-    this.onUpdate?.({
-      eventCount: this.events.length,
-      noteCount: this.completedNotes.length,
-      notes: this.completedNotes,
-    });
-    this.scheduleCompletionCheck(timestamp);
-  }
-
-  scheduleCompletionCheck(nowTimestamp) {
-    if (this.timer) {
-      window.clearTimeout(this.timer);
-    }
-
-    if (!this.events.length || this.lastTimestamp == null) {
-      return;
-    }
-
-    if (this.pendingNotes.size) {
-      this.onGapUpdate?.({ active: false });
-      return;
-    }
-
-    const elapsed = nowTimestamp - this.lastTimestamp;
-    if (elapsed >= this.timeoutMs) {
-      this.completePhrase();
-      return;
-    }
-
-    this.onGapUpdate?.({
-      active: true,
-      startedAtMs: this.lastTimestamp,
-      timeoutMs: this.timeoutMs,
-    });
-    this.timer = window.setTimeout(() => {
-      this.completePhrase();
-    }, this.timeoutMs - elapsed);
-  }
-
-  completePhrase() {
-    if (!this.events.length || this.pendingNotes.size || this.lastTimestamp == null) {
-      return;
-    }
-
-    const nowTimestamp = window.performance.now();
-    const elapsed = nowTimestamp - this.lastTimestamp;
-    if (elapsed < this.timeoutMs) {
-      this.scheduleCompletionCheck(nowTimestamp);
-      return;
-    }
-
-    const phrase = this.snapshot();
-    this.reset();
-    this.onComplete?.(phrase);
-  }
 }
 
 const browserPlaybackRenderers = [
@@ -1387,12 +484,14 @@ const browserPlaybackRenderers = [
     label: "Browser Triangle",
     masterGain: 0.18,
     createVoice: createTriangleVoice,
+    applyAudioOutputToContext,
   }),
   new BrowserAudioRenderer({
     id: "browser_electric",
     label: "Browser Electric",
     masterGain: 0.16,
     createVoice: createElectricVoice,
+    applyAudioOutputToContext,
   }),
 ];
 
@@ -1401,11 +500,13 @@ const samplePlaybackRenderers = Object.values(SAMPLE_INSTRUMENTS).map(
     new MidiJsSampleRenderer({
       ...instrument,
       applyAudioOutputToContext,
-      onStatusChange: renderPerformanceState,
+      onStatusChange: () => renderPerformanceState(),
     }),
 );
 
 const faustClavierRenderer = new FaustPolyRenderer({
+  applyAudioOutputToContext,
+  onStatusChange: () => syncFaustRendererPanel(),
   id: FAUST_CLAVIER_ID,
   label: "Faust Clavier",
   dspUrl: FAUST_CLAVIER_DSP_URL,
@@ -1421,6 +522,8 @@ const faustClavierRenderer = new FaustPolyRenderer({
 });
 
 const customFaustRenderer = new FaustPolyRenderer({
+  applyAudioOutputToContext,
+  onStatusChange: () => syncFaustRendererPanel(),
   id: FAUST_CUSTOM_ID,
   label: "Custom Faust",
   getCode: async () => {
@@ -1430,7 +533,8 @@ const customFaustRenderer = new FaustPolyRenderer({
     return loadCustomFaustTemplate();
   },
   voices: 24,
-  idleDetail: "Paste or edit a polyphonic Faust instrument, then compile it locally.",
+  idleDetail:
+    "Paste or edit a polyphonic Faust instrument, then compile it locally.",
 });
 
 const faustClavierControls = [
@@ -1539,6 +643,7 @@ const playbackRendererRegistry = new Map(
     renderer,
   ]),
 );
+
 const recorder = new PhraseRecorder(
   PHRASE_TIMEOUT_MS,
   ({ eventCount, noteCount, notes }) => {
@@ -1558,587 +663,6 @@ const recorder = new PhraseRecorder(
   },
   updatePhraseGapCountdown,
 );
-
-function midiNoteName(note) {
-  return `${NOTE_NAMES[note % 12]}${Math.floor(note / 12) - 1}`;
-}
-
-function isVirtualMidiInputId(inputId) {
-  return inputId === VIRTUAL_MIDI_INPUT_ID;
-}
-
-function isVirtualMidiInputSelected() {
-  return isVirtualMidiInputId(state.activeInputId);
-}
-
-function selectedMidiInputId() {
-  return elements.midiInputSelect?.value || "";
-}
-
-function isVirtualMidiInputChosen() {
-  return (
-    isVirtualMidiInputSelected() ||
-    isVirtualMidiInputId(selectedMidiInputId())
-  );
-}
-
-function syncVirtualKeyboardVisibility() {
-  elements.virtualKeyboardPanel.hidden = !isVirtualMidiInputChosen();
-}
-
-function shouldMonitorSelectedMidiInput() {
-  return state.inputMonitorEnabled && !isVirtualMidiInputSelected();
-}
-
-function normalizeMidiNote(note) {
-  return Math.max(0, Math.min(127, Number(note) || 0));
-}
-
-function virtualKeyboardRangeLabel() {
-  const first = state.virtualKeyboardBaseNote;
-  const last = first + virtualKeyboardOctaves() * 12 - 1;
-  return `${midiNoteName(first)}-${midiNoteName(last)}`;
-}
-
-function virtualKeyboardOctaves() {
-  return isPhoneLayout()
-    ? VIRTUAL_KEYBOARD_PHONE_OCTAVES
-    : VIRTUAL_KEYBOARD_DESKTOP_OCTAVES;
-}
-
-function isPhoneLayout() {
-  const requestedLayout = new URLSearchParams(window.location.search).get("layout");
-  if (requestedLayout === "phone") {
-    return true;
-  }
-  if (requestedLayout === "desktop") {
-    return false;
-  }
-
-  const responsiveMatch = Boolean(
-    window.matchMedia?.(PHONE_LAYOUT_MEDIA_QUERY).matches,
-  );
-  const mobileClientHint = navigator.userAgentData?.mobile === true;
-  const phoneUserAgent = /Android.+Mobile|iPhone|iPod/i.test(
-    navigator.userAgent || "",
-  );
-  const coarseTouch =
-    Boolean(window.matchMedia?.("(pointer: coarse)").matches) ||
-    navigator.maxTouchPoints > 0;
-  const screenDimensions = [window.screen?.width, window.screen?.height]
-    .map(Number)
-    .filter((value) => Number.isFinite(value) && value > 0);
-  const compactPhysicalScreen =
-    screenDimensions.length > 0 &&
-    Math.min(...screenDimensions) <= PHONE_SCREEN_MAX_CSS_PX;
-
-  return (
-    responsiveMatch ||
-    mobileClientHint ||
-    phoneUserAgent ||
-    (coarseTouch && compactPhysicalScreen)
-  );
-}
-
-function syncPhoneLayout() {
-  const phoneLayout = isPhoneLayout();
-  document.documentElement.classList.toggle("phone-layout", phoneLayout);
-  document.querySelectorAll("[data-phone-collapsible]").forEach((details) => {
-    if (!(details instanceof HTMLDetailsElement)) {
-      return;
-    }
-    if (!phoneLayout) {
-      details.open = true;
-      details.dataset.phoneInitialized = "false";
-      return;
-    }
-    if (details.dataset.phoneInitialized !== "true") {
-      details.open = false;
-      details.dataset.phoneInitialized = "true";
-    }
-  });
-  return phoneLayout;
-}
-
-async function initializePhoneInput() {
-  if (!isPhoneLayout() || isVirtualMidiInputSelected()) {
-    return;
-  }
-  await attachInput(VIRTUAL_MIDI_INPUT_ID, { savePreference: false });
-}
-
-function getVirtualVelocity() {
-  return Math.max(1, Math.min(127, Number(elements.virtualVelocityInput.value) || 100));
-}
-
-function makeMidiMessageEvent(data, receivedTime = window.performance.now()) {
-  return {
-    data: Uint8Array.from(data),
-    receivedTime,
-  };
-}
-
-function midiMessageToEvent(messageEvent) {
-  const [statusByte, note, rawVelocity = 0] = [...messageEvent.data];
-  const status = statusByte & 0xf0;
-  const channel = statusByte & 0x0f;
-  if (status === 0x90 && rawVelocity > 0) {
-    return {
-      type: "note_on",
-      note,
-      velocity: rawVelocity,
-      channel,
-      delta_seconds: 0,
-    };
-  }
-  if (status === 0x80 || (status === 0x90 && rawVelocity === 0)) {
-    return {
-      type: "note_off",
-      note,
-      velocity: 0,
-      channel,
-      delta_seconds: 0,
-    };
-  }
-  return null;
-}
-
-function getVirtualNoteTimestamp(type) {
-  const now = window.performance.now();
-  if (type !== "note_on") {
-    return now;
-  }
-  if (
-    state.virtualQuantizedTimestamp == null ||
-    now - state.virtualQuantizedAt > VIRTUAL_CHORD_QUANTIZE_MS
-  ) {
-    state.virtualQuantizedTimestamp = now;
-    state.virtualQuantizedAt = now;
-  }
-  return state.virtualQuantizedTimestamp;
-}
-
-function updateVisualMidiState(messageEvent) {
-  const [statusByte, note, velocity = 0] = [...messageEvent.data];
-  const status = statusByte & 0xf0;
-  if (status === 0x90 && velocity > 0) {
-    state.activeVisualMidiNotes.add(note);
-  } else if (status === 0x80 || (status === 0x90 && velocity === 0)) {
-    state.activeVisualMidiNotes.delete(note);
-  } else {
-    return;
-  }
-  renderVirtualKeyboardNoteState(note);
-}
-
-async function ensureLiveMonitorPlayback() {
-  const choice = selectedPlaybackChoice();
-  if (!choice.renderer) {
-    return null;
-  }
-  if (
-    state.liveMonitorPlayback &&
-    state.liveMonitorChoiceValue === choice.value
-  ) {
-    return state.liveMonitorPlayback;
-  }
-  if (
-    state.liveMonitorPlaybackPromise &&
-    state.liveMonitorChoiceValue === choice.value
-  ) {
-    return state.liveMonitorPlaybackPromise;
-  }
-
-  stopLiveMonitorPlayback();
-  state.liveMonitorChoiceValue = choice.value;
-  const token = ++state.liveMonitorToken;
-  state.liveMonitorPlaybackPromise = createPlaybackSession(choice.value)
-    .then((playback) => {
-      if (token !== state.liveMonitorToken) {
-        playback.renderer?.stopPlayback?.(playback);
-        stopMidiCopyPlayback(playback);
-        return null;
-      }
-      state.liveMonitorPlayback = playback;
-      return playback;
-    })
-    .catch((error) => {
-      state.liveMonitorChoiceValue = null;
-      setPhraseMessage(`Live input monitor unavailable: ${error.message}`, true);
-      return null;
-    })
-    .finally(() => {
-      state.liveMonitorPlaybackPromise = null;
-    });
-  return state.liveMonitorPlaybackPromise;
-}
-
-function stopLiveMonitorPlayback() {
-  const playback = state.liveMonitorPlayback;
-  if (playback?.renderer?.stopPlayback) {
-    playback.renderer.stopPlayback(playback);
-  }
-  stopMidiCopyPlayback(playback);
-  state.liveMonitorPlayback = null;
-  state.liveMonitorPlaybackPromise = null;
-  state.liveMonitorChoiceValue = null;
-  state.liveMonitorToken += 1;
-}
-
-async function monitorLiveMidiMessage(messageEvent) {
-  const event = midiMessageToEvent(messageEvent);
-  if (!event) {
-    return;
-  }
-  const playback = await ensureLiveMonitorPlayback();
-  if (!playback) {
-    return;
-  }
-  dispatchPlaybackEvent(playback, event);
-}
-
-function handleUnifiedMidiMessage(messageEvent, sourceLabel, { monitor = false } = {}) {
-  const [statusByte, note, velocity = 0] = [...messageEvent.data];
-  const status = statusByte & 0xf0;
-  const type =
-    status === 0x90 && velocity > 0
-      ? "note_on"
-      : status === 0x80 || (status === 0x90 && velocity === 0)
-        ? "note_off"
-        : "message";
-
-  updateVisualMidiState(messageEvent);
-
-  const interruptedPlayback =
-    type === "note_on"
-      ? stopLoopAndPlayback(
-          `Stopped the current continuation and switched to live MIDI from ${sourceLabel}.`,
-        )
-      : false;
-
-  const phraseWasEmpty = recorder.events.length === 0;
-  recorder.handleMessage(messageEvent);
-  if (monitor) {
-    void monitorLiveMidiMessage(messageEvent);
-  }
-  setLastMidiEvent(`${type} ${note} v${velocity}`);
-  if (interruptedPlayback) {
-    setPhraseMessage(
-      `Stopped the current continuation and switched to live MIDI from ${sourceLabel}.`,
-    );
-  } else if (phraseWasEmpty) {
-    setPhraseMessage(
-      `Receiving MIDI from ${sourceLabel}. Waiting for phrase end...`,
-    );
-  }
-}
-
-function emitVirtualMidiNote(note, type) {
-  const midiNote = normalizeMidiNote(note);
-  const status = type === "note_on" ? 0x90 : 0x80;
-  const velocity = type === "note_on" ? getVirtualVelocity() : 0;
-  const timestamp = getVirtualNoteTimestamp(type);
-  handleUnifiedMidiMessage(
-    makeMidiMessageEvent([status | VIRTUAL_KEYBOARD_CHANNEL, midiNote, velocity], timestamp),
-    "Virtual Keyboard",
-    { monitor: true },
-  );
-}
-
-function virtualHeldSources(note) {
-  const midiNote = normalizeMidiNote(note);
-  let sources = state.virtualHeldSourcesByNote.get(midiNote);
-  if (!sources) {
-    sources = new Set();
-    state.virtualHeldSourcesByNote.set(midiNote, sources);
-  }
-  return sources;
-}
-
-function pressVirtualNote(note, sourceId) {
-  const midiNote = normalizeMidiNote(note);
-  const sources = virtualHeldSources(midiNote);
-  if (sources.has(sourceId) || state.virtualLatchedNotes.has(midiNote)) {
-    return;
-  }
-  const wasInactive = sources.size === 0 && !state.virtualSustainedNotes.has(midiNote);
-  sources.add(sourceId);
-  state.virtualSustainedNotes.delete(midiNote);
-  if (wasInactive) {
-    emitVirtualMidiNote(midiNote, "note_on");
-  }
-}
-
-function releaseVirtualNote(note, sourceId) {
-  const midiNote = normalizeMidiNote(note);
-  const sources = state.virtualHeldSourcesByNote.get(midiNote);
-  if (!sources?.has(sourceId)) {
-    return;
-  }
-  sources.delete(sourceId);
-  if (!sources.size) {
-    state.virtualHeldSourcesByNote.delete(midiNote);
-  }
-  if (sources?.size || state.virtualLatchedNotes.has(midiNote)) {
-    return;
-  }
-  if (elements.virtualSustainToggle.checked) {
-    state.virtualSustainedNotes.add(midiNote);
-    return;
-  }
-  emitVirtualMidiNote(midiNote, "note_off");
-}
-
-function toggleLatchedVirtualNote(note) {
-  const midiNote = normalizeMidiNote(note);
-  if (state.virtualLatchedNotes.has(midiNote)) {
-    state.virtualLatchedNotes.delete(midiNote);
-    if (!state.virtualHeldSourcesByNote.has(midiNote)) {
-      emitVirtualMidiNote(midiNote, "note_off");
-    }
-    return;
-  }
-  const wasInactive =
-    !state.virtualHeldSourcesByNote.has(midiNote) && !state.virtualSustainedNotes.has(midiNote);
-  state.virtualLatchedNotes.add(midiNote);
-  state.virtualSustainedNotes.delete(midiNote);
-  if (wasInactive) {
-    emitVirtualMidiNote(midiNote, "note_on");
-  }
-}
-
-function releaseSustainedVirtualNotes() {
-  for (const note of [...state.virtualSustainedNotes]) {
-    if (!state.virtualHeldSourcesByNote.has(note) && !state.virtualLatchedNotes.has(note)) {
-      emitVirtualMidiNote(note, "note_off");
-      state.virtualSustainedNotes.delete(note);
-    }
-  }
-}
-
-function allVirtualNotesOff({ clearLatch = true } = {}) {
-  const notes = new Set([
-    ...state.virtualHeldSourcesByNote.keys(),
-    ...state.virtualSustainedNotes,
-    ...state.virtualLatchedNotes,
-  ]);
-  state.virtualHeldSourcesByNote.clear();
-  state.virtualSustainedNotes.clear();
-  state.virtualActivePointers.clear();
-  state.virtualActiveComputerKeys.clear();
-  if (clearLatch) {
-    state.virtualLatchedNotes.clear();
-  }
-  for (const note of notes) {
-    emitVirtualMidiNote(note, "note_off");
-  }
-  renderVirtualKeyboardActiveNotes();
-}
-
-function clearLatchedVirtualChord() {
-  const notes = [...state.virtualLatchedNotes];
-  state.virtualLatchedNotes.clear();
-  for (const note of notes) {
-    if (!state.virtualHeldSourcesByNote.has(note)) {
-      emitVirtualMidiNote(note, "note_off");
-    }
-  }
-  renderVirtualKeyboardActiveNotes();
-}
-
-function renderVirtualKeyboardActiveNotes() {
-  elements.virtualKeyboard
-    .querySelectorAll("[data-midi-note]")
-    .forEach((key) => {
-      const note = Number(key.dataset.midiNote);
-      key.classList.toggle("is-active", state.activeVisualMidiNotes.has(note));
-      key.classList.toggle("is-latched", state.virtualLatchedNotes.has(note));
-    });
-}
-
-function renderVirtualKeyboardNoteState(note) {
-  const key = elements.virtualKeyboard.querySelector(`[data-midi-note="${note}"]`);
-  if (!key) {
-    return;
-  }
-  key.classList.toggle("is-active", state.activeVisualMidiNotes.has(note));
-  key.classList.toggle("is-latched", state.virtualLatchedNotes.has(note));
-}
-
-function renderVirtualKeyboard() {
-  const base = state.virtualKeyboardBaseNote;
-  const noteCount = virtualKeyboardOctaves() * 12;
-  const whiteNotes = [];
-  const blackNotes = [];
-
-  for (let offset = 0; offset < noteCount; offset += 1) {
-    const note = base + offset;
-    const noteOffset = note % 12;
-    if (BLACK_KEY_OFFSETS.has(noteOffset)) {
-      blackNotes.push({ note, offset, whiteIndex: whiteNotes.length - 1 });
-    } else {
-      whiteNotes.push({ note, offset });
-    }
-  }
-
-  const whiteMarkup = whiteNotes
-    .map(
-      ({ note }) => `
-        <div
-          class="virtual-key white-key"
-          role="button"
-          tabindex="-1"
-          data-midi-note="${note}"
-          aria-label="${midiNoteName(note)}"
-        ><span>${midiNoteName(note)}</span></div>`,
-    )
-    .join("");
-  const blackMarkup = blackNotes
-    .map(
-      ({ note, whiteIndex }) => `
-        <div
-          class="virtual-key black-key"
-          role="button"
-          tabindex="-1"
-          data-midi-note="${note}"
-          aria-label="${midiNoteName(note)}"
-          style="--key-left: ${((whiteIndex + 1) / whiteNotes.length) * 100}%"
-        ><span>${midiNoteName(note)}</span></div>`,
-    )
-    .join("");
-
-  elements.virtualKeyboard.style.setProperty("--white-key-count", whiteNotes.length);
-  elements.virtualKeyboard.innerHTML = `
-    <div class="white-key-row">${whiteMarkup}</div>
-    <div class="black-key-row" aria-hidden="false">${blackMarkup}</div>
-  `;
-  elements.virtualOctaveLabel.textContent = virtualKeyboardRangeLabel();
-  renderVirtualKeyboardActiveNotes();
-}
-
-function setVirtualKeyboardBaseNote(nextBaseNote) {
-  allVirtualNotesOff();
-  state.virtualKeyboardBaseNote = Math.max(
-    VIRTUAL_KEYBOARD_MIN_BASE_NOTE,
-    Math.min(VIRTUAL_KEYBOARD_MAX_BASE_NOTE, nextBaseNote),
-  );
-  renderVirtualKeyboard();
-}
-
-function virtualNoteFromComputerKey(code) {
-  const offset = COMPUTER_KEYBOARD_OFFSETS.get(code);
-  return offset == null ? null : state.virtualKeyboardBaseNote + offset;
-}
-
-function roundNumber(value) {
-  return Math.round(value * 1_000_000) / 1_000_000;
-}
-
-function formatDurationSeconds(value) {
-  const duration = Number(value) || 0;
-  return duration >= 10 ? `${duration.toFixed(0)}s` : `${duration.toFixed(1)}s`;
-}
-
-function timelineSummary(payloadOrEvents, emptyText) {
-  const noteCount = phraseNoteCount(payloadOrEvents);
-  if (!noteCount) {
-    return emptyText;
-  }
-  const durationMs = phraseDurationMs(payloadOrEvents);
-  return `${pluralize(noteCount, "note")} / ${formatMilliseconds(durationMs)}`;
-}
-
-function setTimelineSegment(element, stateClass, value) {
-  if (!element) {
-    return;
-  }
-  element.classList.remove("is-ready", "is-playing", "is-queued");
-  if (stateClass) {
-    element.classList.add(stateClass);
-  }
-  const strong = element.querySelector("strong");
-  if (strong) {
-    strong.textContent = value;
-  }
-}
-
-function rendererHealthLabel() {
-  const choice = selectedPlaybackChoice();
-  if (choice.rendererId === WEB_MIDI_RENDERER_ID) {
-    if (!state.midiAccess) {
-      return "Connect MIDI to inspect external outputs";
-    }
-    const output = midiOutputById(choice.targetId);
-    return output ? "External MIDI ready" : "External MIDI output unavailable";
-  }
-  if (choice.renderer instanceof FaustPolyRenderer) {
-    return choice.renderer.lastError
-      ? `Faust error: ${choice.renderer.lastError.message}`
-      : `Faust ${choice.renderer.status.toLowerCase()}`;
-  }
-  if (choice.renderer?.getHealthLabel) {
-    return choice.renderer.getHealthLabel();
-  }
-  return "Browser renderer ready";
-}
-
-function renderTimingReadout() {
-  if (!elements.timingReadout) {
-    return;
-  }
-  const parts = [];
-  if (state.lastCaptureDurationMs != null) {
-    parts.push(`capture ${formatMilliseconds(state.lastCaptureDurationMs)}`);
-  }
-  if (state.lastGenerationMs != null) {
-    parts.push(`generation ${formatMilliseconds(state.lastGenerationMs)}`);
-  }
-  parts.push(`renderer ${playbackChoiceLabel()}`);
-  elements.timingReadout.textContent = parts.length
-    ? parts.join(" · ")
-    : "Waiting for first phrase";
-}
-
-function renderPerformanceState() {
-  setReadinessStep(elements.readySessionStep, Boolean(state.sessionId), "Session");
-  setReadinessStep(elements.readyMidiStep, Boolean(state.activeInputId), "MIDI");
-  setReadinessStep(elements.readyPhraseStep, hasLoopSeedPhrase(), "Phrase");
-  setReadinessStep(elements.readyOutputStep, Boolean(selectedPlaybackChoice().renderer), "Output");
-
-  if (elements.rendererHealth) {
-    elements.rendererHealth.textContent = rendererHealthLabel();
-  }
-  if (elements.midiCopyStatusChip && elements.midiCopyStatus) {
-    const outputId = selectedMidiCopyOutputId();
-    const output = selectedMidiCopyOutput();
-    elements.midiCopyStatusChip.hidden = !outputId;
-    elements.midiCopyStatus.textContent = output
-      ? `${output.name || output.id} ready`
-      : "Output unavailable";
-  }
-  if (elements.sessionSaveNote) {
-    elements.sessionSaveNote.textContent = state.authUser
-      ? "Signed-in session: new sessions are saved under your account."
-      : "Guest session: sign in before creating a new session if you want it saved and reopenable.";
-  }
-
-  setTimelineSegment(
-    elements.timelineCaptured,
-    state.lastCapturedPhrase.length ? "is-ready" : null,
-    timelineSummary(state.lastCapturedPhrase, "empty"),
-  );
-  setTimelineSegment(
-    elements.timelineGenerated,
-    state.currentPlaybackPayload ? "is-playing" : state.lastGeneratedPhrase ? "is-ready" : null,
-    timelineSummary(state.currentPlaybackPayload || state.lastGeneratedPhrase, "empty"),
-  );
-  setTimelineSegment(
-    elements.timelineQueued,
-    state.queuedPlaybackPayload ? "is-queued" : null,
-    timelineSummary(state.queuedPlaybackPayload, "none"),
-  );
-  renderTimingReadout();
-}
 
 function setSessionMidiSaveResult(message = "", isError = false) {
   if (!elements.sessionMidiSaveResult) {
@@ -2186,8 +710,12 @@ async function requestSessionMidiZip() {
       response.headers.get("Content-Disposition"),
     ),
     file_count: Number(response.headers.get("X-Midi-File-Count") || 0),
-    input_file_count: Number(response.headers.get("X-Midi-Input-File-Count") || 0),
-    generated_file_count: Number(response.headers.get("X-Midi-Generated-File-Count") || 0),
+    input_file_count: Number(
+      response.headers.get("X-Midi-Input-File-Count") || 0,
+    ),
+    generated_file_count: Number(
+      response.headers.get("X-Midi-Generated-File-Count") || 0,
+    ),
   };
 }
 
@@ -2292,7 +820,10 @@ function stopServerWaitIndicator() {
   elements.phraseGapMeterBar.style.width = "0%";
 }
 
-function startServerWaitIndicator(label, startedAtMs = window.performance.now()) {
+function startServerWaitIndicator(
+  label,
+  startedAtMs = window.performance.now(),
+) {
   stopPhraseGapCountdown();
   stopServerWaitIndicator();
   elements.phraseGapMeterLabel.textContent = label;
@@ -2323,7 +854,10 @@ function updatePhraseGapCountdown(update) {
   }
 
   const startedAtMs = Number(update.startedAtMs);
-  const timeoutMs = Math.max(1, Number(update.timeoutMs) || state.phraseTimeoutMs);
+  const timeoutMs = Math.max(
+    1,
+    Number(update.timeoutMs) || state.phraseTimeoutMs,
+  );
   if (!Number.isFinite(startedAtMs)) {
     stopPhraseGapCountdown();
     return;
@@ -2337,10 +871,7 @@ function updatePhraseGapCountdown(update) {
     const elapsedMs = Math.max(0, window.performance.now() - startedAtMs);
     const remainingMs = Math.max(0, timeoutMs - elapsedMs);
     const progress = Math.min(1, elapsedMs / timeoutMs);
-    if (
-      elapsedMs >= PHRASE_GAP_VISIBILITY_DELAY_MS ||
-      remainingMs <= 0
-    ) {
+    if (elapsedMs >= PHRASE_GAP_VISIBILITY_DELAY_MS || remainingMs <= 0) {
       elements.phraseGapMeter.classList.remove("is-server-wait");
       setTextContentIfChanged(
         elements.phraseGapMeterLabel,
@@ -2383,191 +914,6 @@ function setPhraseMessage(message, danger = false) {
   }
 }
 
-function constraintPillText(label, state) {
-  if (!state?.requested) {
-    return `${label}: off${state?.reason ? ` (${state.reason})` : ""}`;
-  }
-  const status = state.relaxed ? "relaxed" : state.applied ? "on" : "off";
-  const value = state.value ? ` · ${state.value}` : "";
-  return `${label}: ${status}${value}`;
-}
-
-function constraintPillClass(state) {
-  if (!state?.requested || (!state.applied && !state.relaxed)) {
-    return "constraint-pill is-off";
-  }
-  if (state.relaxed) {
-    return "constraint-pill is-relaxed";
-  }
-  return "constraint-pill";
-}
-
-function comparableSessionSettings(settings) {
-  if (!settings) {
-    return null;
-  }
-  return {
-    learn_input: Boolean(settings.learn_input),
-    transposition: Boolean(settings.transposition),
-    forget_past: Boolean(settings.forget_past),
-    markov_order: normalizedMarkovOrder(settings.markov_order),
-    keep_last_inputs: normalizedKeepLastInputs(settings.keep_last_inputs),
-  };
-}
-
-function sessionSettingValueLabel(key, value) {
-  switch (key) {
-    case "learn_input":
-      return value ? "Learn input on" : "Learn input off";
-    case "transposition":
-      return value ? "Transpose on" : "Transpose off";
-    case "forget_past":
-      return value ? "Rolling memory on" : "Full memory";
-    case "markov_order":
-      return `K=${normalizedMarkovOrder(value)}`;
-    case "keep_last_inputs":
-      return `Keep last ${normalizedKeepLastInputs(value)}`;
-    default:
-      return String(value);
-  }
-}
-
-function pendingSessionSettingChanges() {
-  if (!state.sessionId || !state.sessionConfiguration) {
-    return [];
-  }
-  const active = comparableSessionSettings(state.sessionConfiguration);
-  const draft = comparableSessionSettings(readSessionSettingsFromControls());
-  return [
-    ["markov_order", "K"],
-    ["transposition", "Transpose"],
-    ["forget_past", "Memory"],
-    ["keep_last_inputs", "Keep last"],
-    ["learn_input", "Learn input"],
-  ]
-    .filter(([key]) => active[key] !== draft[key])
-    .map(([key, label]) => ({
-      key,
-      label,
-      active: sessionSettingValueLabel(key, active[key]),
-      pending: sessionSettingValueLabel(key, draft[key]),
-    }));
-}
-
-function hasPendingSessionSettings() {
-  return pendingSessionSettingChanges().length > 0;
-}
-
-function pendingSessionSettingsText(changes = pendingSessionSettingChanges()) {
-  const visibleChanges = changes.slice(0, 4);
-  const suffix = changes.length > visibleChanges.length
-    ? ` +${changes.length - visibleChanges.length}`
-    : "";
-  return `${visibleChanges.map((change) => change.pending).join(" · ")}${suffix}`;
-}
-
-function hasGenerationTrace(trace) {
-  return Array.isArray(trace) && trace.length > 0;
-}
-
-function generationTracePillText(trace) {
-  if (!Array.isArray(trace) || !trace.length) {
-    return null;
-  }
-  const orders = trace
-    .slice(0, 12)
-    .map((step) => `K${Number(step?.effective_order ?? step?.order ?? 0)}`)
-    .join(" ");
-  const skippedCount = trace.reduce(
-    (total, step) => (
-      total + (Array.isArray(step?.skipped_orders) ? step.skipped_orders.length : 0)
-    ),
-    0,
-  );
-  const suffix = trace.length > 12 ? ` … +${trace.length - 12}` : "";
-  const skipped = skippedCount ? ` · ${skippedCount} skips` : "";
-  return `Trace orders: ${orders}${suffix}${skipped}`;
-}
-
-function generationTraceTitle(trace) {
-  if (!Array.isArray(trace) || !trace.length) {
-    return "";
-  }
-  return trace
-    .map((step) => {
-      const order = Number(step?.effective_order ?? step?.order ?? 0);
-      const symbol = Array.isArray(step?.symbol)
-        ? step.symbol.join(",")
-        : String(step?.symbol ?? "");
-      const skipped =
-        Array.isArray(step?.skipped_orders) && step.skipped_orders.length
-          ? ` skipped ${step.skipped_orders.join("/")}`
-          : "";
-      return `pos ${step?.position}: K${order} ${symbol}${skipped}`;
-    })
-    .join("\n");
-}
-
-function renderConstraintStatus(constraints, generationTrace = null) {
-  state.lastConstraints = constraints || null;
-  state.lastGenerationTrace = generationTrace || null;
-  if (!elements.constraintStatus) {
-    return;
-  }
-  elements.constraintStatus.replaceChildren();
-  const traceText = generationTracePillText(generationTrace);
-  const pendingChanges = pendingSessionSettingChanges();
-  if (!constraints && !traceText && !pendingChanges.length) {
-    elements.constraintStatus.hidden = true;
-    return;
-  }
-
-  const enginePill = document.createElement("span");
-  enginePill.className = "constraint-pill is-off";
-  enginePill.textContent = `Active engine: ${ENGINE_LABEL}`;
-  elements.constraintStatus.append(enginePill);
-
-  if (pendingChanges.length) {
-    const pill = document.createElement("span");
-    pill.className = "constraint-pill is-pending";
-    pill.textContent = `Pending: ${pendingSessionSettingsText(pendingChanges)}`;
-    pill.title = pendingChanges
-      .map((change) => `${change.label}: ${change.active} -> ${change.pending}`)
-      .join("\n");
-    elements.constraintStatus.append(pill);
-  }
-
-  if (constraints) {
-    [
-      ["Start", constraints.start],
-      ["End", constraints.end],
-    ].forEach(([label, value]) => {
-      const pill = document.createElement("span");
-      pill.className = constraintPillClass(value);
-      pill.textContent = constraintPillText(label, value);
-      if (value?.reason) {
-        pill.title = value.reason;
-      }
-      elements.constraintStatus.append(pill);
-    });
-  }
-  if (traceText) {
-    const pill = document.createElement("span");
-    pill.className = hasGenerationTrace(generationTrace)
-      ? "constraint-pill"
-      : "constraint-pill is-relaxed";
-    pill.textContent = traceText;
-    pill.title = generationTraceTitle(generationTrace);
-    elements.constraintStatus.append(pill);
-  }
-  elements.constraintStatus.hidden = false;
-}
-
-function setAuthMessage(message, danger = false) {
-  elements.authMessageBox.textContent = message;
-  elements.authMessageBox.style.color = danger ? "var(--danger)" : "var(--muted)";
-}
-
 function pluralize(value, singular, plural = `${singular}s`) {
   return `${value} ${value === 1 ? singular : plural}`;
 }
@@ -2579,7 +925,9 @@ function phraseNoteCount(payloadOrEvents) {
     }
     return eventsToNotes(payloadOrEvents).length;
   }
-  return Number(payloadOrEvents?.note_count || payloadOrEvents?.notes?.length || 0);
+  return Number(
+    payloadOrEvents?.note_count || payloadOrEvents?.notes?.length || 0,
+  );
 }
 
 function phraseDurationMs(payloadOrEvents) {
@@ -2600,7 +948,9 @@ function formatMilliseconds(ms) {
     return "n/a";
   }
   const value = Math.max(0, Number(ms));
-  return value >= 1000 ? `${(value / 1000).toFixed(1)}s` : `${Math.round(value)}ms`;
+  return value >= 1000
+    ? `${(value / 1000).toFixed(1)}s`
+    : `${Math.round(value)}ms`;
 }
 
 function setReadinessStep(element, active, label = null) {
@@ -2615,7 +965,9 @@ function setReadinessStep(element, active, label = null) {
 
 function rememberCapturedPhrase(events, notes = null) {
   const capturedEvents = Array.isArray(events) ? events : [];
-  const capturedNotes = Array.isArray(notes) ? notes : eventsToNotes(capturedEvents);
+  const capturedNotes = Array.isArray(notes)
+    ? notes
+    : eventsToNotes(capturedEvents);
   const captureDurationMs = capturedEvents.length
     ? continuationDurationMs({ events: capturedEvents })
     : null;
@@ -2709,7 +1061,8 @@ function renderAccountTrigger() {
   }
 
   elements.authStatus.dataset.authState = "guest";
-  elements.authStatus.title = "Guest mode. Click to sign in or create an account.";
+  elements.authStatus.title =
+    "Guest mode. Click to sign in or create an account.";
   elements.authAvatar.textContent = "G";
   elements.authStatusLabel.textContent = "Guest mode";
   elements.authStatusCopy.textContent = "Click to sign in";
@@ -2756,7 +1109,9 @@ function normalizedGraphOrder(order) {
 
 function graphOrderLimit() {
   return normalizedMarkovOrder(
-    state.sessionConfiguration?.markov_order || elements.markovOrderInput?.value || 4,
+    state.sessionConfiguration?.markov_order ||
+      elements.markovOrderInput?.value ||
+      4,
   );
 }
 
@@ -2778,7 +1133,8 @@ function syncGraphOrderOptions() {
     option.textContent = `Order ${order}`;
     select.append(option);
   }
-  const nextValue = selected === "all" || Number(selected) <= limit ? selected : "all";
+  const nextValue =
+    selected === "all" || Number(selected) <= limit ? selected : "all";
   state.graphOrder = nextValue;
   select.value = nextValue;
 }
@@ -2830,7 +1186,8 @@ function setActiveGraphKind(kind) {
     elements.graphControls.hidden = state.activeGraphKind !== "memory";
   }
   elements.graphKindTabs.forEach((node) => {
-    const active = normalizedGraphKind(node.dataset.graphKind) === state.activeGraphKind;
+    const active =
+      normalizedGraphKind(node.dataset.graphKind) === state.activeGraphKind;
     node.classList.toggle("is-active", active);
     node.setAttribute("aria-selected", String(active));
   });
@@ -2869,7 +1226,9 @@ function applyGraphPanelPosition(position) {
 }
 
 function ensureGraphPanelPosition() {
-  applyGraphPanelPosition(state.graphPanelPosition || defaultGraphPanelPosition());
+  applyGraphPanelPosition(
+    state.graphPanelPosition || defaultGraphPanelPosition(),
+  );
 }
 
 function setGraphOpen(open) {
@@ -2890,7 +1249,10 @@ function setGraphOpen(open) {
 }
 
 function graphDragHandleIsInteractive(target) {
-  return target instanceof Element && Boolean(target.closest("button, a, input, select, textarea"));
+  return (
+    target instanceof Element &&
+    Boolean(target.closest("button, a, input, select, textarea"))
+  );
 }
 
 function startGraphPanelDrag(event) {
@@ -2951,73 +1313,6 @@ function setAccountPanelOpen(open) {
   }
 }
 
-function setTextContentIfChanged(element, value) {
-  const text = String(value);
-  if (element.textContent !== text) {
-    element.textContent = text;
-  }
-}
-
-function setSessionStatus(label) {
-  setTextContentIfChanged(elements.sessionStatus, label);
-}
-
-function setMidiStatus(label) {
-  setTextContentIfChanged(elements.midiStatus, label);
-}
-
-function setPhraseStatus(label) {
-  setTextContentIfChanged(elements.phraseStatus, label);
-}
-
-function setSelectedInputName(label) {
-  state.selectedInputLabel = label;
-}
-
-function setLastMidiEvent(label) {
-  state.lastMidiEventLabel = label;
-}
-
-async function requestJson(url, options = {}) {
-  const response = await fetch(url, options);
-  const rawText = await response.text();
-  let payload = null;
-
-  if (rawText) {
-    try {
-      payload = JSON.parse(rawText);
-    } catch {
-      payload = rawText;
-    }
-  }
-
-  if (!response.ok) {
-    if (response.status === 401 && !String(url).includes("/api/auth/")) {
-      state.authUser = null;
-      syncAuthUI();
-      renderSavedSessions([]);
-      clearCurrentSessionState("Your sign-in expired. Sign in again to reopen sessions.");
-    }
-    const detailList =
-      payload && typeof payload === "object" && Array.isArray(payload.detail)
-        ? payload.detail
-            .map((item) => (typeof item?.msg === "string" ? item.msg : null))
-            .filter(Boolean)
-        : [];
-    const detail =
-      payload && typeof payload === "object" && typeof payload.detail === "string"
-        ? payload.detail
-        : detailList.length
-          ? detailList.join(" ")
-        : typeof payload === "string"
-          ? payload
-          : `Request failed (${response.status}).`;
-    throw new Error(detail);
-  }
-
-  return payload;
-}
-
 function normalizedKeepLastInputs(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) {
@@ -3068,7 +1363,10 @@ function formatPhraseTimeoutSeconds(timeoutMs) {
   return seconds.endsWith(".0") ? seconds.slice(0, -2) : seconds;
 }
 
-function applyPhraseTimeoutSetting(value, { persist = true, announce = false } = {}) {
+function applyPhraseTimeoutSetting(
+  value,
+  { persist = true, announce = false } = {},
+) {
   const timeoutMs = normalizedPhraseTimeoutMs(value);
   state.phraseTimeoutMs = timeoutMs;
   elements.phraseTimeoutInput.value = formatPhraseTimeoutSeconds(timeoutMs);
@@ -3077,16 +1375,17 @@ function applyPhraseTimeoutSetting(value, { persist = true, announce = false } =
     safeLocalStorageSet(PHRASE_TIMEOUT_STORAGE_KEY, String(timeoutMs / 1000));
   }
   if (announce) {
-    setPhraseMessage(`Phrase gap set to ${formatPhraseTimeoutSeconds(timeoutMs)}s.`);
+    setPhraseMessage(
+      `Phrase gap set to ${formatPhraseTimeoutSeconds(timeoutMs)}s.`,
+    );
   }
 }
 
 function initializePhraseTimeoutSetting() {
   const storedValue = safeLocalStorageGet(PHRASE_TIMEOUT_STORAGE_KEY);
-  applyPhraseTimeoutSetting(
-    storedValue ?? String(PHRASE_TIMEOUT_MS / 1000),
-    { persist: false },
-  );
+  applyPhraseTimeoutSetting(storedValue ?? String(PHRASE_TIMEOUT_MS / 1000), {
+    persist: false,
+  });
 }
 
 function hasMidiFileExtension(name) {
@@ -3104,7 +1403,9 @@ function validateAuthCredentials() {
     throw new Error("Username must be between 2 and 32 characters.");
   }
   if (!/^[A-Za-z0-9_.-]+$/.test(username)) {
-    throw new Error("Username can only use letters, digits, underscores, dots, or dashes.");
+    throw new Error(
+      "Username can only use letters, digits, underscores, dots, or dashes.",
+    );
   }
   if (password.length < 8) {
     throw new Error("Password must be at least 8 characters.");
@@ -3114,14 +1415,20 @@ function validateAuthCredentials() {
 }
 
 function hasLoopSeedPhrase() {
-  return Boolean(state.lastCapturedPhrase.length || state.lastGeneratedPhrase?.events?.length);
+  return Boolean(
+    state.lastCapturedPhrase.length ||
+    state.lastGeneratedPhrase?.events?.length,
+  );
 }
 
 function describeLoopSeed() {
   if (state.activePlayback && state.lastGeneratedPhrase?.events?.length) {
     return `Seed: playing ${pluralize(state.lastGeneratedPhrase.note_count || 0, "generated note")}`;
   }
-  if (state.lastGeneratedPhrase?.events?.length && state.lastGeneratedAt >= state.lastCapturedAt) {
+  if (
+    state.lastGeneratedPhrase?.events?.length &&
+    state.lastGeneratedAt >= state.lastCapturedAt
+  ) {
     return `Seed: last continuation (${pluralize(state.lastGeneratedPhrase.note_count || 0, "note")})`;
   }
   if (state.lastCapturedPhrase.length) {
@@ -3194,204 +1501,6 @@ function infiniteLookaheadMs(payload) {
   );
 }
 
-function readSessionSettingsFromControls() {
-  return {
-    learn_input: elements.learnInputToggle.checked,
-    transposition: elements.transposeToggle.checked,
-    forget_past: elements.forgetToggle.checked,
-    markov_order: normalizedMarkovOrder(elements.markovOrderInput.value),
-    keep_last_inputs: normalizedKeepLastInputs(elements.keepLastInput.value),
-  };
-}
-
-function describeSessionSettings(settings) {
-  const orderLabel = `K=${normalizedMarkovOrder(settings?.markov_order)}`;
-  const transposeLabel = settings?.transposition ? "Transpose on" : "Transpose off";
-  const memoryLabel = settings?.forget_past
-    ? `Keep last ${normalizedKeepLastInputs(settings?.keep_last_inputs)} phrases`
-    : "Keep full memory";
-  return [ENGINE_LABEL, orderLabel, transposeLabel, memoryLabel];
-}
-
-function settingsChipHtml(label, className = "") {
-  return `<span class="settings-chip ${className}">${label}</span>`;
-}
-
-function savedPlaybackPreferenceLabel(configuration) {
-  if (!configuration?.playback_choice) {
-    return null;
-  }
-  if (configuration.playback_choice_name) {
-    return configuration.playback_choice_name;
-  }
-
-  const { rendererId } = parsePlaybackChoice(configuration.playback_choice);
-  if (rendererId === WEB_MIDI_RENDERER_ID) {
-    return "External MIDI";
-  }
-  return playbackChoiceLabel(configuration.playback_choice);
-}
-
-function describeSessionPreferences(configuration) {
-  const labels = [];
-  const inputName = configuration?.midi_input_name || configuration?.midi_input_id;
-  const playbackName = savedPlaybackPreferenceLabel(configuration);
-  const midiCopyName =
-    configuration?.midi_copy_output_name || configuration?.midi_copy_output_id;
-  if (inputName) {
-    labels.push(`Input ${inputName}`);
-  }
-  if (playbackName) {
-    labels.push(`Playback ${playbackName}`);
-  }
-  if (midiCopyName) {
-    labels.push(`MIDI copy ${midiCopyName}`);
-  }
-  return labels;
-}
-
-function renderSessionSettingsSummary() {
-  const activeSettings = state.sessionId && state.sessionConfiguration
-    ? state.sessionConfiguration
-    : readSessionSettingsFromControls();
-  const labels = describeSessionSettings(activeSettings);
-  const pendingChanges = pendingSessionSettingChanges();
-  const chips = labels.map((label, index) =>
-    settingsChipHtml(
-      state.sessionId && index === 0 ? `Active: ${label}` : label,
-      state.sessionId ? "is-active" : "",
-    ),
-  );
-  elements.settingsSummary.classList.toggle("is-pending", pendingChanges.length > 0);
-  if (pendingChanges.length) {
-    chips.unshift(settingsChipHtml("Unsaved settings", "is-warning"));
-    chips.push(
-      settingsChipHtml(`Pending: ${pendingSessionSettingsText(pendingChanges)}`, "is-pending"),
-    );
-  }
-  elements.settingsSummary.innerHTML = chips.join("");
-  updateSessionActionState();
-  renderConstraintStatus(state.lastConstraints, state.lastGenerationTrace);
-}
-
-function updateKeepLastFieldState() {
-  const enabled = elements.forgetToggle.checked;
-  elements.keepLastInput.disabled = !enabled;
-}
-
-function syncSettingsControls(configuration) {
-  if (!configuration) {
-    return;
-  }
-
-  state.sessionConfiguration = configuration;
-  elements.learnInputToggle.checked = configuration.learn_input;
-  elements.transposeToggle.checked = configuration.transposition;
-  elements.forgetToggle.checked = configuration.forget_past;
-  elements.markovOrderInput.value = String(
-    normalizedMarkovOrder(configuration.markov_order),
-  );
-  elements.keepLastInput.value = String(configuration.keep_last_inputs);
-  updateKeepLastFieldState();
-  renderSessionSettingsSummary();
-}
-
-function updateSessionActionState() {
-  const hasPendingSettings = hasPendingSessionSettings();
-  const canRememberExportFile = midiExportZipRememberSupported();
-  elements.createSessionButton.disabled = false;
-  elements.resetSessionButton.disabled = !state.sessionId;
-  elements.saveSessionMidiButton.disabled = !state.sessionId || state.sessionMidiSaving;
-  elements.saveSessionMidiButton.classList.toggle("is-pending", state.sessionMidiSaving);
-  elements.saveSessionMidiButton.textContent = state.sessionMidiSaving
-    ? "Saving MIDI..."
-    : "Save Session MIDI";
-  elements.rememberMidiExportFileToggle.disabled =
-    !canRememberExportFile || state.sessionMidiSaving;
-  if (!canRememberExportFile) {
-    elements.rememberMidiExportFileToggle.checked = false;
-    elements.rememberMidiExportFileToggle.title =
-      "Remembering export files is not available in this browser.";
-  } else {
-    elements.rememberMidiExportFileToggle.title = "";
-  }
-  elements.showGraphButton.disabled = !state.sessionId || state.graphLoading;
-  elements.showGraphButton.classList.toggle("is-pending", state.graphLoading);
-  elements.showGraphButton.textContent = state.graphLoading
-    ? "Rendering..."
-    : "Show Memory Graph";
-  elements.applySettingsButton.disabled = !state.sessionId || !hasPendingSettings;
-  elements.applySettingsButton.classList.toggle("is-pending", hasPendingSettings);
-  elements.applySettingsButton.textContent = !state.sessionId
-    ? "Apply to Current Session"
-    : hasPendingSettings
-      ? "Apply Settings"
-      : "Settings Applied";
-}
-
-function updateAuthActionState() {
-  const signedIn = Boolean(state.authUser);
-  elements.authUsernameInput.disabled = signedIn;
-  elements.authPasswordInput.disabled = signedIn;
-  elements.loginButton.disabled = signedIn;
-  elements.registerButton.disabled = signedIn;
-  elements.logoutButton.disabled = !signedIn;
-  elements.refreshSessionsButton.disabled = !signedIn;
-  elements.accountOpenSessionsButton.disabled = !signedIn;
-}
-
-function formatTimestamp(value) {
-  if (!value) {
-    return "Never";
-  }
-
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString();
-}
-
-function formatShortTimestamp(value) {
-  if (!value) {
-    return "New";
-  }
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) {
-    return value;
-  }
-  return parsed.toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function generatedSessionName(item) {
-  const settings = item?.configuration || {};
-  const kLabel = `${ENGINE_LABEL} K${normalizedMarkovOrder(
-    settings.markov_order,
-  )}`;
-  const timeLabel = formatShortTimestamp(item?.created_at || item?.last_seen_at);
-  const learnedCount = Number(item?.active_learned_phrase_count || 0);
-  const phraseCount = Number(item?.phrase_count || 0);
-  if (learnedCount > 0) {
-    return `Live ${pluralize(learnedCount, "phrase")} · ${kLabel} · ${timeLabel}`;
-  }
-  if (phraseCount > 0) {
-    return `Logged ${pluralize(phraseCount, "phrase")} · ${kLabel} · ${timeLabel}`;
-  }
-  return `Empty ${kLabel} · ${timeLabel}`;
-}
-
-function sessionDisplayName(item) {
-  const customName = item?.configuration?.display_name;
-  return typeof customName === "string" && customName.trim()
-    ? customName.trim()
-    : generatedSessionName(item);
-}
-
 function clearPhraseBuffers() {
   stopInfiniteMode({ stopPlayback: true, silent: true });
   stopPhraseGapCountdown();
@@ -3427,1387 +1536,6 @@ function clearCurrentSessionState(message = null) {
   }
 }
 
-function createSavedSessionsMarkup(items) {
-  if (!state.authUser) {
-    return `<p class="muted">Sign in to load your saved sessions.</p>`;
-  }
-  if (!items.length) {
-    return `<p class="muted">No saved sessions yet. Create one, play a phrase, and it will appear here.</p>`;
-  }
-
-  return items
-    .map((item) => {
-      const current = item.session_id === state.sessionId;
-      const previewed = item.session_id === state.previewedSavedSessionId;
-      const stateLabel = current ? "current" : item.loaded ? "live" : "saved";
-      const activityLabel = `${item.active_learned_phrase_count} learned active · ${item.phrase_count} logged`;
-      const resetLabel = item.last_reset_at
-        ? ` · Reset ${formatTimestamp(item.last_reset_at)}`
-        : "";
-      const settingsLabel = describeSessionSettings(item.configuration).join(" · ");
-      const preferenceLabel = describeSessionPreferences(item.configuration).join(" · ");
-      const detailLabel = [settingsLabel, preferenceLabel].filter(Boolean).join(" · ");
-      const displayName = sessionDisplayName(item);
-      return `
-        <div
-          class="history-item session-item ${current ? "is-selected" : ""} ${previewed ? "is-previewed" : ""}"
-          data-owned-session-id="${item.session_id}"
-        >
-          <button
-            class="session-preview-button"
-            data-owned-session-preview-id="${item.session_id}"
-            type="button"
-          >
-            <span class="history-kind">${stateLabel}</span>
-            <span class="history-meta">
-              <strong>${displayName}</strong>
-              <span>${activityLabel}</span>
-              <span>Seen ${formatTimestamp(item.last_seen_at)}${resetLabel}</span>
-              <span>${detailLabel}</span>
-            </span>
-          </button>
-          <button
-            class="ghost session-open-button"
-            data-owned-session-open-id="${item.session_id}"
-            type="button"
-            ${current ? "disabled" : ""}
-          >
-            ${current ? "Current" : "Open"}
-          </button>
-        </div>
-      `;
-    })
-    .join("");
-}
-
-function syncSavedSessionSelection() {
-  elements.mySessionsList.querySelectorAll("[data-owned-session-id]").forEach((node) => {
-    const sessionId = node.dataset.ownedSessionId;
-    const current = sessionId === state.sessionId;
-    const previewed = sessionId === state.previewedSavedSessionId;
-    node.classList.toggle("is-selected", current);
-    node.classList.toggle("is-previewed", previewed);
-    const openButton = node.querySelector("[data-owned-session-open-id]");
-    if (openButton) {
-      openButton.disabled = current;
-      openButton.textContent = current ? "Current" : "Open";
-    }
-  });
-  renderSavedSessionPreview();
-}
-
-function previewSavedSession(sessionId) {
-  const item = state.savedSessions.find((session) => session.session_id === sessionId);
-  if (!item) {
-    return;
-  }
-  state.previewedSavedSessionId = sessionId;
-  syncSavedSessionSelection();
-  setAuthMessage(
-    `${item.session_id === state.sessionId ? "Current session" : "Previewing"}: ${sessionDisplayName(item)}.`,
-  );
-}
-
-function selectedSavedSession() {
-  return state.savedSessions.find(
-    (session) => session.session_id === state.previewedSavedSessionId,
-  );
-}
-
-function renderSavedSessionPreview() {
-  const item = selectedSavedSession();
-  if (!elements.savedSessionPreview) {
-    return;
-  }
-  elements.savedSessionPreview.hidden = !item;
-  if (!item) {
-    return;
-  }
-
-  const current = item.session_id === state.sessionId;
-  elements.savedSessionPreviewName.textContent = sessionDisplayName(item);
-  elements.savedSessionNameInput.value = item.configuration?.display_name || "";
-  elements.savedSessionNameInput.placeholder = generatedSessionName(item);
-  elements.savedSessionPreviewOpenButton.disabled = current;
-  elements.savedSessionPreviewOpenButton.textContent = current ? "Current" : "Open";
-  elements.savedSessionPreviewMemory.textContent =
-    `${pluralize(item.active_learned_phrase_count, "learned phrase")} active`;
-  elements.savedSessionPreviewHistory.textContent =
-    `${pluralize(item.phrase_count, "logged phrase")} · ${pluralize(item.input_phrase_count, "input")}`;
-  elements.savedSessionPreviewSettings.textContent = [
-    describeSessionSettings(item.configuration).join(" · "),
-    describeSessionPreferences(item.configuration).join(" · "),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-  elements.savedSessionPreviewSeen.textContent =
-    `${formatTimestamp(item.last_seen_at)}${item.last_reset_at ? ` · Reset ${formatTimestamp(item.last_reset_at)}` : ""}`;
-}
-
-async function renamePreviewedSession() {
-  const item = selectedSavedSession();
-  if (!item) {
-    setAuthMessage("Select a saved session before renaming it.", true);
-    return;
-  }
-  const displayName = elements.savedSessionNameInput.value.trim();
-  if (!displayName) {
-    setAuthMessage("Enter a session name before saving.", true);
-    return;
-  }
-
-  const payload = await requestJson(`/api/my/sessions/${item.session_id}/name`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ display_name: displayName }),
-  });
-  item.configuration = payload.configuration;
-  item.last_seen_at = payload.updated_at;
-  if (item.session_id === state.sessionId) {
-    state.sessionConfiguration = payload.configuration;
-  }
-  renderSavedSessions(state.savedSessions);
-  setAuthMessage(`Renamed session to ${sessionDisplayName(item)}.`);
-}
-
-function updateSavedSessionConfiguration(sessionId, configuration, updatedAt = null) {
-  const item = state.savedSessions.find((session) => session.session_id === sessionId);
-  if (!item) {
-    return;
-  }
-  item.configuration = configuration;
-  if (updatedAt) {
-    item.last_seen_at = updatedAt;
-  }
-  renderSavedSessions(state.savedSessions);
-}
-
-function currentInputPreference() {
-  if (isVirtualMidiInputSelected()) {
-    return {
-      midi_input_id: VIRTUAL_MIDI_INPUT_ID,
-      midi_input_name: VIRTUAL_MIDI_INPUT_NAME,
-    };
-  }
-  if (!state.midiAccess || !state.activeInputId) {
-    return {};
-  }
-  const input = state.midiAccess.inputs.get(state.activeInputId);
-  if (!input) {
-    return {};
-  }
-  return {
-    midi_input_id: input.id,
-    midi_input_name: input.name || input.id,
-  };
-}
-
-function currentPlaybackPreference() {
-  return {
-    playback_choice: selectedPlaybackChoiceValue(),
-    playback_choice_name: playbackChoiceLabel(),
-  };
-}
-
-function currentMidiCopyOutputPreference() {
-  const outputId = selectedMidiCopyOutputId();
-  const output = midiOutputById(outputId);
-  return {
-    midi_copy_output_id: output?.id || null,
-    midi_copy_output_name: output ? output.name || output.id : null,
-  };
-}
-
-function currentSessionPreferences() {
-  return {
-    ...currentInputPreference(),
-    ...currentPlaybackPreference(),
-    ...currentMidiCopyOutputPreference(),
-  };
-}
-
-async function saveSessionPreferences(preferences) {
-  if (preferences?.playback_choice) {
-    rememberPlaybackPreference(preferences);
-  }
-  if (
-    preferences &&
-    Object.prototype.hasOwnProperty.call(preferences, "midi_copy_output_id")
-  ) {
-    rememberMidiCopyOutputPreference(preferences);
-  }
-  if (!state.sessionId || !preferences || !Object.keys(preferences).length) {
-    return null;
-  }
-
-  const payload = await requestJson(`/api/sessions/${state.sessionId}/preferences`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(preferences),
-  });
-  state.sessionConfiguration = payload.configuration;
-  updateSavedSessionConfiguration(payload.session_id, payload.configuration, payload.updated_at);
-  return payload;
-}
-
-function attachSavedSessionEvents() {
-  elements.mySessionsList.querySelectorAll("[data-owned-session-preview-id]").forEach((node) => {
-    node.addEventListener("click", () => {
-      previewSavedSession(node.dataset.ownedSessionPreviewId);
-    });
-  });
-
-  elements.mySessionsList.querySelectorAll("[data-owned-session-open-id]").forEach((node) => {
-    node.addEventListener("click", async () => {
-      try {
-        await openSavedSession(node.dataset.ownedSessionOpenId);
-      } catch (error) {
-        setAuthMessage(error.message, true);
-      }
-    });
-  });
-}
-
-function renderSavedSessions(items) {
-  state.savedSessions = items;
-  if (state.authUser) {
-    refreshUserPlaybackPreferenceFromSavedSessions(items);
-  }
-  if (
-    state.previewedSavedSessionId &&
-    !items.some((item) => item.session_id === state.previewedSavedSessionId)
-  ) {
-    state.previewedSavedSessionId = null;
-  }
-  elements.mySessionsList.innerHTML = createSavedSessionsMarkup(items);
-  elements.savedSessionCount.textContent = state.authUser
-    ? `${items.length} saved`
-    : "Guest mode";
-  elements.savedSessionsCopy.textContent = state.authUser
-    ? "Select a session to preview its details, then open it when you want to load its memory."
-    : "Sign in to reopen sessions saved under your account.";
-  renderAccountTrigger();
-  attachSavedSessionEvents();
-  syncSavedSessionSelection();
-}
-
-function syncAuthUI() {
-  const user = state.authUser;
-  renderAccountTrigger();
-  elements.accountPanelCopy.textContent = user
-    ? "Manage your signed-in account here, then jump to your saved sessions when you want to reopen a prior memory."
-    : "Guest mode works immediately. Sign in only if you want your sessions saved and reopenable.";
-  elements.authUserName.textContent = user ? user.username : "Not signed in";
-  elements.authSignedOutPanel.hidden = Boolean(user);
-  elements.authSignedInPanel.hidden = !user;
-  elements.authPasswordInput.value = "";
-  setAuthMessage(
-    user
-      ? `Signed in as ${user.username}. New sessions will be saved under this account.`
-      : "Guest mode is ready. Sign in only if you want saved sessions.",
-  );
-  renderPerformanceState();
-  updateAuthActionState();
-  updateSessionActionState();
-}
-
-function setControlView(view) {
-  state.activeControlView = view;
-  elements.controlTabs.forEach((node) => {
-    const active = node.dataset.controlTab === view;
-    node.classList.toggle("is-active", active);
-    node.setAttribute("aria-selected", String(active));
-  });
-  elements.controlPanels.forEach((node) => {
-    node.hidden = node.dataset.controlPanel !== view;
-  });
-}
-
-function syncPreviewSelection() {
-  elements.historyList.querySelectorAll("[data-history-index]").forEach((node) => {
-    node.classList.toggle(
-      "is-selected",
-      Number(node.dataset.historyIndex) === state.previewedHistoryIndex,
-    );
-  });
-
-  const isSelectedMemoryIndex = (node) =>
-    Number(node.dataset.memoryIndex) === state.previewedMemoryIndex;
-
-  elements.memoryList.querySelectorAll("[data-memory-index]").forEach((node) => {
-    node.classList.toggle("is-selected", isSelectedMemoryIndex(node));
-  });
-
-  elements.memoryRibbon.querySelectorAll("[data-memory-index]").forEach((node) => {
-    node.classList.toggle("is-selected", isSelectedMemoryIndex(node));
-  });
-
-  syncMemoryPlaybackState();
-}
-
-function syncMemoryPlaybackState() {
-  elements.memoryList.querySelectorAll("[data-memory-index]").forEach((node) => {
-    const memoryIndex = Number(node.dataset.memoryIndex);
-    const isPlaying = memoryIndex === state.activeMemoryPlaybackIndex;
-    node.classList.toggle("is-playing", isPlaying);
-    const playButton = node.querySelector("[data-memory-play-index]");
-    if (playButton) {
-      playButton.textContent = isPlaying ? "Stop" : "Play";
-      playButton.classList.toggle("danger-button", isPlaying);
-      playButton.setAttribute("aria-pressed", String(isPlaying));
-      playButton.title = isPlaying ? "Stop this memory phrase" : "Play this memory phrase";
-    }
-  });
-}
-
-function revealPreviewTarget(kind) {
-  const target = kind === "generated" ? elements.outputRoll : elements.inputRoll;
-  elements.inputRoll.classList.remove("is-previewing");
-  elements.outputRoll.classList.remove("is-previewing");
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
-  void target.offsetWidth;
-  target.classList.add("is-previewing");
-  if (state.previewPulseTimeoutId) {
-    window.clearTimeout(state.previewPulseTimeoutId);
-  }
-  state.previewPulseTimeoutId = window.setTimeout(() => {
-    target.classList.remove("is-previewing");
-    state.previewPulseTimeoutId = null;
-  }, 900);
-}
-
-function previewPhrasePayload(payload, kind, message) {
-  if (kind === "generated") {
-    rememberGeneratedPhrase(payload);
-    renderGeneratedStats(payload);
-  } else {
-    rememberCapturedPhrase(payload.events, payload.notes);
-    renderCapturedStats(payload.events, payload.notes, true);
-  }
-  setPhraseMessage(message);
-  revealPreviewTarget(kind);
-}
-
-function renderCapturedStats(events, notes, completed) {
-  elements.capturedEventCount.textContent = String(events.length);
-  elements.capturedNoteCount.textContent = String(notes.length);
-  setPhraseStatus(completed ? "Phrase ready" : "Listening");
-  drawPianoRoll(elements.inputRoll, notes, "#6dd3ce", "Input phrase");
-  syncRollPlaybackState();
-}
-
-function stopCapturedPreviewRender() {
-  if (state.capturePreviewTimerId != null) {
-    window.clearTimeout(state.capturePreviewTimerId);
-    state.capturePreviewTimerId = null;
-  }
-  state.pendingCapturePreviewNotes = null;
-  state.lastCapturePreviewAtMs = 0;
-}
-
-function scheduleCapturedPreviewRender(notes) {
-  state.pendingCapturePreviewNotes = notes;
-  if (state.capturePreviewTimerId != null || !notes?.length) {
-    return;
-  }
-
-  const elapsedMs = window.performance.now() - state.lastCapturePreviewAtMs;
-  const delayMs = Math.max(0, CAPTURE_PREVIEW_INTERVAL_MS - elapsedMs);
-  state.capturePreviewTimerId = window.setTimeout(() => {
-    state.capturePreviewTimerId = null;
-    const previewNotes = state.pendingCapturePreviewNotes;
-    state.pendingCapturePreviewNotes = null;
-    state.lastCapturePreviewAtMs = window.performance.now();
-    if (!previewNotes?.length) {
-      return;
-    }
-    drawPianoRoll(
-      elements.inputRoll,
-      previewNotes,
-      "#6dd3ce",
-      "Capturing input phrase",
-    );
-  }, delayMs);
-}
-
-function renderCapturedProgress(eventCount, noteCount, notes) {
-  elements.capturedEventCount.textContent = String(eventCount);
-  elements.capturedNoteCount.textContent = String(noteCount);
-  setPhraseStatus("Listening");
-  if (eventCount === 1) {
-    stopCapturedPreviewRender();
-    drawPianoRoll(elements.inputRoll, [], "#6dd3ce", "Capturing input phrase");
-    syncRollPlaybackState();
-  }
-  scheduleCapturedPreviewRender(notes);
-}
-
-function renderGeneratedStats(payload) {
-  const notes = payloadNotes(payload);
-  elements.generatedEventCount.textContent = String(payload?.event_count || 0);
-  elements.generatedNoteCount.textContent = String(payload?.note_count || notes.length);
-  drawPianoRoll(
-    elements.outputRoll,
-    notes,
-    "#f4a261",
-    "Generated continuation",
-  );
-  syncRollPlaybackState();
-}
-
-function capturedRollPayload() {
-  const events = state.lastCapturedPhrase;
-  if (!events?.length) {
-    return null;
-  }
-  const notes = state.lastCapturedNotes;
-  if (!notes.length) {
-    return null;
-  }
-  return {
-    event_count: events.length,
-    note_count: notes.length,
-    duration_seconds: (state.lastCaptureDurationMs || 0) / 1000,
-    events,
-    notes,
-  };
-}
-
-function rollPayload(kind) {
-  return kind === "input" ? capturedRollPayload() : state.lastGeneratedPhrase;
-}
-
-function rollCanvas(kind) {
-  return kind === "input" ? elements.inputRoll : elements.outputRoll;
-}
-
-function rollSourceLabel(kind) {
-  return kind === "input" ? "captured phrase" : "generated continuation";
-}
-
-function rollAccent(kind) {
-  return kind === "input" ? "#6dd3ce" : "#f4a261";
-}
-
-function rollEmptyLabel(kind) {
-  return kind === "input" ? "Input phrase" : "Generated continuation";
-}
-
-function rollAuditionOptions(kind) {
-  const audition = state.activeRollAudition;
-  if (!audition || audition.kind !== kind) {
-    return {};
-  }
-  return {
-    highlightedNoteIndex: audition.noteIndex,
-    noteProgressRatio: audition.progressRatio,
-  };
-}
-
-function renderRollCanvas(kind, options = {}) {
-  drawPianoRoll(
-    rollCanvas(kind),
-    payloadNotes(rollPayload(kind)),
-    rollAccent(kind),
-    rollEmptyLabel(kind),
-    {
-      ...rollAuditionOptions(kind),
-      ...options,
-    },
-  );
-}
-
-function rollDefaultTitle(kind) {
-  if (state.activeRollPlaybackKind === kind) {
-    return `Click to stop the ${rollSourceLabel(kind)}`;
-  }
-  if (!rollPayload(kind)?.events?.length) {
-    return kind === "input"
-      ? "No captured phrase is available yet"
-      : "No generated continuation is available yet";
-  }
-  return `Click a note to audition it, or click empty space to play the ${rollSourceLabel(kind)}`;
-}
-
-function pianoRollNoteHitFromEvent(kind, event) {
-  const payload = rollPayload(kind);
-  const notes = payloadNotes(payload);
-  if (!notes.length) {
-    return null;
-  }
-
-  const canvas = rollCanvas(kind);
-  const point = pianoRollEventPoint(canvas, event);
-  if (!point) {
-    return null;
-  }
-
-  const noteRects = pianoRollNoteRects(point.width, point.height, notes);
-  for (let index = noteRects.length - 1; index >= 0; index -= 1) {
-    const noteRect = noteRects[index];
-    const left = noteRect.x - ROLL_NOTE_HIT_PADDING_PX;
-    const right = noteRect.x + noteRect.width + ROLL_NOTE_HIT_PADDING_PX;
-    const top = noteRect.y - ROLL_NOTE_HIT_PADDING_PX;
-    const bottom = noteRect.y + noteRect.height + ROLL_NOTE_HIT_PADDING_PX;
-    if (
-      point.x >= left &&
-      point.x <= right &&
-      point.y >= top &&
-      point.y <= bottom
-    ) {
-      return noteRect;
-    }
-  }
-
-  return null;
-}
-
-function syncRollPlaybackState() {
-  elements.inputRoll.classList.toggle(
-    "is-roll-playing",
-    state.activeRollPlaybackKind === "input",
-  );
-  elements.outputRoll.classList.toggle(
-    "is-roll-playing",
-    state.activeRollPlaybackKind === "output",
-  );
-  elements.inputRoll.title = rollDefaultTitle("input");
-  elements.outputRoll.title = rollDefaultTitle("output");
-  elements.inputRoll.setAttribute(
-    "aria-pressed",
-    String(state.activeRollPlaybackKind === "input"),
-  );
-  elements.outputRoll.setAttribute(
-    "aria-pressed",
-    String(state.activeRollPlaybackKind === "output"),
-  );
-}
-
-async function toggleRollPlayback(kind) {
-  const payload = rollPayload(kind);
-  if (!payload?.events?.length) {
-    setPhraseMessage(
-      kind === "input"
-        ? "No captured phrase is available to play yet."
-        : "No generated continuation is available to play yet.",
-      true,
-    );
-    return;
-  }
-
-  if (state.activeRollPlaybackKind === kind) {
-    stopActivePlayback();
-    setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
-    setPhraseMessage(
-      kind === "input"
-        ? "Stopped the captured phrase."
-        : "Stopped the generated continuation.",
-    );
-    return;
-  }
-
-  stopInfiniteMode({ stopPlayback: true, silent: true });
-  await playPayload(payload, {
-    visualizationRoll: kind === "input" ? "input" : "output",
-  });
-  state.activeRollPlaybackKind = kind;
-  syncRollPlaybackState();
-  setPhraseMessage(
-    kind === "input"
-      ? "Playing the captured phrase from the piano roll."
-      : "Playing the generated continuation from the piano roll.",
-  );
-}
-
-async function handleRollClick(kind, event) {
-  const noteHit = pianoRollNoteHitFromEvent(kind, event);
-  if (noteHit) {
-    await auditionRollNote(kind, noteHit);
-    return;
-  }
-
-  if (state.activeRollPlaybackKind === kind) {
-    await toggleRollPlayback(kind);
-    return;
-  }
-
-  await toggleRollPlayback(kind);
-}
-
-function updateRollPointerTitle(kind, event) {
-  if (state.activeRollPlaybackKind === kind) {
-    rollCanvas(kind).title = rollDefaultTitle(kind);
-    return;
-  }
-
-  const noteHit = pianoRollNoteHitFromEvent(kind, event);
-  rollCanvas(kind).title = noteHit
-    ? `Click to audition ${midiNoteName(noteHit.note.pitch)} from the ${rollSourceLabel(kind)}`
-    : rollDefaultTitle(kind);
-}
-
-async function handleRollKeydown(kind, event) {
-  if (event.key !== "Enter" && event.key !== " ") {
-    return;
-  }
-  event.preventDefault();
-  await toggleRollPlayback(kind);
-}
-
-function createHistoryMarkup(items) {
-  if (!items.length) {
-    if (!state.sessionId) {
-      return `<p class="muted">Create a session to start building history. Sign in if you want it saved under your account.</p>`;
-    }
-    return `<p class="muted">No phrases logged yet for this session.</p>`;
-  }
-
-  return items
-    .map(
-      (item, index) => `
-        <button class="history-item" data-history-index="${index}" type="button">
-          <span class="history-kind">${item.kind}</span>
-          <span class="history-meta">
-            <strong>${item.note_count} notes / ${item.event_count} events</strong>
-            <span>${item.created_at}</span>
-          </span>
-          <span class="history-index">open</span>
-        </button>
-      `,
-    )
-    .join("");
-}
-
-function attachHistoryEvents() {
-  elements.historyList.querySelectorAll("[data-history-index]").forEach((node) => {
-    node.addEventListener("click", () => {
-      const historyIndex = Number(node.dataset.historyIndex);
-      const item = state.historyItems[historyIndex];
-      if (!item) {
-        return;
-      }
-
-      state.previewedHistoryIndex = historyIndex;
-      state.previewedMemoryIndex = null;
-      syncPreviewSelection();
-      previewPhrasePayload(item.payload, item.kind, `Previewing ${item.kind} phrase from ${item.created_at}.`);
-    });
-  });
-}
-
-function renderHistory(items) {
-  state.historyItems = items;
-  elements.historyList.innerHTML = createHistoryMarkup(items);
-  attachHistoryEvents();
-  syncPreviewSelection();
-}
-
-function createMemorySummaryMarkup(memory) {
-  if (!memory) {
-    return `<span class="settings-chip">No style memory yet</span>`;
-  }
-
-  const chips = [
-    `${memory.summary.active_phrase_count} active`,
-    `${memory.summary.live_phrase_count} live`,
-  ];
-  if (memory.summary.seeded_phrase_count) {
-    chips.push(`${memory.summary.seeded_phrase_count} seed`);
-  }
-  chips.push(
-    `${ENGINE_LABEL} / K=${memory.configuration.markov_order}`,
-  );
-
-  return chips.map((label) => `<span class="settings-chip">${label}</span>`).join("");
-}
-
-function createMemoryHint(memory) {
-  if (!memory) {
-    return "Create or open a session and play a phrase to build the Continuator style memory.";
-  }
-  if (!memory.summary.active_phrase_count) {
-    return memory.configuration.transposition
-      ? "No style phrases yet. Transposed variants will appear here after learning."
-      : "No style phrases yet. Play a phrase to start filling the Continuator vocabulary.";
-  }
-  return "";
-}
-
-function createMemoryRibbonMarkup(items) {
-  if (!items.length) {
-    return "";
-  }
-
-  return items
-    .map((item, index) => {
-      const opacity = roundNumber(0.3 + ((index + 1) / items.length) * 0.6);
-      return `
-        <button
-          class="memory-ribbon-cell ${item.source}"
-          data-memory-index="${index}"
-          type="button"
-          title="Slot ${item.slot}: ${item.note_count} notes"
-          style="opacity: ${opacity};"
-        ></button>
-      `;
-    })
-    .join("");
-}
-
-function createMemoryMarkup(items) {
-  if (!items.length) {
-    return `<p class="muted">No style memory to show yet.</p>`;
-  }
-
-  return items
-    .slice()
-    .reverse()
-    .map((item) => {
-      const itemLabel = item.source === "seed" ? "Seed" : "Live";
-      const deleteButton = item.deletable
-        ? `
-            <button class="ghost danger-button memory-delete-button" data-memory-delete-index="${item.slot - 1}" type="button">
-              Delete
-            </button>
-          `
-        : "";
-      return `
-        <div class="history-item memory-item" data-memory-index="${item.slot - 1}">
-          <button class="memory-preview-button" data-memory-preview-index="${item.slot - 1}" type="button">
-            <span class="memory-card-head">
-              <span class="history-kind">${itemLabel} #${item.slot}</span>
-              <strong class="memory-primary">${item.note_count} notes</strong>
-            </span>
-            ${createMemoryThumbnailMarkup(item)}
-            <span class="memory-detail">${formatDurationSeconds(item.duration_seconds)}</span>
-          </button>
-          <div class="memory-actions ${item.deletable ? "has-delete" : ""}">
-            <button class="ghost memory-play-button" data-memory-play-index="${item.slot - 1}" type="button">
-              Play
-            </button>
-            <button class="ghost memory-seed-button" data-memory-seed-index="${item.slot - 1}" type="button">
-              Seed
-            </button>
-            ${deleteButton}
-          </div>
-        </div>
-      `;
-    })
-    .join("");
-}
-
-function createMemoryThumbnailMarkup(item) {
-  const notes = item?.payload?.notes?.length
-    ? item.payload.notes
-    : eventsToNotes(item?.payload?.events || []);
-  if (!notes.length) {
-    return `<span class="memory-thumbnail" aria-hidden="true"></span>`;
-  }
-
-  const minPitch = Math.min(...notes.map((note) => note.pitch));
-  const maxPitch = Math.max(...notes.map((note) => note.pitch));
-  const pitchRange = Math.max(1, maxPitch - minPitch);
-  const duration = Math.max(
-    0.1,
-    ...notes.map((note) => note.end_seconds || note.start_seconds + note.duration_seconds),
-  );
-  const bars = notes
-    .slice(0, 18)
-    .map((note) => {
-      const start = Math.max(0, Math.min(96, (note.start_seconds / duration) * 100));
-      const width = Math.max(7, Math.min(100 - start, (Math.max(0.05, note.duration_seconds) / duration) * 100));
-      const y = 74 - ((note.pitch - minPitch) / pitchRange) * 58;
-      return `<span style="left:${roundNumber(start)}%;top:${roundNumber(y)}%;width:${roundNumber(width)}%;"></span>`;
-    })
-    .join("");
-  return `<span class="memory-thumbnail" aria-hidden="true">${bars}</span>`;
-}
-
-function attachMemoryEvents() {
-  const previewMemoryIndex = (rawIndex) => {
-    const memoryIndex = Number(rawIndex);
-    const item = state.memoryItems[memoryIndex];
-    if (!item) {
-      return;
-    }
-    state.previewedMemoryIndex = memoryIndex;
-    state.previewedHistoryIndex = null;
-    syncPreviewSelection();
-    previewPhrasePayload(
-      item.payload,
-      "input",
-      `Opened ${item.source} memory slot ${item.slot} in Captured Phrase.`,
-    );
-  };
-
-  const playMemoryIndex = async (rawIndex) => {
-    const memoryIndex = Number(rawIndex);
-    const item = state.memoryItems[memoryIndex];
-    if (memoryIndex === state.activeMemoryPlaybackIndex) {
-      stopActivePlayback();
-      setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
-      setPhraseMessage(`Stopped ${item?.source || "memory"} memory slot ${item?.slot || memoryIndex + 1}.`);
-      return;
-    }
-    if (!item?.payload?.events?.length) {
-      setPhraseMessage("That memory phrase has no playable events.", true);
-      return;
-    }
-    previewMemoryIndex(rawIndex);
-    try {
-      stopInfiniteMode({ stopPlayback: true, silent: true });
-      await playPayload(item.payload);
-      state.activeMemoryPlaybackIndex = memoryIndex;
-      syncMemoryPlaybackState();
-      setPhraseMessage(`Playing ${item.source} memory slot ${item.slot}.`);
-    } catch (error) {
-      setPhraseMessage(error.message, true);
-    }
-  };
-
-  const seedMemoryIndex = (rawIndex) => {
-    const memoryIndex = Number(rawIndex);
-    const item = state.memoryItems[memoryIndex];
-    if (!item?.payload?.events?.length) {
-      setPhraseMessage("That memory phrase has no seedable events.", true);
-      return;
-    }
-    previewMemoryIndex(rawIndex);
-    stopInfiniteMode({ stopPlayback: true, silent: true });
-    state.lastGeneratedPhrase = null;
-    state.lastGeneratedAt = 0;
-    state.queuedPlaybackPayload = null;
-    state.currentPlaybackPayload = null;
-    state.activeMemoryPlaybackIndex = null;
-    renderGeneratedStats(null);
-    syncMemoryPlaybackState();
-    updateInfiniteActionState();
-    renderPerformanceState();
-    setPhraseMessage(`Using ${item.source} memory slot ${item.slot} as the infinite-mode seed.`);
-  };
-
-  const deleteMemoryIndex = async (rawIndex) => {
-    const memoryIndex = Number(rawIndex);
-    const item = state.memoryItems[memoryIndex];
-    if (!item) {
-      return;
-    }
-    if (!item.deletable) {
-      setPhraseMessage("That memory phrase cannot be deleted from this session.", true);
-      return;
-    }
-    const confirmed = window.confirm(
-      `Delete ${item.source} memory slot ${item.slot} from the active memory?`,
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    try {
-      stopInfiniteMode({ stopPlayback: true, silent: true });
-      stopActivePlayback();
-      state.previewedMemoryIndex = null;
-      setPhraseStatus("Updating memory");
-      setPhraseMessage(`Deleting memory slot ${item.slot} and rebuilding the active memory...`);
-      const payload = await requestJson(
-        `/api/sessions/${state.sessionId}/memory/${item.slot}`,
-        { method: "DELETE" },
-      );
-      renderMemory(payload);
-      await refreshSavedSessions();
-      setPhraseStatus("Memory updated");
-      setPhraseMessage(`Deleted memory slot ${item.slot}. Active memory was rebuilt.`);
-    } catch (error) {
-      setPhraseMessage(error.message, true);
-      setPhraseStatus("Error");
-    }
-  };
-
-  elements.memoryList.querySelectorAll("[data-memory-preview-index]").forEach((node) => {
-    node.addEventListener("click", () => {
-      previewMemoryIndex(node.dataset.memoryPreviewIndex);
-    });
-  });
-
-  elements.memoryList.querySelectorAll("[data-memory-play-index]").forEach((node) => {
-    node.addEventListener("click", () => {
-      void playMemoryIndex(node.dataset.memoryPlayIndex);
-    });
-  });
-
-  elements.memoryList.querySelectorAll("[data-memory-seed-index]").forEach((node) => {
-    node.addEventListener("click", () => {
-      seedMemoryIndex(node.dataset.memorySeedIndex);
-    });
-  });
-
-  elements.memoryList.querySelectorAll("[data-memory-delete-index]").forEach((node) => {
-    node.addEventListener("click", () => {
-      void deleteMemoryIndex(node.dataset.memoryDeleteIndex);
-    });
-  });
-
-  elements.memoryRibbon.querySelectorAll("[data-memory-index]").forEach((node) => {
-    node.addEventListener("click", () => {
-      previewMemoryIndex(node.dataset.memoryIndex);
-    });
-  });
-}
-
-function renderMemory(memory) {
-  state.memoryItems = memory?.items || [];
-  elements.memorySummary.innerHTML = createMemorySummaryMarkup(memory);
-  const memoryHint = createMemoryHint(memory);
-  elements.memoryHint.textContent = memoryHint;
-  elements.memoryHint.hidden = !memoryHint;
-  elements.memoryRibbon.innerHTML = createMemoryRibbonMarkup(state.memoryItems);
-  elements.memoryList.innerHTML = createMemoryMarkup(state.memoryItems);
-  attachMemoryEvents();
-  syncPreviewSelection();
-}
-
-function pianoRollCanvasSize(canvas) {
-  const rect = canvas.getBoundingClientRect();
-  return {
-    rect,
-    width: Math.max(320, Math.floor(rect.width || 640)),
-    height: Math.max(180, Math.floor(rect.height || 244)),
-  };
-}
-
-function pianoRollNoteRects(width, height, notes) {
-  if (!notes?.length) {
-    return [];
-  }
-
-  const minPitch = Math.max(24, Math.min(...notes.map((note) => note.pitch)) - 2);
-  const maxPitch = Math.min(108, Math.max(...notes.map((note) => note.pitch)) + 2);
-  const totalDuration = pianoRollDurationSeconds(notes);
-  const pitchRange = Math.max(1, maxPitch - minPitch + 1);
-
-  return notes.map((note, index) => {
-    const noteEndSeconds = note.end_seconds || note.start_seconds + note.duration_seconds;
-    const x = (note.start_seconds / totalDuration) * width;
-    const noteWidth = Math.max(
-      8,
-      (Math.max(0.05, note.duration_seconds) / totalDuration) * width,
-    );
-    const y =
-      height - ((note.pitch - minPitch + 1) / pitchRange) * (height - 24) - 10;
-    const noteHeight = Math.max(10, (height - 34) / pitchRange + 4);
-    return {
-      index,
-      note,
-      noteEndSeconds,
-      x: x + 2,
-      y,
-      width: noteWidth,
-      height: noteHeight,
-    };
-  });
-}
-
-function pianoRollEventPoint(canvas, event) {
-  const { rect, width, height } = pianoRollCanvasSize(canvas);
-  if (!rect.width || !rect.height) {
-    return null;
-  }
-  return {
-    x: ((event.clientX - rect.left) / rect.width) * width,
-    y: ((event.clientY - rect.top) / rect.height) * height,
-    width,
-    height,
-  };
-}
-
-function drawPianoRoll(canvas, notes, accent, emptyLabel, options = {}) {
-  const { width, height } = pianoRollCanvasSize(canvas);
-  const denseRoll = notes?.length >= ROLL_DENSE_NOTE_THRESHOLD;
-  const devicePixelRatio = window.devicePixelRatio || 1;
-  const dpr = denseRoll
-    ? Math.min(devicePixelRatio, ROLL_DENSE_MAX_DPR)
-    : devicePixelRatio;
-  const pixelWidth = Math.round(width * dpr);
-  const pixelHeight = Math.round(height * dpr);
-  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
-    canvas.width = pixelWidth;
-    canvas.height = pixelHeight;
-  }
-
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-
-  const background = ctx.createLinearGradient(0, 0, 0, height);
-  background.addColorStop(0, "rgba(255, 255, 255, 0.06)");
-  background.addColorStop(1, "rgba(255, 255, 255, 0.015)");
-  ctx.fillStyle = background;
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.06)";
-  ctx.lineWidth = 1;
-  for (let index = 1; index < 8; index += 1) {
-    const x = (index / 8) * width;
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, height);
-    ctx.stroke();
-  }
-  for (let index = 1; index < 6; index += 1) {
-    const y = (index / 6) * height;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(width, y);
-    ctx.stroke();
-  }
-
-  if (!notes?.length) {
-    ctx.fillStyle = "rgba(236, 244, 239, 0.45)";
-    ctx.font = '600 14px "Avenir Next", "Segoe UI Variable", sans-serif';
-    ctx.fillText(emptyLabel, 20, height / 2);
-    return;
-  }
-
-  const totalDuration = pianoRollDurationSeconds(notes);
-  const noteRects = pianoRollNoteRects(width, height, notes);
-
-  const playbackSeconds =
-    Number.isFinite(Number(options.playbackSeconds)) ? Number(options.playbackSeconds) : null;
-  let highlightedNoteRect = null;
-
-  if (denseRoll) {
-    const emphasizedNoteRects = [];
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = accent;
-    for (const noteRect of noteRects) {
-      const { note, noteEndSeconds } = noteRect;
-      const isPlaying =
-        playbackSeconds != null &&
-        playbackSeconds >= note.start_seconds &&
-        playbackSeconds <= noteEndSeconds;
-      const isHighlighted = noteRect.index === options.highlightedNoteIndex;
-      if (isHighlighted) {
-        highlightedNoteRect = noteRect;
-      }
-      if (isPlaying || isHighlighted) {
-        emphasizedNoteRects.push({ noteRect, isPlaying, isHighlighted });
-        continue;
-      }
-      ctx.fillRect(
-        noteRect.x,
-        noteRect.y,
-        noteRect.width,
-        noteRect.height,
-      );
-    }
-
-    for (const { noteRect, isPlaying, isHighlighted } of emphasizedNoteRects) {
-      ctx.fillStyle = isPlaying ? "#fff5d4" : "#f9dcc4";
-      ctx.shadowBlur = 10;
-      ctx.shadowColor = isPlaying
-        ? "rgba(255, 245, 212, 0.72)"
-        : "rgba(249, 220, 196, 0.62)";
-      roundRect(
-        ctx,
-        noteRect.x,
-        noteRect.y,
-        noteRect.width,
-        noteRect.height,
-        8,
-        true,
-      );
-      if (isHighlighted && !isPlaying) {
-        ctx.shadowBlur = 0;
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.66)";
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-    }
-  } else {
-    for (const noteRect of noteRects) {
-      const { note, noteEndSeconds } = noteRect;
-      const isPlaying =
-        playbackSeconds != null &&
-        playbackSeconds >= note.start_seconds &&
-        playbackSeconds <= noteEndSeconds;
-      const isHighlighted = noteRect.index === options.highlightedNoteIndex;
-      if (isHighlighted) {
-        highlightedNoteRect = noteRect;
-      }
-      ctx.fillStyle = isPlaying ? "#fff5d4" : isHighlighted ? "#f9dcc4" : accent;
-      ctx.shadowBlur = isPlaying ? 26 : isHighlighted ? 24 : 18;
-      ctx.shadowColor = isPlaying
-        ? "rgba(255, 245, 212, 0.82)"
-        : isHighlighted
-          ? "rgba(249, 220, 196, 0.72)"
-          : accent;
-      roundRect(
-        ctx,
-        noteRect.x,
-        noteRect.y,
-        noteRect.width,
-        noteRect.height,
-        8,
-        true,
-      );
-      if (isHighlighted && !isPlaying) {
-        ctx.shadowBlur = 0;
-        ctx.strokeStyle = "rgba(255, 255, 255, 0.66)";
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
-      }
-    }
-  }
-
-  ctx.shadowBlur = 0;
-
-  if (
-    highlightedNoteRect &&
-    Number.isFinite(Number(options.noteProgressRatio))
-  ) {
-    const progressRatio = Math.min(
-      1,
-      Math.max(0, Number(options.noteProgressRatio)),
-    );
-    const cursorX = highlightedNoteRect.x + highlightedNoteRect.width * progressRatio;
-    ctx.strokeStyle = "rgba(255, 245, 212, 0.95)";
-    ctx.lineWidth = 2;
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = "rgba(255, 245, 212, 0.62)";
-    ctx.beginPath();
-    ctx.moveTo(cursorX, highlightedNoteRect.y - 7);
-    ctx.lineTo(
-      cursorX,
-      highlightedNoteRect.y + highlightedNoteRect.height + 7,
-    );
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = "rgba(255, 245, 212, 0.98)";
-    ctx.beginPath();
-    ctx.arc(cursorX, highlightedNoteRect.y - 7, 3.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  const playbackProgressRatio = Number.isFinite(Number(playbackSeconds))
-    ? playbackSeconds / totalDuration
-    : Number(options.progressRatio);
-  if (Number.isFinite(playbackProgressRatio)) {
-    const progressRatio = Math.min(1, Math.max(0, playbackProgressRatio));
-    const x = Math.round(progressRatio * width) + 0.5;
-    ctx.strokeStyle = "rgba(255, 245, 212, 0.86)";
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(x, 10);
-    ctx.lineTo(x, height - 10);
-    ctx.stroke();
-    ctx.fillStyle = "rgba(255, 245, 212, 0.92)";
-    ctx.beginPath();
-    ctx.moveTo(x, 8);
-    ctx.lineTo(x - 5, 0);
-    ctx.lineTo(x + 5, 0);
-    ctx.closePath();
-    ctx.fill();
-  }
-}
-
-function pianoRollDurationSeconds(notes) {
-  const phraseDurationSeconds = Math.max(
-    0,
-    ...notes.map((note) => note.end_seconds || note.start_seconds + note.duration_seconds),
-  );
-  const endMarginSeconds = Math.min(
-    ROLL_END_MARGIN_MAX_SECONDS,
-    Math.max(
-      ROLL_END_MARGIN_MIN_SECONDS,
-      phraseDurationSeconds * ROLL_END_MARGIN_RATIO,
-    ),
-  );
-  return Math.max(2, phraseDurationSeconds + endMarginSeconds);
-}
-
-function payloadNotes(payload) {
-  const notes = Array.isArray(payload?.notes)
-    ? payload.notes.filter(
-        (note) =>
-          Number.isFinite(Number(note?.pitch)) &&
-          Number.isFinite(Number(note?.start_seconds)) &&
-          Number.isFinite(Number(note?.duration_seconds)),
-      )
-    : [];
-  return notes.length ? notes : eventsToNotes(payload?.events || []);
-}
-
-function roundRect(ctx, x, y, width, height, radius, fill) {
-  const r = Math.min(radius, width / 2, height / 2);
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + width, y, x + width, y + height, r);
-  ctx.arcTo(x + width, y + height, x, y + height, r);
-  ctx.arcTo(x, y + height, x, y, r);
-  ctx.arcTo(x, y, x + width, y, r);
-  ctx.closePath();
-  if (fill) {
-    ctx.fill();
-  }
-}
-
-function eventsToNotes(events) {
-  const notes = [];
-  const pending = new Map();
-  let currentTime = 0;
-
-  for (const event of events) {
-    currentTime += event.delta_seconds;
-    const key = `${event.channel}:${event.note}`;
-
-    if (event.type === "note_on" && event.velocity > 0) {
-      const stack = pending.get(key) || [];
-      stack.push({
-        note: event.note,
-        channel: event.channel,
-        velocity: event.velocity,
-        start_seconds: currentTime,
-      });
-      pending.set(key, stack);
-      continue;
-    }
-
-    const stack = pending.get(key);
-    if (!stack?.length) {
-      continue;
-    }
-
-    const noteOn = stack.shift();
-    notes.push({
-      pitch: noteOn.note,
-      channel: noteOn.channel,
-      velocity: noteOn.velocity,
-      start_seconds: roundNumber(noteOn.start_seconds),
-      duration_seconds: roundNumber(Math.max(0, currentTime - noteOn.start_seconds)),
-      end_seconds: roundNumber(currentTime),
-    });
-    if (!stack.length) {
-      pending.delete(key);
-    }
-  }
-
-  notes.sort(
-    (left, right) =>
-      left.start_seconds - right.start_seconds || left.pitch - right.pitch,
-  );
-  return notes;
-}
-
-async function refreshAuthState() {
-  const payload = await requestJson("/api/auth/me");
-  state.authUser = payload?.user || null;
-  state.userMidiCopyOutputPreference = loadStoredMidiCopyOutputPreference();
-  state.userAudioOutputPreference = loadStoredAudioOutputPreference();
-  populateAudioOutputChoices();
-  await applyPreferredAudioOutput();
-  syncAuthUI();
-  if (state.authUser) {
-    await refreshSavedSessions();
-    if (!state.sessionId) {
-      clearCurrentSessionState("Create or open a session to start playing.");
-    }
-    return;
-  }
-
-  state.userPlaybackPreference = loadStoredPlaybackPreference();
-  renderSavedSessions([]);
-  if (!state.sessionId) {
-    clearCurrentSessionState(
-      "Guest mode is ready. Sign in if you want to save sessions and reopen them later.",
-    );
-  }
-}
-
-async function initializeReadySession() {
-  if (state.sessionId) {
-    return;
-  }
-  await createSession({ preservePhraseBuffers: true, announce: false });
-  setPhraseMessage(
-    state.authUser
-      ? "Session ready. Connect MIDI, play a phrase, and the Continuator will answer."
-      : "Guest session ready. Connect MIDI, play a phrase, and the Continuator will answer.",
-  );
-}
-
-async function submitAuth(mode) {
-  const { username, password } = validateAuthCredentials();
-
-  const endpoint = mode === "register" ? "/api/auth/register" : "/api/auth/login";
-  const payload = await requestJson(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ username, password }),
-  });
-
-  state.authUser = payload.user;
-  state.userMidiCopyOutputPreference = loadStoredMidiCopyOutputPreference();
-  state.userAudioOutputPreference = loadStoredAudioOutputPreference();
-  populateAudioOutputChoices();
-  await applyPreferredAudioOutput();
-  elements.authUsernameInput.value = payload.user.username;
-  syncAuthUI();
-  await refreshSavedSessions();
-  setAccountPanelOpen(false);
-  if (state.sessionId) {
-    setAuthMessage(
-      mode === "register"
-        ? `Account created for ${payload.user.username}. Your current guest session stays open; new sessions will be saved.`
-        : `Signed in as ${payload.user.username}. Your current session stays open; new sessions will be saved.`,
-    );
-    setPhraseMessage(
-      mode === "register"
-        ? `Account created for ${payload.user.username}. Your current guest session stays open; new sessions will be saved.`
-        : `Signed in as ${payload.user.username}. Your current session stays open; new sessions will be saved.`,
-    );
-    return;
-  }
-  setAuthMessage(
-    mode === "register"
-      ? `Account created for ${payload.user.username}. You can create a saved session now.`
-      : `Signed in as ${payload.user.username}. You can create or open a saved session now.`,
-  );
-  setPhraseMessage(
-    mode === "register"
-      ? `Account created for ${payload.user.username}. Create or open a session to continue.`
-      : `Signed in as ${payload.user.username}. Create or open a session to continue.`,
-  );
-}
-
-async function logoutUser() {
-  await requestJson("/api/auth/logout", { method: "POST" });
-  state.authUser = null;
-  state.userPlaybackPreference = loadStoredPlaybackPreference();
-  state.userMidiCopyOutputPreference = loadStoredMidiCopyOutputPreference();
-  state.userAudioOutputPreference = loadStoredAudioOutputPreference();
-  populateAudioOutputChoices();
-  await applyPreferredAudioOutput();
-  syncAuthUI();
-  renderSavedSessions([]);
-  setAccountPanelOpen(false);
-  if (state.sessionIsOwned) {
-    clearCurrentSessionState("Signed out. Reopen a saved session after signing back in, or create a new guest session.");
-    return;
-  }
-  setAuthMessage("Signed out. Guest mode remains available.");
-  setPhraseMessage("Signed out. Your current guest session remains open.");
-}
-
-async function refreshSavedSessions() {
-  if (!state.authUser) {
-    renderSavedSessions([]);
-    return;
-  }
-
-  const payload = await requestJson("/api/my/sessions?limit=24");
-  renderSavedSessions(payload.items || []);
-}
-
 function selectPlaybackPreference(configuration) {
   const preferredChoiceValue = resolveAvailablePlaybackPreference(
     configuration,
@@ -4829,7 +1557,8 @@ function selectPlaybackPreference(configuration) {
   rememberPlaybackPreference({
     playback_choice: preferredChoiceValue,
     playback_choice_name:
-      configuration?.playback_choice_name || playbackChoiceLabel(preferredChoiceValue),
+      configuration?.playback_choice_name ||
+      playbackChoiceLabel(preferredChoiceValue),
   });
   return true;
 }
@@ -4838,12 +1567,16 @@ function pendingPlaybackPreference() {
   const sessionPreference = state.sessionConfiguration?.playback_choice
     ? {
         playback_choice: state.sessionConfiguration.playback_choice,
-        playback_choice_name: state.sessionConfiguration.playback_choice_name || null,
+        playback_choice_name:
+          state.sessionConfiguration.playback_choice_name || null,
       }
     : null;
-  const userRendererId = parsePlaybackChoice(state.userPlaybackPreference?.playback_choice)
-    .rendererId;
-  const sessionRendererId = parsePlaybackChoice(sessionPreference?.playback_choice).rendererId;
+  const userRendererId = parsePlaybackChoice(
+    state.userPlaybackPreference?.playback_choice,
+  ).rendererId;
+  const sessionRendererId = parsePlaybackChoice(
+    sessionPreference?.playback_choice,
+  ).rendererId;
   if (
     state.userPlaybackPreference &&
     userRendererId === WEB_MIDI_RENDERER_ID &&
@@ -4914,7 +1647,9 @@ function resolveAvailablePlaybackPreference(preference, outputs = []) {
   }
 
   const availableChoices = new Set([
-    ...localPlaybackRenderers.map((renderer) => encodePlaybackChoice(renderer.id)),
+    ...localPlaybackRenderers.map((renderer) =>
+      encodePlaybackChoice(renderer.id),
+    ),
     ...outputs.map((output) =>
       encodePlaybackChoice(WEB_MIDI_RENDERER_ID, output.id),
     ),
@@ -4943,7 +1678,9 @@ function resolveAvailablePlaybackPreference(preference, outputs = []) {
 
 function resolveAvailableMidiCopyOutputId(preference, outputs = []) {
   const primaryOutputId = selectedPrimaryMidiOutputId();
-  const eligibleOutputs = outputs.filter((output) => output.id !== primaryOutputId);
+  const eligibleOutputs = outputs.filter(
+    (output) => output.id !== primaryOutputId,
+  );
   const preferredOutputId = preference?.midi_copy_output_id || null;
   if (!preferredOutputId) {
     return null;
@@ -4956,9 +1693,7 @@ function resolveAvailableMidiCopyOutputId(preference, outputs = []) {
     return matchedById.id;
   }
 
-  const preferredName = normalizedDeviceName(
-    preference?.midi_copy_output_name,
-  );
+  const preferredName = normalizedDeviceName(preference?.midi_copy_output_name);
   if (!preferredName) {
     return null;
   }
@@ -4983,229 +1718,6 @@ function selectMidiCopyOutputPreference(preference) {
   return true;
 }
 
-async function selectMidiInputPreference(configuration) {
-  const preferredInputId = configuration?.midi_input_id;
-  if (!preferredInputId) {
-    return false;
-  }
-  if (isVirtualMidiInputId(preferredInputId)) {
-    await attachInput(VIRTUAL_MIDI_INPUT_ID, { savePreference: false });
-    return true;
-  }
-  if (!state.midiAccess || !state.midiAccess.inputs.has(preferredInputId)) {
-    return false;
-  }
-
-  await attachInput(preferredInputId, { savePreference: false });
-  return true;
-}
-
-async function restoreSessionPreferences(configuration) {
-  selectPlaybackPreference(configuration);
-  selectMidiCopyOutputPreference(configuration);
-  await selectMidiInputPreference(configuration);
-}
-
-async function useSessionPayload(payload, { owned = Boolean(state.authUser) } = {}) {
-  state.sessionId = payload.session_id;
-  state.sessionIsOwned = owned;
-  state.sessionConfiguration = payload.configuration;
-  setSessionMidiSaveResult();
-  elements.sessionId.textContent = payload.session_id;
-  syncSettingsControls(payload.configuration);
-  await restoreSessionPreferences(payload.configuration);
-  updateSessionActionState();
-  setSessionStatus("Ready");
-  renderPerformanceState();
-}
-
-async function openSavedSession(sessionId) {
-  if (!sessionId) {
-    return;
-  }
-
-  const payload = await requestJson(`/api/my/sessions/${sessionId}/open`, {
-    method: "POST",
-  });
-  state.previewedSavedSessionId = sessionId;
-  await useSessionPayload(payload, { owned: true });
-  setControlView("perform");
-  clearPhraseBuffers();
-  await refreshSessionActivity();
-  await refreshSavedSessions();
-  setPhraseMessage(
-    payload.restored_from_history
-      ? `Opened session and rebuilt live memory from ${payload.restored_phrase_count} learned phrases.`
-      : "Opened the selected session.",
-  );
-}
-
-async function createSession({ preservePhraseBuffers = false, announce = true } = {}) {
-  const settings = readSessionSettingsFromControls();
-  const payload = await requestJson("/api/session", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(settings),
-  });
-
-  await useSessionPayload(payload, { owned: Boolean(state.authUser) });
-  const restoredPlaybackPreference = selectPlaybackPreference(state.userPlaybackPreference);
-  const restoredMidiCopyPreference = selectMidiCopyOutputPreference(
-    state.userMidiCopyOutputPreference,
-  );
-  await saveSessionPreferences({
-    ...currentInputPreference(),
-    ...(restoredPlaybackPreference || !state.userPlaybackPreference?.playback_choice
-      ? currentPlaybackPreference()
-      : {}),
-    ...(restoredMidiCopyPreference ||
-    !state.userMidiCopyOutputPreference?.midi_copy_output_id
-      ? currentMidiCopyOutputPreference()
-      : state.userMidiCopyOutputPreference),
-  });
-  setControlView("perform");
-  if (!preservePhraseBuffers) {
-    clearPhraseBuffers();
-  }
-  await refreshSavedSessions();
-  if (announce) {
-    setPhraseMessage(
-      `Session created. ${describeSessionSettings(payload.configuration).join(" · ")}.`,
-    );
-  }
-  await refreshSessionActivity();
-}
-
-async function ensureSession() {
-  if (!state.sessionId) {
-    await createSession({ preservePhraseBuffers: true });
-  }
-}
-
-async function resetSession() {
-  stopInfiniteMode({ stopPlayback: true, silent: true });
-  if (!state.sessionId) {
-    setPhraseMessage("Create a session before resetting it.", true);
-    return;
-  }
-
-  const payload = await requestJson(`/api/sessions/${state.sessionId}/reset`, {
-    method: "POST",
-  });
-
-  state.lastGeneratedPhrase = null;
-  state.currentPlaybackPayload = null;
-  state.queuedPlaybackPayload = null;
-  renderGeneratedStats(null);
-  renderPerformanceState();
-  updateInfiniteActionState();
-  syncSettingsControls(payload.configuration);
-  renderConstraintStatus(null);
-  setPhraseMessage("Session memory cleared and the current settings were preserved.");
-  await refreshMemory();
-  await refreshSavedSessions();
-}
-
-async function saveSessionMidi() {
-  if (!state.sessionId) {
-    setSessionMidiSaveResult("Create or open a session before saving MIDI files.", true);
-    setPhraseMessage("Create or open a session before saving MIDI files.", true);
-    return;
-  }
-
-  state.sessionMidiSaving = true;
-  updateSessionActionState();
-  setSessionMidiSaveResult("Saving played and generated phrases as MIDI files...");
-  setPhraseStatus("Saving");
-  setPhraseMessage("Saving played and generated phrases as MIDI files...");
-  try {
-    const payload = await requestSessionMidiZip();
-    let destinationLabel = null;
-    if (midiExportZipSaveSupported()) {
-      let fileHandle = null;
-      try {
-        fileHandle = await chooseMidiExportZipFileHandle(payload.archive_file_name);
-      } catch (error) {
-        if (error?.name === "AbortError") {
-          setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
-          setSessionMidiSaveResult("MIDI export cancelled.");
-          setPhraseMessage("MIDI export cancelled.");
-          return;
-        }
-        if (filePickerBlockedByFrame(error)) {
-          destinationLabel = `${downloadZipBlob(payload.blob, payload.archive_file_name)} in your browser downloads`;
-          setSessionMidiSaveResult(
-            "File picker is blocked in this embedded page; using browser downloads instead.",
-          );
-          fileHandle = null;
-        } else if (error?.name === "NotAllowedError" || /system files/i.test(error?.message || "")) {
-          throw new Error(
-            "Chrome blocked that location. Save the ZIP in Downloads, Documents, Desktop, or Music instead of a system, home, or project folder.",
-          );
-        } else {
-          throw error;
-        }
-      }
-      if (fileHandle) {
-        destinationLabel = await writeZipBlobToFileHandle(payload.blob, fileHandle);
-      }
-    } else {
-      destinationLabel = `${downloadZipBlob(payload.blob, payload.archive_file_name)} in your browser downloads`;
-    }
-
-    const message = defaultSessionMidiSaveMessage(payload, destinationLabel);
-    setPhraseStatus("Saved");
-    setSessionMidiSaveResult(message);
-    setPhraseMessage(message);
-  } finally {
-    state.sessionMidiSaving = false;
-    updateSessionActionState();
-  }
-}
-
-async function applyCurrentSessionSettings() {
-  if (!state.sessionId) {
-    setPhraseMessage("Create a session before applying settings.", true);
-    return;
-  }
-  if (!hasPendingSessionSettings()) {
-    setPhraseMessage("Settings are already applied to the active session.");
-    return;
-  }
-
-  const settings = readSessionSettingsFromControls();
-  const payload = await requestJson(`/api/sessions/${state.sessionId}/settings`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(settings),
-  });
-  syncSettingsControls(payload.configuration);
-  renderConstraintStatus(null);
-  setPhraseMessage(
-    `Session settings updated. ${describeSessionSettings(payload.configuration).join(" · ")}.`,
-  );
-  await refreshMemory();
-  await refreshSavedSessions();
-}
-
-async function refreshHistory() {
-  if (!state.sessionId) {
-    return;
-  }
-
-  const payload = await requestJson(`/api/sessions/${state.sessionId}/history?limit=10`);
-  renderHistory(payload.items);
-}
-
-async function refreshMemory() {
-  if (!state.sessionId) {
-    return;
-  }
-
-  const payload = await requestJson(`/api/sessions/${state.sessionId}/memory`);
-  renderMemory(payload);
-}
-
 async function updateSessionGraphImage(
   kind = state.activeGraphKind,
   {
@@ -5223,8 +1735,12 @@ async function updateSessionGraphImage(
   }
 
   const graphKind = normalizedGraphKind(kind);
-  const previousScrollLeft = preserveScroll ? elements.graphImageFrame?.scrollLeft || 0 : 0;
-  const previousScrollTop = preserveScroll ? elements.graphImageFrame?.scrollTop || 0 : 0;
+  const previousScrollLeft = preserveScroll
+    ? elements.graphImageFrame?.scrollLeft || 0
+    : 0;
+  const previousScrollTop = preserveScroll
+    ? elements.graphImageFrame?.scrollTop || 0
+    : 0;
   state.graphLoading = true;
   updateSessionActionState();
   setActiveGraphKind(graphKind);
@@ -5271,7 +1787,9 @@ async function updateSessionGraphImage(
       });
     }
     if (announce) {
-      setPhraseMessage(`Rendered the ${graphKindTitle(graphKind).toLowerCase()}.`);
+      setPhraseMessage(
+        `Rendered the ${graphKindTitle(graphKind).toLowerCase()}.`,
+      );
     }
   } catch (error) {
     if (closeOnError) {
@@ -5288,242 +1806,6 @@ async function updateSessionGraphImage(
 
 async function showSessionGraph(kind = state.activeGraphKind) {
   await updateSessionGraphImage(kind);
-}
-
-async function refreshSessionActivity() {
-  if (!state.sessionId) {
-    return;
-  }
-
-  await Promise.all([refreshHistory(), refreshMemory()]);
-  if (state.graphOpen) {
-    await updateSessionGraphImage(state.activeGraphKind, {
-      openPanel: false,
-      announce: false,
-      closeOnError: false,
-      preserveScroll: true,
-    });
-  }
-}
-
-async function refreshVisibleSessionViews() {
-  const refreshes = [];
-  if (state.activeControlView === "memory") {
-    refreshes.push(refreshSessionActivity());
-  }
-  if (state.activeControlView === "session" || state.accountPanelOpen) {
-    refreshes.push(refreshSavedSessions());
-  }
-  await Promise.all(refreshes);
-}
-
-function scheduleVisibleSessionRefresh() {
-  void refreshVisibleSessionViews().catch((error) => {
-    console.warn("Could not refresh the visible session view.", error);
-  });
-}
-
-function buildContinuationRequestBody(
-  phraseEvents,
-  learnInput,
-  signal = null,
-  enforceEndConstraint = true,
-  handoffViewpoint = null,
-) {
-  const continuationNoteCount = normalizedContinuationNoteCount(
-    elements.continuationLengthInput.value,
-  );
-  const requestBody = {
-    session_id: state.sessionId,
-    phrase: phraseEvents,
-    learn_input: learnInput,
-    enforce_end_constraint: enforceEndConstraint,
-  };
-  if (continuationNoteCount != null) {
-    requestBody.continuation_note_count = continuationNoteCount;
-  }
-  if (handoffViewpoint) {
-    requestBody.handoff_viewpoint = handoffViewpoint;
-  }
-  return {
-    requestBody,
-    continuationNoteCount,
-    fetchOptions: {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody),
-      signal,
-    },
-  };
-}
-
-function defaultContinuationMessage(payload, continuationNoteCount) {
-  return (
-    payload.status_message ||
-    (continuationNoteCount == null
-      ? `Continuation generated: ${payload.generated_phrase.note_count} notes returned.`
-      : `Continuation generated: ${payload.generated_phrase.note_count} notes returned from a ${continuationNoteCount}-note request.`)
-  );
-}
-
-function applyContinuationPayload(
-  payload,
-  { renderCaptured = true, renderGenerated = true } = {},
-) {
-  rememberCapturedPhrase(payload.input_phrase.events, payload.input_phrase.notes);
-  if (renderCaptured) {
-    renderCapturedStats(payload.input_phrase.events, payload.input_phrase.notes, true);
-  }
-  rememberGeneratedPhrase(payload.generated_phrase);
-  renderConstraintStatus(payload.constraints, payload.generation_trace);
-  if (renderGenerated) {
-    renderGeneratedStats(payload.generated_phrase);
-  }
-}
-
-function applyGeneratedPhrasePayload(payload, { renderGenerated = true } = {}) {
-  const generatedPhrase = payload?.generated_phrase || payload;
-  rememberGeneratedPhrase(generatedPhrase);
-  if (payload?.generated_phrase) {
-    renderConstraintStatus(payload.constraints, payload.generation_trace);
-  }
-  if (renderGenerated) {
-    renderGeneratedStats(generatedPhrase);
-  }
-}
-
-function defaultMidiImportMessage(payload) {
-  const importedCount = Number(payload?.imported_file_count || 0);
-  const skippedCount = Number(payload?.skipped_file_count || 0);
-  const importedNames = Array.isArray(payload?.imported_files)
-    ? payload.imported_files
-        .map((item) => item?.file_name)
-        .filter((value) => typeof value === "string" && value.length)
-    : [];
-
-  let message = `Imported ${pluralize(importedCount, "MIDI file")} into the current session memory.`;
-  if (importedNames.length) {
-    const shownNames = importedNames.slice(0, 3).join(", ");
-    const overflow = importedNames.length > 3 ? `, and ${importedNames.length - 3} more` : "";
-    message += ` ${shownNames}${overflow}.`;
-  }
-  if (skippedCount) {
-    message += ` Skipped ${pluralize(skippedCount, "file")} that were empty, unreadable, or not MIDI.`;
-  }
-  return message;
-}
-
-function defaultSessionMidiSaveMessage(payload, destinationLabel = null) {
-  const fileCount = Number(payload?.file_count || 0);
-  const inputCount = Number(payload?.input_file_count || 0);
-  const generatedCount = Number(payload?.generated_file_count || 0);
-  const destination = destinationLabel || payload?.directory || "the selected folder";
-  return `Saved ${pluralize(fileCount, "MIDI file")} (${pluralize(inputCount, "played phrase")}, ${pluralize(generatedCount, "generated phrase")}) to ${destination}.`;
-}
-
-function defaultMemoryGenerationMessage(payload, requestedNoteCount) {
-  return (
-    payload.status_message ||
-    `Fresh phrase generated from memory: ${payload.generated_phrase.note_count} notes returned from a ${requestedNoteCount}-note request.`
-  );
-}
-
-async function requestContinuationFromEvents(
-  phraseEvents,
-  {
-    learnInput = elements.learnInputToggle.checked,
-    statusLabel = "Sending",
-    signal = null,
-    enforceEndConstraint = true,
-    handoffViewpoint = null,
-  } = {},
-) {
-  if (!phraseEvents?.length) {
-    throw new Error("No completed phrase is ready yet.");
-  }
-
-  await ensureSession();
-  setPhraseStatus(statusLabel);
-  const { continuationNoteCount, fetchOptions } = buildContinuationRequestBody(
-    phraseEvents,
-    learnInput,
-    signal,
-    enforceEndConstraint,
-    handoffViewpoint,
-  );
-  const requestStartedAt = window.performance.now();
-  startServerWaitIndicator(serverWaitLabel(statusLabel), requestStartedAt);
-  try {
-    const payload = await requestJson("/api/continue", fetchOptions);
-    state.lastGenerationMs = window.performance.now() - requestStartedAt;
-    renderPerformanceState();
-    return { payload, continuationNoteCount };
-  } finally {
-    stopServerWaitIndicator();
-  }
-}
-
-async function requestMemoryGeneration(
-  {
-    noteCount = preferredGenerationNoteCount(),
-    statusLabel = "Generating",
-    signal = null,
-    enforceStartConstraint = true,
-    enforceEndConstraint = true,
-  } = {},
-) {
-  await ensureSession();
-  setPhraseStatus(statusLabel);
-  const requestBody = {
-    note_count: noteCount,
-    enforce_start_constraint: enforceStartConstraint,
-    enforce_end_constraint: enforceEndConstraint,
-  };
-  const requestStartedAt = window.performance.now();
-  startServerWaitIndicator(serverWaitLabel(statusLabel), requestStartedAt);
-  try {
-    const payload = await requestJson(`/api/sessions/${state.sessionId}/generate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(requestBody),
-      signal,
-    });
-    state.lastGenerationMs = window.performance.now() - requestStartedAt;
-    renderPerformanceState();
-    return { payload, noteCount };
-  } finally {
-    stopServerWaitIndicator();
-  }
-}
-
-async function sendCurrentPhrase() {
-  stopInfiniteMode({ stopPlayback: true, silent: true });
-  const { payload, continuationNoteCount } = await requestContinuationFromEvents(
-    state.lastCapturedPhrase,
-    { learnInput: elements.learnInputToggle.checked },
-  );
-  applyContinuationPayload(payload, { renderCaptured: false });
-  if (payload.generated_phrase.event_count > 0) {
-    await playPayload(payload.generated_phrase);
-  }
-  setPhraseStatus(payload.generated_phrase.note_count ? "Generated" : "Primed");
-  setPhraseMessage(defaultContinuationMessage(payload, continuationNoteCount));
-  scheduleVisibleSessionRefresh();
-}
-
-async function generateFreshPhrase() {
-  stopInfiniteMode({ stopPlayback: true, silent: true });
-  const { payload, noteCount } = await requestMemoryGeneration({
-    noteCount: preferredGenerationNoteCount(),
-    statusLabel: "Generating",
-  });
-  applyGeneratedPhrasePayload(payload);
-  if (payload.generated_phrase.event_count > 0) {
-    await playPayload(payload.generated_phrase);
-  }
-  setPhraseStatus(payload.generated_phrase.note_count ? "Generated" : "Primed");
-  setPhraseMessage(defaultMemoryGenerationMessage(payload, noteCount));
-  scheduleVisibleSessionRefresh();
 }
 
 function createTestNotePayload() {
@@ -5560,8 +1842,14 @@ function createTestNotePayload() {
 }
 
 function createNoteAuditionPayload(note) {
-  const pitch = Math.min(127, Math.max(0, Math.round(Number(note?.pitch) || 60)));
-  const channel = Math.min(15, Math.max(0, Math.round(Number(note?.channel) || 0)));
+  const pitch = Math.min(
+    127,
+    Math.max(0, Math.round(Number(note?.pitch) || 60)),
+  );
+  const channel = Math.min(
+    15,
+    Math.max(0, Math.round(Number(note?.channel) || 0)),
+  );
   const velocity = Math.min(
     127,
     Math.max(1, Math.round(Number(note?.velocity) || 92)),
@@ -5652,10 +1940,13 @@ function stopRollAudition({ redraw = true, releaseNote = true } = {}) {
 }
 
 function scheduleRollAuditionTimeout(audition, callback, delayMs) {
-  const timerId = window.setTimeout(() => {
-    audition.timerIds.delete(timerId);
-    callback();
-  }, Math.max(0, delayMs));
+  const timerId = window.setTimeout(
+    () => {
+      audition.timerIds.delete(timerId);
+      callback();
+    },
+    Math.max(0, delayMs),
+  );
   audition.timerIds.add(timerId);
   return timerId;
 }
@@ -5702,19 +1993,27 @@ async function auditionRollNote(kind, noteHit) {
   state.activeRollAudition = audition;
   dispatchPlaybackEvent(audition, payload.events[0]);
   startRollAuditionAnimation(audition, durationMs);
-  scheduleRollAuditionTimeout(audition, () => {
-    if (state.activeRollAudition === audition) {
-      releaseRollAuditionNote(audition);
-    }
-  }, durationMs);
-  scheduleRollAuditionTimeout(audition, () => {
-    if (state.activeRollAudition !== audition) {
-      return;
-    }
-    clearRollAuditionTimers(audition);
-    state.activeRollAudition = null;
-    renderRollCanvas(kind);
-  }, durationMs + 160);
+  scheduleRollAuditionTimeout(
+    audition,
+    () => {
+      if (state.activeRollAudition === audition) {
+        releaseRollAuditionNote(audition);
+      }
+    },
+    durationMs,
+  );
+  scheduleRollAuditionTimeout(
+    audition,
+    () => {
+      if (state.activeRollAudition !== audition) {
+        return;
+      }
+      clearRollAuditionTimers(audition);
+      state.activeRollAudition = null;
+      renderRollCanvas(kind);
+    },
+    durationMs + 160,
+  );
   setPhraseMessage(
     `Auditioning ${midiNoteName(payload.notes[0].pitch)} from the ${rollSourceLabel(kind)}.`,
   );
@@ -5723,47 +2022,10 @@ async function auditionRollNote(kind, noteHit) {
 async function panicPlayback() {
   await sendPlaybackPanic();
   stopInfiniteMode({ stopPlayback: true, silent: true });
-  setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
+  setPhraseStatus(
+    state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI",
+  );
   setPhraseMessage("Panic sent. Playback and held notes were stopped.");
-}
-
-async function importSelectedMidiFiles(fileList, selectionLabel = "selection") {
-  const selectedFiles = Array.from(fileList || []);
-  if (!selectedFiles.length) {
-    return;
-  }
-
-  const midiFiles = selectedFiles.filter((file) =>
-    hasMidiFileExtension(file.webkitRelativePath || file.name),
-  );
-  if (!midiFiles.length) {
-    throw new Error(`No MIDI files were found in the selected ${selectionLabel}.`);
-  }
-
-  stopInfiniteMode({ stopPlayback: true, silent: true });
-  await ensureSession();
-
-  const formData = new FormData();
-  midiFiles.forEach((file, index) => {
-    const uploadName =
-      file.webkitRelativePath || file.name || `imported_${index + 1}.mid`;
-    formData.append("files", file, uploadName);
-  });
-
-  setPhraseMessage(
-    `Importing ${pluralize(midiFiles.length, "MIDI file")} into the current session memory...`,
-  );
-  const payload = await requestJson(`/api/sessions/${state.sessionId}/import-midi`, {
-    method: "POST",
-    body: formData,
-  });
-
-  await refreshSessionActivity();
-  await refreshSavedSessions();
-  setControlView("memory");
-  setSessionStatus("Ready");
-  setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
-  setPhraseMessage(defaultMidiImportMessage(payload));
 }
 
 function shortCommit(commit) {
@@ -5803,89 +2065,6 @@ async function checkServer() {
   }
 }
 
-function midiOutputById(outputId) {
-  if (!state.midiAccess || !outputId) {
-    return null;
-  }
-  return state.midiAccess.outputs.get(outputId) || null;
-}
-
-function selectedPrimaryMidiOutputId() {
-  const choice = resolvePlaybackChoice();
-  return choice.rendererId === WEB_MIDI_RENDERER_ID ? choice.targetId : null;
-}
-
-function selectedMidiCopyOutputId() {
-  return elements.midiCopyOutputSelect?.value || null;
-}
-
-function selectedMidiCopyOutput() {
-  const outputId = selectedMidiCopyOutputId();
-  if (!outputId || outputId === selectedPrimaryMidiOutputId()) {
-    return null;
-  }
-  return midiOutputById(outputId);
-}
-
-function midiCopyOutputLabel() {
-  const output = selectedMidiCopyOutput();
-  return output ? output.name || output.id : null;
-}
-
-function selectedPlaybackChoiceValue() {
-  return elements.midiOutputSelect.value || DEFAULT_PLAYBACK_CHOICE;
-}
-
-function encodePlaybackChoice(rendererId, targetId = null) {
-  return targetId
-    ? `${rendererId}${PLAYBACK_CHOICE_SEPARATOR}${targetId}`
-    : rendererId;
-}
-
-function parsePlaybackChoice(choiceValue) {
-  if (!choiceValue) {
-    return {
-      rendererId: DEFAULT_PLAYBACK_CHOICE,
-      targetId: null,
-    };
-  }
-
-  const [rendererId, ...targetParts] = String(choiceValue).split(
-    PLAYBACK_CHOICE_SEPARATOR,
-  );
-  return {
-    rendererId: rendererId || DEFAULT_PLAYBACK_CHOICE,
-    targetId: targetParts.length
-      ? targetParts.join(PLAYBACK_CHOICE_SEPARATOR)
-      : null,
-  };
-}
-
-function resolvePlaybackChoice(choiceValue = selectedPlaybackChoiceValue()) {
-  const { rendererId, targetId } = parsePlaybackChoice(choiceValue);
-  const renderer =
-    playbackRendererRegistry.get(rendererId) ||
-    playbackRendererRegistry.get(DEFAULT_PLAYBACK_CHOICE) ||
-    null;
-  return {
-    value: encodePlaybackChoice(renderer?.id || rendererId, targetId),
-    rendererId: renderer?.id || rendererId,
-    targetId,
-    renderer,
-  };
-}
-
-function selectedPlaybackChoice() {
-  return resolvePlaybackChoice(selectedPlaybackChoiceValue());
-}
-
-function playbackChoiceLabel(choiceValue = selectedPlaybackChoiceValue()) {
-  const choice = resolvePlaybackChoice(choiceValue);
-  return choice.renderer
-    ? choice.renderer.getDisplayName(choice.targetId)
-    : "Unavailable renderer";
-}
-
 async function loadCustomFaustTemplate() {
   if (state.customFaustTemplateSource) {
     return state.customFaustTemplateSource;
@@ -5893,7 +2072,9 @@ async function loadCustomFaustTemplate() {
 
   const response = await fetch(FAUST_CUSTOM_TEMPLATE_DSP_URL);
   if (!response.ok) {
-    throw new Error(`Unable to load the Custom Faust starter template (${response.status}).`);
+    throw new Error(
+      `Unable to load the Custom Faust starter template (${response.status}).`,
+    );
   }
   state.customFaustTemplateSource = await response.text();
   return state.customFaustTemplateSource;
@@ -5922,7 +2103,10 @@ function setCustomFaustSource(source, { persist = true } = {}) {
     elements.faustCustomCodeInput.value = state.customFaustSource;
   }
   if (persist) {
-    safeLocalStorageSet(FAUST_CUSTOM_SOURCE_STORAGE_KEY, state.customFaustSource);
+    safeLocalStorageSet(
+      FAUST_CUSTOM_SOURCE_STORAGE_KEY,
+      state.customFaustSource,
+    );
   }
 }
 
@@ -5931,11 +2115,9 @@ function selectedFaustRenderer(choiceValue = selectedPlaybackChoiceValue()) {
   return renderer instanceof FaustPolyRenderer ? renderer : null;
 }
 
-function selectedRendererIsFaust(choiceValue = selectedPlaybackChoiceValue()) {
-  return Boolean(selectedFaustRenderer(choiceValue));
-}
-
-function selectedRendererIsCustomFaust(choiceValue = selectedPlaybackChoiceValue()) {
+function selectedRendererIsCustomFaust(
+  choiceValue = selectedPlaybackChoiceValue(),
+) {
   return resolvePlaybackChoice(choiceValue).rendererId === FAUST_CUSTOM_ID;
 }
 
@@ -5957,10 +2139,14 @@ function faustMetaMap(item) {
 }
 
 function faustLabel(item) {
-  const rawLabel = String(item?.label || item?.shortname || item?.address || "Control");
+  const rawLabel = String(
+    item?.label || item?.shortname || item?.address || "Control",
+  );
   const label = rawLabel.split("/").pop() || rawLabel;
   const withSpaces = label.replace(/_/g, " ").trim();
-  return withSpaces ? withSpaces.charAt(0).toUpperCase() + withSpaces.slice(1) : "Control";
+  return withSpaces
+    ? withSpaces.charAt(0).toUpperCase() + withSpaces.slice(1)
+    : "Control";
 }
 
 function faustControlPrecision(step) {
@@ -6001,9 +2187,14 @@ function persistCustomFaustValues() {
 
   const snapshot = {};
   for (const descriptor of state.customFaustControlDescriptors) {
-    snapshot[descriptor.key] = customFaustRenderer.getControlValue(descriptor.key);
+    snapshot[descriptor.key] = customFaustRenderer.getControlValue(
+      descriptor.key,
+    );
   }
-  safeLocalStorageSet(FAUST_CUSTOM_VALUES_STORAGE_KEY, JSON.stringify(snapshot));
+  safeLocalStorageSet(
+    FAUST_CUSTOM_VALUES_STORAGE_KEY,
+    JSON.stringify(snapshot),
+  );
 }
 
 function buildCustomFaustControlDescriptors(ui) {
@@ -6019,7 +2210,9 @@ function buildCustomFaustControlDescriptors(ui) {
     if (!address || meta.hidden === "1") {
       return;
     }
-    if (FAUST_POLY_RESERVED_SUFFIXES.some((suffix) => address.endsWith(suffix))) {
+    if (
+      FAUST_POLY_RESERVED_SUFFIXES.some((suffix) => address.endsWith(suffix))
+    ) {
       return;
     }
 
@@ -6103,7 +2296,10 @@ function rebuildCustomFaustControls() {
       input.step = String(descriptor.step);
       input.value = String(descriptor.value);
       input.addEventListener("input", () => {
-        const nextValue = clampFaustControlValue(Number(input.value), descriptor);
+        const nextValue = clampFaustControlValue(
+          Number(input.value),
+          descriptor,
+        );
         descriptor.value = nextValue;
         customFaustRenderer.setControlValue(descriptor.key, nextValue);
         persistCustomFaustValues();
@@ -6128,8 +2324,13 @@ function syncCustomFaustControls() {
     customFaustRenderer.status !== "Loading" &&
     customFaustRenderer.status !== "Error";
   for (const binding of state.customFaustControlBindings) {
-    const currentValue = customFaustRenderer.getControlValue(binding.descriptor.key);
-    binding.descriptor.value = clampFaustControlValue(currentValue, binding.descriptor);
+    const currentValue = customFaustRenderer.getControlValue(
+      binding.descriptor.key,
+    );
+    binding.descriptor.value = clampFaustControlValue(
+      currentValue,
+      binding.descriptor,
+    );
     if (binding.descriptor.kind === "toggle") {
       binding.input.checked = binding.descriptor.value >= 0.5;
     } else if (binding.input.value !== String(binding.descriptor.value)) {
@@ -6142,7 +2343,8 @@ function syncCustomFaustControls() {
     );
   }
 
-  elements.faustCustomControlsHint.hidden = state.customFaustControlBindings.length > 0;
+  elements.faustCustomControlsHint.hidden =
+    state.customFaustControlBindings.length > 0;
   if (state.customFaustControlBindings.length) {
     return;
   }
@@ -6156,7 +2358,9 @@ function syncCustomFaustControls() {
 }
 
 function customFaustHasPendingChanges() {
-  return state.customFaustSource !== (customFaustRenderer.lastCompiledCode || "");
+  return (
+    state.customFaustSource !== (customFaustRenderer.lastCompiledCode || "")
+  );
 }
 
 function customFaustDirtyCopy() {
@@ -6189,11 +2393,14 @@ function syncFaustRendererPanel() {
   const selectedRenderer = selectedFaustRenderer();
   const faustSelected = Boolean(selectedRenderer);
   elements.faustRendererPanel.hidden = !faustSelected;
-  elements.faustClavierPanel.hidden = !faustSelected || selectedRenderer?.id !== FAUST_CLAVIER_ID;
-  elements.faustCustomPanel.hidden = !faustSelected || selectedRenderer?.id !== FAUST_CUSTOM_ID;
+  elements.faustClavierPanel.hidden =
+    !faustSelected || selectedRenderer?.id !== FAUST_CLAVIER_ID;
+  elements.faustCustomPanel.hidden =
+    !faustSelected || selectedRenderer?.id !== FAUST_CUSTOM_ID;
   elements.faustRendererStatus.textContent = selectedRenderer?.status || "Idle";
 
-  let hint = "Faust instruments are compiled locally in your browser the first time you use them.";
+  let hint =
+    "Faust instruments are compiled locally in your browser the first time you use them.";
   if (selectedRenderer?.lastError) {
     hint = `Faust renderer error: ${selectedRenderer.lastError.message}`;
   } else if (selectedRenderer?.id === FAUST_CLAVIER_ID) {
@@ -6206,7 +2413,8 @@ function syncFaustRendererPanel() {
     }
   } else if (selectedRenderer?.id === FAUST_CUSTOM_ID) {
     if (selectedRenderer.status === "Loading") {
-      hint = "Compiling your Custom Faust source in the browser and rebuilding its parameter panel.";
+      hint =
+        "Compiling your Custom Faust source in the browser and rebuilding its parameter panel.";
     } else if (customFaustHasPendingChanges()) {
       hint =
         "Custom Faust keeps using the last compiled build until you compile the latest source in the editor.";
@@ -6235,728 +2443,26 @@ function syncFaustRendererPanel() {
   }
   elements.faustCustomCompileButton.disabled =
     !state.customFaustSource.trim() || customFaustRenderer.status === "Loading";
-  elements.faustCustomResetButton.disabled = customFaustRenderer.status === "Loading";
+  elements.faustCustomResetButton.disabled =
+    customFaustRenderer.status === "Loading";
   elements.faustCustomDirtyState.textContent = customFaustDirtyCopy();
   syncCustomFaustControls();
   renderPerformanceState();
 }
 
-async function createPlaybackSession(choiceValue = selectedPlaybackChoiceValue()) {
-  const choice = resolvePlaybackChoice(choiceValue);
-  if (!choice.renderer) {
-    throw new Error("Selected playback renderer is unavailable.");
-  }
-
-  const rendererState = (await choice.renderer.createPlaybackSession?.(choice.targetId)) || {};
-  const midiCopyOutput = selectedMidiCopyOutput();
-  let midiCopyReady = false;
-  if (midiCopyOutput) {
-    try {
-      await midiCopyOutput.open();
-      midiCopyReady = true;
-    } catch {
-      setPhraseMessage(
-        `${playbackChoiceLabel(choice.value)} remains active, but the MIDI copy output is unavailable.`,
-        true,
-      );
-    }
-  }
-  return {
-    renderer: choice.renderer,
-    rendererId: choice.renderer.id,
-    targetId: choice.targetId,
-    choiceValue: choice.value,
-    timerIds: new Set(),
-    cleanupTimerId: null,
-    handoffAtMs: performance.now(),
-    endsAtMs: performance.now(),
-    ...rendererState,
-    midiCopyOutput: midiCopyReady ? midiCopyOutput : null,
-    midiCopyOutputId: midiCopyOutput?.id || null,
-    midiCopyActiveNotes: new Set(),
-  };
-}
-
-function outputNoteKey(note, channel) {
-  return `${channel}:${note}`;
-}
-
-function sendOutputMessage(output, message) {
-  try {
-    output.send(message);
-  } catch {
-    // Ignore unavailable outputs while cancelling or switching playback.
-  }
-}
-
-function midiMessageForPlaybackEvent(event) {
-  if (!event || !["note_on", "note_off"].includes(event.type)) {
-    return null;
-  }
-  const noteOn = event.type === "note_on" && event.velocity > 0;
-  const status = (noteOn ? 0x90 : 0x80) | (event.channel & 0x0f);
-  return [status, event.note, event.velocity];
-}
-
-function dispatchMidiEventToOutput(output, activeNotes, event) {
-  const message = midiMessageForPlaybackEvent(event);
-  if (!output || !message) {
-    return;
-  }
-  sendOutputMessage(output, message);
-
-  const key = outputNoteKey(event.note, event.channel);
-  if (event.type === "note_on" && event.velocity > 0) {
-    activeNotes?.add(key);
-  } else {
-    activeNotes?.delete(key);
-  }
-}
-
-function stopMidiOutputPlayback(output, activeNotes) {
-  if (!output) {
-    return false;
-  }
-  activeNotes?.forEach((key) => {
-    const [channelRaw, noteRaw] = key.split(":");
-    const channel = Number(channelRaw);
-    const note = Number(noteRaw);
-    sendOutputMessage(output, [0x80 | (channel & 0x0f), note, 0]);
-  });
-  activeNotes?.clear();
-  return sendMidiPanicToOutput(output);
-}
-
-function dispatchMidiCopyEvent(playback, event) {
-  dispatchMidiEventToOutput(
-    playback?.midiCopyOutput,
-    playback?.midiCopyActiveNotes,
-    event,
-  );
-}
-
-function stopMidiCopyPlayback(playback) {
-  return stopMidiOutputPlayback(
-    playback?.midiCopyOutput,
-    playback?.midiCopyActiveNotes,
-  );
-}
-
-function sendMidiPanicToOutput(output) {
-  if (!output) {
-    return false;
-  }
-
-  for (let channel = 0; channel < 16; channel += 1) {
-    sendOutputMessage(output, [0xb0 | channel, 64, 0]);
-    sendOutputMessage(output, [0xb0 | channel, 121, 0]);
-    for (let note = 0; note < 128; note += 1) {
-      sendOutputMessage(output, [0x80 | (channel & 0x0f), note, 0]);
-    }
-    sendOutputMessage(output, [0xb0 | channel, 123, 0]);
-    sendOutputMessage(output, [0xb0 | channel, 120, 0]);
-  }
-  return true;
-}
-
-async function sendPlaybackPanic() {
-  let sent = false;
-  const activePlayback = state.activePlayback;
-  const liveMonitorPlayback = state.liveMonitorPlayback;
-  const activeRollAudition = state.activeRollAudition;
-
-  if (activePlayback?.renderer?.panicPlayback) {
-    sent = (await activePlayback.renderer.panicPlayback(activePlayback)) || sent;
-  }
-  if (activeRollAudition) {
-    releaseRollAuditionNote(activeRollAudition);
-    stopRollAudition({ redraw: true, releaseNote: false });
-    sent = true;
-  }
-  if (liveMonitorPlayback?.renderer?.panicPlayback) {
-    sent =
-      (await liveMonitorPlayback.renderer.panicPlayback(liveMonitorPlayback)) || sent;
-  }
-  stopLiveMonitorPlayback();
-
-  for (const renderer of localPlaybackRenderers) {
-    if (activePlayback?.renderer === renderer) {
-      continue;
-    }
-    sent = (await renderer.panicTarget()) || sent;
-  }
-
-  const selectedChoice = selectedPlaybackChoice();
-  const matchesActiveSelection =
-    activePlayback &&
-    activePlayback.rendererId === selectedChoice.rendererId &&
-    activePlayback.targetId === selectedChoice.targetId;
-  if (!matchesActiveSelection && selectedChoice.renderer?.panicTarget) {
-    sent = (await selectedChoice.renderer.panicTarget(selectedChoice.targetId)) || sent;
-  }
-
-  const selectedCopyOutput = selectedMidiCopyOutput();
-  const selectedCopyWillBeStopped =
-    selectedCopyOutput &&
-    [activePlayback, liveMonitorPlayback].some(
-      (playback) => playback?.midiCopyOutput === selectedCopyOutput,
-    );
-  if (selectedCopyOutput && !selectedCopyWillBeStopped) {
-    try {
-      await selectedCopyOutput.open();
-      sent = sendMidiPanicToOutput(selectedCopyOutput) || sent;
-    } catch {
-      // Keep panic best-effort when a secondary MIDI destination disconnects.
-    }
-  }
-
-  return sent;
-}
-
-function stopPlaybackVisualization({ redraw = true } = {}) {
-  const rollKind = state.playbackVisualizationRollKind || "output";
-  state.playbackVisualizationToken += 1;
-  if (state.playbackVisualizationStartTimerId) {
-    window.clearTimeout(state.playbackVisualizationStartTimerId);
-    state.playbackVisualizationStartTimerId = null;
-  }
-  if (state.playbackVisualizationFrameId) {
-    window.clearTimeout(state.playbackVisualizationFrameId);
-    window.cancelAnimationFrame(state.playbackVisualizationFrameId);
-    state.playbackVisualizationFrameId = null;
-  }
-  if (redraw) {
-    if (rollKind === "input") {
-      drawPianoRoll(
-        elements.inputRoll,
-        state.lastCapturedNotes,
-        "#6dd3ce",
-        "Input phrase",
-      );
-    } else {
-      renderGeneratedStats(state.lastGeneratedPhrase);
-    }
-  }
-  for (const playhead of [elements.inputPlayhead, elements.outputPlayhead]) {
-    playhead.hidden = true;
-    playhead.style.transform = "translateX(0)";
-  }
-  state.currentPlaybackPayload = null;
-  state.queuedPlaybackPayload = null;
-  state.playbackVisualizationDisplayEndsAtMs = 0;
-  state.playbackVisualizationRollKind = "output";
-  renderPerformanceState();
-}
-
-function rollPlayhead(kind) {
-  return kind === "input" ? elements.inputPlayhead : elements.outputPlayhead;
-}
-
-function rollPlayheadMaxX(kind) {
-  const width = rollCanvas(kind).getBoundingClientRect().width || 0;
-  return Math.max(0, width - 2);
-}
-
-function startPlaybackVisualization(
-  payload,
-  audioStartAtMs,
-  durationMs,
-  { rollKind = "output" } = {},
-) {
-  const notes = payloadNotes(payload);
-  if (!notes.length) {
-    return;
-  }
-  const targetRoll = rollKind === "input" ? elements.inputRoll : elements.outputRoll;
-  const accent = rollKind === "input" ? "#6dd3ce" : "#f4a261";
-  const emptyLabel = rollKind === "input" ? "Input phrase" : "Generated continuation";
-
-  const displayStartAtMs = Math.max(
-    audioStartAtMs,
-    state.playbackVisualizationDisplayEndsAtMs || 0,
-  );
-  const delayUntilStartMs = displayStartAtMs - window.performance.now();
-  if (delayUntilStartMs > 24) {
-    if (state.playbackVisualizationStartTimerId) {
-      window.clearTimeout(state.playbackVisualizationStartTimerId);
-    }
-    state.queuedPlaybackPayload = payload;
-    renderPerformanceState();
-    state.playbackVisualizationStartTimerId = window.setTimeout(() => {
-      state.playbackVisualizationStartTimerId = null;
-      startPlaybackVisualization(payload, displayStartAtMs, durationMs, { rollKind });
-    }, delayUntilStartMs);
-    return;
-  }
-
-  stopPlaybackVisualization({ redraw: false });
-  state.playbackVisualizationRollKind = rollKind;
-  state.currentPlaybackPayload = payload;
-  if (state.queuedPlaybackPayload === payload) {
-    state.queuedPlaybackPayload = null;
-  }
-  drawPianoRoll(targetRoll, notes, accent, emptyLabel, rollAuditionOptions(rollKind));
-  renderPerformanceState();
-  const token = ++state.playbackVisualizationToken;
-  const startedAtMs = window.performance.now();
-  const playbackDurationSeconds = Math.max(
-    0.001,
-    ...notes.map((note) => note.end_seconds || note.start_seconds + note.duration_seconds),
-  );
-  const rollDurationSeconds = pianoRollDurationSeconds(notes);
-  const safeDurationMs = Math.max(1, Number(durationMs) || playbackDurationSeconds * 1000);
-  state.playbackVisualizationDisplayEndsAtMs = startedAtMs + safeDurationMs;
-  const playhead = rollPlayhead(rollKind);
-  const playheadMaxX = rollPlayheadMaxX(rollKind);
-  playhead.hidden = false;
-
-  const tick = () => {
-    if (token !== state.playbackVisualizationToken) {
-      return;
-    }
-    const elapsedMs = Math.max(0, window.performance.now() - startedAtMs);
-    const progressRatio = Math.min(1, elapsedMs / safeDurationMs);
-    const playbackSeconds = progressRatio * playbackDurationSeconds;
-    const rollProgressRatio = Math.min(1, playbackSeconds / rollDurationSeconds);
-    playhead.style.transform = `translateX(${Math.round(
-      rollProgressRatio * playheadMaxX,
-    )}px)`;
-    if (progressRatio >= 1) {
-      state.playbackVisualizationFrameId = null;
-      window.setTimeout(() => {
-        if (token === state.playbackVisualizationToken) {
-          state.currentPlaybackPayload = null;
-          state.playbackVisualizationDisplayEndsAtMs = 0;
-          playhead.hidden = true;
-          renderPerformanceState();
-          if (rollKind === "input") {
-            drawPianoRoll(
-              elements.inputRoll,
-              state.lastCapturedNotes,
-              "#6dd3ce",
-              "Input phrase",
-            );
-          } else {
-            renderGeneratedStats(state.lastGeneratedPhrase);
-          }
-        }
-      }, 180);
-      return;
-    }
-    state.playbackVisualizationFrameId = window.setTimeout(tick, 33);
-  };
-
-  tick();
-}
-
-function stopActivePlayback() {
-  const playback = state.activePlayback;
-  if (!playback) {
-    return false;
-  }
-
-  playback.timerIds.forEach((timerId) => {
-    window.clearTimeout(timerId);
-  });
-  playback.timerIds.clear();
-  playback.cleanupTimerId = null;
-  playback.renderer?.stopPlayback?.(playback);
-  stopMidiCopyPlayback(playback);
-  state.activePlayback = null;
-  state.activeMemoryPlaybackIndex = null;
-  state.activeRollPlaybackKind = null;
-  stopPlaybackVisualization();
-  syncMemoryPlaybackState();
-  syncRollPlaybackState();
-  updateInfiniteActionState();
-  return true;
-}
-
-function dispatchPlaybackEvent(playback, event) {
-  playback.renderer?.dispatchEvent?.(playback, event);
-  dispatchMidiCopyEvent(playback, event);
-}
-
-async function playPayload(
-  payload,
-  {
-    startDelayMs = PLAYBACK_START_DELAY_MS,
-    append = false,
-    visualizationRoll = "output",
-  } = {},
-) {
-  if (!payload?.events?.length) {
-    return;
-  }
-
-  let playback = state.activePlayback;
-  if (!append || !playback) {
-    stopRollAudition({ redraw: false, releaseNote: true });
-    stopActivePlayback();
-    playback = await createPlaybackSession();
-    state.activePlayback = playback;
-    state.activeMemoryPlaybackIndex = null;
-    state.activeRollPlaybackKind = null;
-    syncMemoryPlaybackState();
-    syncRollPlaybackState();
-  }
-
-  if (playback.cleanupTimerId != null) {
-    window.clearTimeout(playback.cleanupTimerId);
-    playback.timerIds.delete(playback.cleanupTimerId);
-    playback.cleanupTimerId = null;
-  }
-
-  const scheduleDelayMs = Math.max(0, startDelayMs);
-  const scheduleBaseMs = performance.now();
-  const handoffMs = continuationHandoffMs(payload);
-  let cursorMs = 0;
-  for (const event of payload.events) {
-    cursorMs += event.delta_seconds * 1000;
-    const timerId = window.setTimeout(() => {
-      if (state.activePlayback !== playback) {
-        return;
-      }
-      dispatchPlaybackEvent(playback, event);
-      playback.timerIds.delete(timerId);
-    }, scheduleDelayMs + cursorMs);
-    playback.timerIds.add(timerId);
-  }
-
-  const cleanupTimerId = window.setTimeout(() => {
-    if (state.activePlayback !== playback) {
-      return;
-    }
-    playback.timerIds.delete(cleanupTimerId);
-    stopActivePlayback();
-  }, scheduleDelayMs + cursorMs + 200);
-  playback.cleanupTimerId = cleanupTimerId;
-  playback.timerIds.add(cleanupTimerId);
-  playback.handoffAtMs = Math.max(
-    playback.handoffAtMs,
-    scheduleBaseMs + scheduleDelayMs + handoffMs,
-  );
-  playback.endsAtMs = Math.max(playback.endsAtMs, scheduleBaseMs + scheduleDelayMs + cursorMs);
-  startPlaybackVisualization(
-    payload,
-    scheduleBaseMs + scheduleDelayMs,
-    cursorMs,
-    { rollKind: visualizationRoll },
-  );
-  updateInfiniteActionState();
-}
-
-function stopInfiniteMode(
-  {
-    stopPlayback = true,
-    silent = false,
-    message = "Infinite mode stopped.",
-  } = {},
-) {
-  const hadInfiniteState =
-    state.infiniteModeEnabled ||
-    state.infiniteRequestInFlight ||
-    state.infiniteScheduleTimerId != null;
-
-  clearInfiniteScheduler();
-  if (state.infiniteAbortController) {
-    state.infiniteAbortController.abort();
-    state.infiniteAbortController = null;
-  }
-  state.infiniteModeEnabled = false;
-  state.infiniteRequestInFlight = false;
-  state.infiniteRunId += 1;
-  if (stopPlayback) {
-    stopActivePlayback();
-  }
-  updateInfiniteActionState();
-
-  if (!silent && (hadInfiniteState || stopPlayback)) {
-    setPhraseMessage(message);
-  }
-
-  return hadInfiniteState;
-}
-
-function stopLoopAndPlayback(message) {
-  const hadInfiniteState =
-    state.infiniteModeEnabled ||
-    state.infiniteRequestInFlight ||
-    state.infiniteScheduleTimerId != null;
-
-  if (hadInfiniteState) {
-    stopInfiniteMode({ stopPlayback: true, silent: true });
-    void sendPlaybackPanic();
-    setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
-    setPhraseMessage(message || "Infinite mode stopped.");
-    return true;
-  }
-
-  if (stopActivePlayback()) {
-    void sendPlaybackPanic();
-    setPhraseStatus(state.lastCapturedPhrase.length ? "Phrase ready" : "Waiting for MIDI");
-    setPhraseMessage(message || "Playback stopped.");
-    return true;
-  }
-
-  return false;
-}
-
-function scheduleInfiniteStep(prefixPayload, runId) {
-  if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
-    return;
-  }
-
-  clearInfiniteScheduler();
-  const remainingPlaybackMs = state.activePlayback
-    ? Math.max(0, state.activePlayback.handoffAtMs - performance.now())
-    : continuationHandoffMs(prefixPayload);
-  const delayMs = Math.max(0, remainingPlaybackMs - infiniteLookaheadMs(prefixPayload));
-
-  state.infiniteScheduleTimerId = window.setTimeout(() => {
-    state.infiniteScheduleTimerId = null;
-    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
-      return;
-    }
-    void runInfiniteStep(prefixPayload, runId);
-  }, delayMs);
-  updateInfiniteActionState();
-}
-
-async function runInfiniteStep(prefixPayload, runId) {
-  if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
-    return;
-  }
-
-  const prefixEvents = Array.isArray(prefixPayload)
-    ? prefixPayload
-    : prefixPayload?.events || [];
-  const handoffViewpoint = Array.isArray(prefixPayload)
-    ? null
-    : prefixPayload?.handoff_viewpoint || null;
-
-  state.infiniteRequestInFlight = true;
-  const abortController = new AbortController();
-  state.infiniteAbortController = abortController;
-  updateInfiniteActionState();
-
-  const continueInfiniteFromMemory = async (reason) => {
-    const { payload } = await requestMemoryGeneration({
-      noteCount: preferredGenerationNoteCount(prefixEvents),
-      statusLabel: state.activePlayback ? "Re-seeding from memory" : "Generating from memory",
-      signal: abortController.signal,
-      enforceStartConstraint: false,
-      enforceEndConstraint: false,
-    });
-    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
-      return true;
-    }
-
-    const generatedPhrase = payload.generated_phrase;
-    if (!generatedPhrase.event_count) {
-      throw new Error("the memory fallback returned an empty phrase");
-    }
-
-    const willQueueAfterCurrentPlayback = Boolean(state.activePlayback);
-    applyGeneratedPhrasePayload(payload, {
-      renderGenerated: !willQueueAfterCurrentPlayback,
-    });
-    const startDelayMs = state.activePlayback
-      ? Math.max(0, state.activePlayback.handoffAtMs - performance.now())
-      : PLAYBACK_START_DELAY_MS;
-    await playPayload(generatedPhrase, {
-      startDelayMs,
-      append: Boolean(state.activePlayback),
-    });
-    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
-      return true;
-    }
-
-    setPhraseStatus("Infinite");
-    setPhraseMessage(
-      payload.status_message ||
-        `Infinite mode resumed from memory because ${reason}.`,
-    );
-    scheduleInfiniteStep(generatedPhrase, runId);
-    scheduleVisibleSessionRefresh();
-    return true;
-  };
-
-  try {
-    const { payload } = await requestContinuationFromEvents(prefixEvents, {
-      learnInput: false,
-      statusLabel: state.activePlayback ? "Queueing next" : "Sending",
-      signal: abortController.signal,
-      enforceEndConstraint: false,
-      handoffViewpoint,
-    });
-    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
-      return;
-    }
-
-    const generatedPhrase = payload.generated_phrase;
-    const willQueueAfterCurrentPlayback = Boolean(state.activePlayback);
-    applyContinuationPayload({
-      ...payload,
-      generated_phrase: generatedPhrase,
-    }, {
-      renderGenerated: !willQueueAfterCurrentPlayback,
-    });
-    if (!generatedPhrase.event_count) {
-      await continueInfiniteFromMemory("the latest continuation was empty");
-      return;
-    }
-
-    const startDelayMs = state.activePlayback
-      ? Math.max(0, state.activePlayback.handoffAtMs - performance.now())
-      : PLAYBACK_START_DELAY_MS;
-    await playPayload(generatedPhrase, {
-      startDelayMs,
-      append: Boolean(state.activePlayback),
-    });
-    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
-      return;
-    }
-
-    setPhraseStatus("Infinite");
-    setPhraseMessage(
-      payload.status_message ||
-        `Infinite mode running: ${generatedPhrase.note_count} notes queued from the latest continuation.`,
-    );
-    scheduleInfiniteStep(generatedPhrase, runId);
-    scheduleVisibleSessionRefresh();
-  } catch (error) {
-    if (error.name === "AbortError") {
-      return;
-    }
-
-    try {
-      const resumed = await continueInfiniteFromMemory(
-        "the latest continuation reached a dead end",
-      );
-      if (resumed) {
-        return;
-      }
-    } catch (fallbackError) {
-      error = fallbackError;
-    }
-
-    if (runId === state.infiniteRunId) {
-      stopInfiniteMode({
-        stopPlayback: false,
-        message: `Infinite mode stopped: ${error.message}`,
-      });
-      setPhraseStatus("Error");
-    }
-  } finally {
-    if (runId === state.infiniteRunId) {
-      state.infiniteRequestInFlight = false;
-      state.infiniteAbortController = null;
-      updateInfiniteActionState();
-    }
-  }
-}
-
-async function startInfiniteMode() {
-  if (state.infiniteModeEnabled || state.infiniteRequestInFlight) {
-    return;
-  }
-
-  if (state.activePlayback && state.lastGeneratedPhrase?.events?.length) {
-    state.infiniteModeEnabled = true;
-    state.infiniteRunId += 1;
-    updateInfiniteActionState();
-    setPhraseStatus("Infinite");
-    setPhraseMessage(
-      "Infinite mode armed. The next continuation will be queued before the current one ends.",
-    );
-    scheduleInfiniteStep(state.lastGeneratedPhrase, state.infiniteRunId);
-    return;
-  }
-
-  const seedPayload = latestLoopSeedPayload();
-  const seedEvents = seedPayload?.events || [];
-  if (!seedEvents.length) {
-    setPhraseMessage("Play or preview a phrase before starting infinite mode.", true);
-    return;
-  }
-
-  state.infiniteModeEnabled = true;
-  state.infiniteRunId += 1;
-  updateInfiniteActionState();
-  setPhraseMessage("Infinite mode started. Generating the first continuation...");
-
-  const runId = state.infiniteRunId;
-  state.infiniteRequestInFlight = true;
-  const abortController = new AbortController();
-  state.infiniteAbortController = abortController;
-  updateInfiniteActionState();
-
-  try {
-    const { payload } = await requestContinuationFromEvents(seedEvents, {
-      learnInput: elements.learnInputToggle.checked,
-      signal: abortController.signal,
-      enforceEndConstraint: false,
-      handoffViewpoint: seedPayload?.handoff_viewpoint || null,
-    });
-    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
-      return;
-    }
-
-    const generatedPhrase = payload.generated_phrase;
-    applyContinuationPayload({
-      ...payload,
-      generated_phrase: generatedPhrase,
-    });
-    if (!generatedPhrase.event_count) {
-      stopInfiniteMode({
-        stopPlayback: false,
-        message: "Infinite mode stopped because the first continuation was empty.",
-      });
-      setPhraseStatus("Primed");
-      return;
-    }
-
-    await playPayload(generatedPhrase);
-    if (!state.infiniteModeEnabled || runId !== state.infiniteRunId) {
-      return;
-    }
-
-    setPhraseStatus("Infinite");
-    setPhraseMessage(
-      `Infinite mode running: ${generatedPhrase.note_count} notes in the first continuation.`,
-    );
-    scheduleVisibleSessionRefresh();
-    scheduleInfiniteStep(generatedPhrase, runId);
-  } catch (error) {
-    if (error.name === "AbortError") {
-      return;
-    }
-    if (runId === state.infiniteRunId) {
-      stopInfiniteMode({
-        stopPlayback: false,
-        message: `Infinite mode stopped: ${error.message}`,
-      });
-      setPhraseStatus("Error");
-    }
-  } finally {
-    if (runId === state.infiniteRunId) {
-      state.infiniteRequestInFlight = false;
-      state.infiniteAbortController = null;
-      updateInfiniteActionState();
-    }
-  }
-}
-
 function populatePlaybackChoices() {
-  const outputs = state.midiAccess ? [...state.midiAccess.outputs.values()] : [];
+  const outputs = state.midiAccess
+    ? [...state.midiAccess.outputs.values()]
+    : [];
   const previousChoiceValue = selectedPlaybackChoiceValue();
   const preferredChoiceValue = resolveAvailablePlaybackPreference(
     pendingPlaybackPreference(),
     outputs,
   );
   const availableChoices = new Set([
-    ...localPlaybackRenderers.map((renderer) => encodePlaybackChoice(renderer.id)),
+    ...localPlaybackRenderers.map((renderer) =>
+      encodePlaybackChoice(renderer.id),
+    ),
     ...outputs.map((output) =>
       encodePlaybackChoice(WEB_MIDI_RENDERER_ID, output.id),
     ),
@@ -6980,7 +2486,8 @@ function populatePlaybackChoices() {
         )}">${output.name || output.id}</option>`,
     )
     .join("");
-  const externalMidiOptions = midiOptions ||
+  const externalMidiOptions =
+    midiOptions ||
     `<option value="" disabled>${
       state.midiAccess
         ? "No external MIDI outputs found"
@@ -7012,7 +2519,9 @@ function populateMidiCopyOutputChoices(
   if (!elements.midiCopyOutputSelect) {
     return null;
   }
-  const outputs = state.midiAccess ? [...state.midiAccess.outputs.values()] : [];
+  const outputs = state.midiAccess
+    ? [...state.midiAccess.outputs.values()]
+    : [];
   const primaryOutputId = selectedPrimaryMidiOutputId();
   const eligibleOutputs = outputs.filter(
     (output) => output.id !== primaryOutputId,
@@ -7051,167 +2560,6 @@ function populateMidiCopyOutputChoices(
   elements.midiCopyOutputSelect.disabled = !state.midiAccess;
   elements.midiCopyOutputSelect.value = selectedOutputId || "";
   return selectedOutputId;
-}
-
-async function populateMidiSelectors() {
-  populatePlaybackChoices();
-  const inputs = state.midiAccess ? [...state.midiAccess.inputs.values()] : [];
-  const previousInputId = elements.midiInputSelect.value;
-  const currentInputId = isVirtualMidiInputId(previousInputId)
-    ? previousInputId
-    : state.activeInputId || previousInputId;
-  const preferredInputId = state.sessionConfiguration?.midi_input_id || null;
-  const physicalInputIds = new Set(inputs.map((input) => input.id));
-  const currentInputAvailable =
-    isVirtualMidiInputId(currentInputId) || physicalInputIds.has(currentInputId);
-  const preferredInputAvailable =
-    isVirtualMidiInputId(preferredInputId) || physicalInputIds.has(preferredInputId);
-
-  elements.midiInputSelect.disabled = false;
-  elements.midiInputSelect.innerHTML = [
-    `<option value="">Choose input source</option>`,
-    `<option value="${VIRTUAL_MIDI_INPUT_ID}">${VIRTUAL_MIDI_INPUT_NAME}</option>`,
-    ...inputs.map(
-      (input) =>
-        `<option value="${input.id}">${input.name || input.id}</option>`,
-    ),
-  ].join("");
-
-  const inputId =
-    currentInputAvailable
-      ? currentInputId
-      : preferredInputAvailable
-      ? preferredInputId
-      : inputs.length
-        ? inputs[0].id
-        : "";
-  await attachInput(inputId, { savePreference: false });
-}
-
-function detachCurrentInput() {
-  if (!state.activeInputId) {
-    return;
-  }
-  if (isVirtualMidiInputSelected()) {
-    allVirtualNotesOff();
-  } else if (state.midiAccess) {
-    const current = state.midiAccess.inputs.get(state.activeInputId);
-    if (current) {
-      current.onmidimessage = null;
-      void current.close().catch(() => {});
-    }
-  }
-  stopLiveMonitorPlayback();
-  state.activeInputId = null;
-  syncVirtualKeyboardVisibility();
-  renderPerformanceState();
-}
-
-async function attachInput(inputId, { savePreference = false } = {}) {
-  detachCurrentInput();
-
-  if (isVirtualMidiInputId(inputId)) {
-    state.activeInputId = VIRTUAL_MIDI_INPUT_ID;
-    elements.midiInputSelect.value = VIRTUAL_MIDI_INPUT_ID;
-    setSelectedInputName(VIRTUAL_MIDI_INPUT_NAME);
-    setMidiStatus("Using virtual input");
-    setPhraseStatus("Listening");
-    syncVirtualKeyboardVisibility();
-    renderPerformanceState();
-    if (savePreference) {
-      await saveSessionPreferences({
-        midi_input_id: VIRTUAL_MIDI_INPUT_ID,
-        midi_input_name: VIRTUAL_MIDI_INPUT_NAME,
-      });
-    }
-    return;
-  }
-
-  if (!state.midiAccess || !inputId) {
-    state.activeInputId = null;
-    elements.midiInputSelect.value = "";
-    setSelectedInputName("No MIDI input selected");
-    syncVirtualKeyboardVisibility();
-    renderPerformanceState();
-    return;
-  }
-
-  const input = state.midiAccess.inputs.get(inputId);
-  if (!input) {
-    setSelectedInputName("Selected input is unavailable");
-    syncVirtualKeyboardVisibility();
-    renderPerformanceState();
-    return;
-  }
-
-  await input.open();
-  input.onmidimessage = (messageEvent) => {
-    handleUnifiedMidiMessage(messageEvent, input.name || input.id, {
-      monitor: shouldMonitorSelectedMidiInput(),
-    });
-  };
-
-  state.activeInputId = inputId;
-  elements.midiInputSelect.value = inputId;
-  setSelectedInputName(input.name || input.id);
-  setMidiStatus(`Listening on ${input.name || input.id}`);
-  syncVirtualKeyboardVisibility();
-  renderPerformanceState();
-  if (savePreference) {
-    await saveSessionPreferences({
-      midi_input_id: input.id,
-      midi_input_name: input.name || input.id,
-    });
-  }
-}
-
-async function connectMidi() {
-  if (!navigator.requestMIDIAccess) {
-    throw new Error("This browser does not support the Web MIDI API.");
-  }
-
-  state.midiAccess = await navigator.requestMIDIAccess({ sysex: false });
-  state.midiAccess.onstatechange = async () => {
-    try {
-      await populateMidiSelectors();
-      const restoredPreferences = {
-        ...(selectedPlaybackRestoresPendingPreference()
-          ? currentPlaybackPreference()
-          : {}),
-        ...(selectedMidiCopyRestoresPendingPreference()
-          ? currentMidiCopyOutputPreference()
-          : {}),
-      };
-      if (Object.keys(restoredPreferences).length) {
-        await saveSessionPreferences(restoredPreferences);
-      }
-    } catch (error) {
-      setPhraseMessage(error.message, true);
-    }
-  };
-  await populateMidiSelectors();
-  const restoredPreferences = {
-    ...(selectedPlaybackRestoresPendingPreference()
-      ? currentPlaybackPreference()
-      : {}),
-    ...(selectedMidiCopyRestoresPendingPreference()
-      ? currentMidiCopyOutputPreference()
-      : {}),
-  };
-  if (Object.keys(restoredPreferences).length) {
-    await saveSessionPreferences(restoredPreferences);
-  }
-  if (!state.activeInputId) {
-    setMidiStatus("Connected / choose input");
-  }
-  setPhraseStatus("Listening");
-}
-
-function updateSelectedOutput() {
-  stopLiveMonitorPlayback();
-  populateMidiCopyOutputChoices();
-  syncFaustRendererPanel();
-  renderPerformanceState();
 }
 
 async function compileCustomFaustFromEditor() {
@@ -7324,7 +2672,9 @@ function bindEvents() {
       if (state.authUser) {
         return;
       }
-      setAuthMessage("Guest mode is ready. Sign in only if you want saved sessions.");
+      setAuthMessage(
+        "Guest mode is ready. Sign in only if you want saved sessions.",
+      );
     });
   });
 
@@ -7402,7 +2752,10 @@ function bindEvents() {
     setControlView("session");
     setAccountPanelOpen(false);
     scheduleVisibleSessionRefresh();
-    elements.controlWorkspace?.scrollIntoView({ behavior: "smooth", block: "start" });
+    elements.controlWorkspace?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   });
 
   document.addEventListener("click", (event) => {
@@ -7463,7 +2816,9 @@ function bindEvents() {
 
   elements.rememberMidiExportFileToggle.addEventListener("change", async () => {
     if (elements.rememberMidiExportFileToggle.checked) {
-      setSessionMidiSaveResult("The next selected MIDI ZIP file will be remembered and overwritten on future saves.");
+      setSessionMidiSaveResult(
+        "The next selected MIDI ZIP file will be remembered and overwritten on future saves.",
+      );
       return;
     }
     state.midiExportFileHandle = null;
@@ -7471,7 +2826,9 @@ function bindEvents() {
       await clearStoredMidiExportFileHandle();
       setSessionMidiSaveResult("MIDI export ZIP preference cleared.");
     } catch {
-      setSessionMidiSaveResult("MIDI export ZIP preference cleared for this page.");
+      setSessionMidiSaveResult(
+        "MIDI export ZIP preference cleared for this page.",
+      );
     }
   });
 
@@ -7720,7 +3077,9 @@ function bindEvents() {
   });
 
   elements.phraseTimeoutInput.addEventListener("change", () => {
-    applyPhraseTimeoutSetting(elements.phraseTimeoutInput.value, { announce: true });
+    applyPhraseTimeoutSetting(elements.phraseTimeoutInput.value, {
+      announce: true,
+    });
   });
 
   elements.inputMonitorToggle.addEventListener("change", () => {
@@ -7834,7 +3193,9 @@ function bindEvents() {
       const starter = await loadCustomFaustTemplate();
       setCustomFaustSource(starter);
       syncFaustRendererPanel();
-      setPhraseMessage("Restored the Custom Faust starter template. Compile to use it.");
+      setPhraseMessage(
+        "Restored the Custom Faust starter template. Compile to use it.",
+      );
     } catch (error) {
       setPhraseMessage(error.message, true);
     }
@@ -7919,7 +3280,10 @@ function bindEvents() {
     if (note == null || event.repeat) {
       return;
     }
-    if (event.target instanceof HTMLElement && event.target.closest("input, select, textarea")) {
+    if (
+      event.target instanceof HTMLElement &&
+      event.target.closest("input, select, textarea")
+    ) {
       return;
     }
     event.preventDefault();
@@ -7986,7 +3350,9 @@ async function initialize() {
   }
   if (navigator.mediaDevices?.addEventListener) {
     navigator.mediaDevices.addEventListener("devicechange", () => {
-      void refreshAudioOutputDevices().catch(() => populateAudioOutputChoices());
+      void refreshAudioOutputDevices().catch(() =>
+        populateAudioOutputChoices(),
+      );
     });
   }
   setSelectedInputName("No MIDI input selected");
@@ -8020,5 +3386,287 @@ async function initialize() {
     setPhraseMessage(`Could not auto-create a session: ${error.message}`, true);
   }
 }
+
+const {
+  renderPerformanceState,
+  hasPendingSessionSettings,
+  renderConstraintStatus,
+  setAuthMessage,
+  setTextContentIfChanged,
+  setSessionStatus,
+  setMidiStatus,
+  setPhraseStatus,
+  setSelectedInputName,
+  setLastMidiEvent,
+  readSessionSettingsFromControls,
+  describeSessionSettings,
+  renderSessionSettingsSummary,
+  updateKeepLastFieldState,
+  syncSettingsControls,
+  updateSessionActionState,
+  sessionDisplayName,
+  selectedSavedSession,
+  renderSavedSessions,
+  syncAuthUI,
+  setControlView,
+  syncPreviewSelection,
+  syncMemoryPlaybackState,
+  renderCapturedStats,
+  stopCapturedPreviewRender,
+  renderCapturedProgress,
+  renderGeneratedStats,
+  rollCanvas,
+  rollSourceLabel,
+  rollAuditionOptions,
+  renderRollCanvas,
+  syncRollPlaybackState,
+  handleRollClick,
+  updateRollPointerTitle,
+  handleRollKeydown,
+  renderHistory,
+  renderMemory,
+} = createViews({
+  auditionRollNote: (...args) => auditionRollNote(...args),
+  elements,
+  formatMilliseconds: (...args) => formatMilliseconds(...args),
+  hasLoopSeedPhrase: (...args) => hasLoopSeedPhrase(...args),
+  midiExportZipRememberSupported: (...args) =>
+    midiExportZipRememberSupported(...args),
+  midiNoteName: (...args) => midiNoteName(...args),
+  midiOutputById: (...args) => midiOutputById(...args),
+  normalizedKeepLastInputs: (...args) => normalizedKeepLastInputs(...args),
+  normalizedMarkovOrder: (...args) => normalizedMarkovOrder(...args),
+  openSavedSession: (...args) => openSavedSession(...args),
+  parsePlaybackChoice: (...args) => parsePlaybackChoice(...args),
+  phraseDurationMs: (...args) => phraseDurationMs(...args),
+  phraseNoteCount: (...args) => phraseNoteCount(...args),
+  playPayload: (...args) => playPayload(...args),
+  playbackChoiceLabel: (...args) => playbackChoiceLabel(...args),
+  pluralize: (...args) => pluralize(...args),
+  refreshSavedSessions: (...args) => refreshSavedSessions(...args),
+  refreshUserPlaybackPreferenceFromSavedSessions: (...args) =>
+    refreshUserPlaybackPreferenceFromSavedSessions(...args),
+  rememberCapturedPhrase: (...args) => rememberCapturedPhrase(...args),
+  rememberGeneratedPhrase: (...args) => rememberGeneratedPhrase(...args),
+  renderAccountTrigger: (...args) => renderAccountTrigger(...args),
+  requestJson: (...args) => requestJson(...args),
+  selectedMidiCopyOutput: (...args) => selectedMidiCopyOutput(...args),
+  selectedMidiCopyOutputId: (...args) => selectedMidiCopyOutputId(...args),
+  selectedPlaybackChoice: (...args) => selectedPlaybackChoice(...args),
+  setPhraseMessage: (...args) => setPhraseMessage(...args),
+  setReadinessStep: (...args) => setReadinessStep(...args),
+  state,
+  stopActivePlayback: (...args) => stopActivePlayback(...args),
+  stopInfiniteMode: (...args) => stopInfiniteMode(...args),
+  updateInfiniteActionState: (...args) => updateInfiniteActionState(...args),
+});
+
+const {
+  requestJson,
+  renamePreviewedSession,
+  currentPlaybackPreference,
+  currentMidiCopyOutputPreference,
+  saveSessionPreferences,
+  refreshAuthState,
+  initializeReadySession,
+  submitAuth,
+  logoutUser,
+  refreshSavedSessions,
+  openSavedSession,
+  createSession,
+  resetSession,
+  saveSessionMidi,
+  applyCurrentSessionSettings,
+  scheduleVisibleSessionRefresh,
+  applyContinuationPayload,
+  applyGeneratedPhrasePayload,
+  requestContinuationFromEvents,
+  requestMemoryGeneration,
+  sendCurrentPhrase,
+  generateFreshPhrase,
+  importSelectedMidiFiles,
+} = createSessionController({
+  applyPreferredAudioOutput: (...args) => applyPreferredAudioOutput(...args),
+  attachInput: (...args) => attachInput(...args),
+  chooseMidiExportZipFileHandle: (...args) =>
+    chooseMidiExportZipFileHandle(...args),
+  clearCurrentSessionState: (...args) => clearCurrentSessionState(...args),
+  clearPhraseBuffers: (...args) => clearPhraseBuffers(...args),
+  describeSessionSettings: (...args) => describeSessionSettings(...args),
+  downloadZipBlob: (...args) => downloadZipBlob(...args),
+  elements,
+  filePickerBlockedByFrame: (...args) => filePickerBlockedByFrame(...args),
+  hasMidiFileExtension: (...args) => hasMidiFileExtension(...args),
+  hasPendingSessionSettings: (...args) => hasPendingSessionSettings(...args),
+  isVirtualMidiInputId: (...args) => isVirtualMidiInputId(...args),
+  isVirtualMidiInputSelected: (...args) => isVirtualMidiInputSelected(...args),
+  loadStoredAudioOutputPreference: (...args) =>
+    loadStoredAudioOutputPreference(...args),
+  loadStoredMidiCopyOutputPreference: (...args) =>
+    loadStoredMidiCopyOutputPreference(...args),
+  loadStoredPlaybackPreference: (...args) =>
+    loadStoredPlaybackPreference(...args),
+  midiExportZipSaveSupported: (...args) => midiExportZipSaveSupported(...args),
+  midiOutputById: (...args) => midiOutputById(...args),
+  normalizedContinuationNoteCount: (...args) =>
+    normalizedContinuationNoteCount(...args),
+  playPayload: (...args) => playPayload(...args),
+  playbackChoiceLabel: (...args) => playbackChoiceLabel(...args),
+  pluralize: (...args) => pluralize(...args),
+  populateAudioOutputChoices: (...args) => populateAudioOutputChoices(...args),
+  preferredGenerationNoteCount: (...args) =>
+    preferredGenerationNoteCount(...args),
+  readSessionSettingsFromControls: (...args) =>
+    readSessionSettingsFromControls(...args),
+  rememberCapturedPhrase: (...args) => rememberCapturedPhrase(...args),
+  rememberGeneratedPhrase: (...args) => rememberGeneratedPhrase(...args),
+  rememberMidiCopyOutputPreference: (...args) =>
+    rememberMidiCopyOutputPreference(...args),
+  rememberPlaybackPreference: (...args) => rememberPlaybackPreference(...args),
+  renderCapturedStats: (...args) => renderCapturedStats(...args),
+  renderConstraintStatus: (...args) => renderConstraintStatus(...args),
+  renderGeneratedStats: (...args) => renderGeneratedStats(...args),
+  renderHistory: (...args) => renderHistory(...args),
+  renderMemory: (...args) => renderMemory(...args),
+  renderPerformanceState: (...args) => renderPerformanceState(...args),
+  renderSavedSessions: (...args) => renderSavedSessions(...args),
+  requestSessionMidiZip: (...args) => requestSessionMidiZip(...args),
+  selectMidiCopyOutputPreference: (...args) =>
+    selectMidiCopyOutputPreference(...args),
+  selectPlaybackPreference: (...args) => selectPlaybackPreference(...args),
+  selectedMidiCopyOutputId: (...args) => selectedMidiCopyOutputId(...args),
+  selectedPlaybackChoiceValue: (...args) =>
+    selectedPlaybackChoiceValue(...args),
+  selectedSavedSession: (...args) => selectedSavedSession(...args),
+  serverWaitLabel: (...args) => serverWaitLabel(...args),
+  sessionDisplayName: (...args) => sessionDisplayName(...args),
+  setAccountPanelOpen: (...args) => setAccountPanelOpen(...args),
+  setAuthMessage: (...args) => setAuthMessage(...args),
+  setControlView: (...args) => setControlView(...args),
+  setPhraseMessage: (...args) => setPhraseMessage(...args),
+  setPhraseStatus: (...args) => setPhraseStatus(...args),
+  setSessionMidiSaveResult: (...args) => setSessionMidiSaveResult(...args),
+  setSessionStatus: (...args) => setSessionStatus(...args),
+  startServerWaitIndicator: (...args) => startServerWaitIndicator(...args),
+  state,
+  stopInfiniteMode: (...args) => stopInfiniteMode(...args),
+  stopServerWaitIndicator: (...args) => stopServerWaitIndicator(...args),
+  syncAuthUI: (...args) => syncAuthUI(...args),
+  syncSettingsControls: (...args) => syncSettingsControls(...args),
+  updateInfiniteActionState: (...args) => updateInfiniteActionState(...args),
+  updateSessionActionState: (...args) => updateSessionActionState(...args),
+  updateSessionGraphImage: (...args) => updateSessionGraphImage(...args),
+  validateAuthCredentials: (...args) => validateAuthCredentials(...args),
+  writeZipBlobToFileHandle: (...args) => writeZipBlobToFileHandle(...args),
+});
+
+const {
+  midiOutputById,
+  selectedPrimaryMidiOutputId,
+  selectedMidiCopyOutputId,
+  selectedMidiCopyOutput,
+  midiCopyOutputLabel,
+  selectedPlaybackChoiceValue,
+  encodePlaybackChoice,
+  parsePlaybackChoice,
+  resolvePlaybackChoice,
+  selectedPlaybackChoice,
+  playbackChoiceLabel,
+  createPlaybackSession,
+  dispatchMidiEventToOutput,
+  stopMidiOutputPlayback,
+  stopMidiCopyPlayback,
+  sendMidiPanicToOutput,
+  sendPlaybackPanic,
+  stopPlaybackVisualization,
+  stopActivePlayback,
+  dispatchPlaybackEvent,
+  playPayload,
+  stopInfiniteMode,
+  stopLoopAndPlayback,
+  startInfiniteMode,
+} = createPlaybackController({
+  applyContinuationPayload: (...args) => applyContinuationPayload(...args),
+  applyGeneratedPhrasePayload: (...args) =>
+    applyGeneratedPhrasePayload(...args),
+  clearInfiniteScheduler: (...args) => clearInfiniteScheduler(...args),
+  continuationHandoffMs: (...args) => continuationHandoffMs(...args),
+  elements,
+  infiniteLookaheadMs: (...args) => infiniteLookaheadMs(...args),
+  latestLoopSeedPayload: (...args) => latestLoopSeedPayload(...args),
+  localPlaybackRenderers,
+  playbackRendererRegistry,
+  preferredGenerationNoteCount: (...args) =>
+    preferredGenerationNoteCount(...args),
+  releaseRollAuditionNote: (...args) => releaseRollAuditionNote(...args),
+  renderGeneratedStats: (...args) => renderGeneratedStats(...args),
+  renderPerformanceState: (...args) => renderPerformanceState(...args),
+  requestContinuationFromEvents: (...args) =>
+    requestContinuationFromEvents(...args),
+  requestMemoryGeneration: (...args) => requestMemoryGeneration(...args),
+  rollAuditionOptions: (...args) => rollAuditionOptions(...args),
+  rollCanvas: (...args) => rollCanvas(...args),
+  scheduleVisibleSessionRefresh: (...args) =>
+    scheduleVisibleSessionRefresh(...args),
+  setPhraseMessage: (...args) => setPhraseMessage(...args),
+  setPhraseStatus: (...args) => setPhraseStatus(...args),
+  state,
+  stopLiveMonitorPlayback: (...args) => stopLiveMonitorPlayback(...args),
+  stopRollAudition: (...args) => stopRollAudition(...args),
+  syncMemoryPlaybackState: (...args) => syncMemoryPlaybackState(...args),
+  syncRollPlaybackState: (...args) => syncRollPlaybackState(...args),
+  updateInfiniteActionState: (...args) => updateInfiniteActionState(...args),
+});
+
+const {
+  midiNoteName,
+  isVirtualMidiInputId,
+  isVirtualMidiInputSelected,
+  syncVirtualKeyboardVisibility,
+  syncPhoneLayout,
+  initializePhoneInput,
+  getVirtualVelocity,
+  stopLiveMonitorPlayback,
+  pressVirtualNote,
+  releaseVirtualNote,
+  toggleLatchedVirtualNote,
+  releaseSustainedVirtualNotes,
+  allVirtualNotesOff,
+  clearLatchedVirtualChord,
+  renderVirtualKeyboard,
+  setVirtualKeyboardBaseNote,
+  virtualNoteFromComputerKey,
+  populateMidiSelectors,
+  attachInput,
+  connectMidi,
+  updateSelectedOutput,
+} = createMidiInput({
+  createPlaybackSession: (...args) => createPlaybackSession(...args),
+  currentMidiCopyOutputPreference: (...args) =>
+    currentMidiCopyOutputPreference(...args),
+  currentPlaybackPreference: (...args) => currentPlaybackPreference(...args),
+  dispatchPlaybackEvent: (...args) => dispatchPlaybackEvent(...args),
+  elements,
+  populateMidiCopyOutputChoices: (...args) =>
+    populateMidiCopyOutputChoices(...args),
+  populatePlaybackChoices: (...args) => populatePlaybackChoices(...args),
+  recorder,
+  renderPerformanceState: (...args) => renderPerformanceState(...args),
+  saveSessionPreferences: (...args) => saveSessionPreferences(...args),
+  selectedMidiCopyRestoresPendingPreference: (...args) =>
+    selectedMidiCopyRestoresPendingPreference(...args),
+  selectedPlaybackChoice: (...args) => selectedPlaybackChoice(...args),
+  selectedPlaybackRestoresPendingPreference: (...args) =>
+    selectedPlaybackRestoresPendingPreference(...args),
+  setLastMidiEvent: (...args) => setLastMidiEvent(...args),
+  setMidiStatus: (...args) => setMidiStatus(...args),
+  setPhraseMessage: (...args) => setPhraseMessage(...args),
+  setPhraseStatus: (...args) => setPhraseStatus(...args),
+  setSelectedInputName: (...args) => setSelectedInputName(...args),
+  state,
+  stopLoopAndPlayback: (...args) => stopLoopAndPlayback(...args),
+  stopMidiCopyPlayback: (...args) => stopMidiCopyPlayback(...args),
+  syncFaustRendererPanel: (...args) => syncFaustRendererPanel(...args),
+});
 
 initialize();

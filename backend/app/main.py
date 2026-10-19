@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from fastapi import Cookie, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import (
+    Cookie,
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
@@ -43,7 +53,12 @@ from .schemas import (
     UpdateSessionSettingsResponse,
     UserSessionsResponse,
 )
-from .session_manager import MidiImportError, NoContinuationAvailable, SessionManager, UnknownSessionError
+from .session_manager import (
+    MidiImportError,
+    NoContinuationAvailable,
+    SessionManager,
+    UnknownSessionError,
+)
 from .storage import PhraseStorage
 
 
@@ -68,6 +83,16 @@ app = FastAPI(
 )
 
 app.mount("/assets", StaticFiles(directory=settings.frontend_dir), name="assets")
+
+
+@app.middleware("http")
+async def revalidate_frontend_modules(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/assets/") and request.url.path.endswith(
+        (".js", ".css")
+    ):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
 
 
 def auth_user_to_schema(user: AuthenticatedUser) -> AuthUser:
@@ -219,7 +244,9 @@ def open_session(
     try:
         return session_manager.open_session(session_id, current_user.id)
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
 
 
 @app.patch(
@@ -235,7 +262,9 @@ def update_session_name(
     try:
         return session_manager.update_session_name(session_id, current_user.id, payload)
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
 
 
 @app.patch(
@@ -255,7 +284,9 @@ def update_session_preferences(
             payload,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
 
 
 @app.patch(
@@ -275,7 +306,9 @@ def update_session_settings(
             payload,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
 
 
 @app.post("/api/continue", response_model=ContinueResponse, tags=["continuator"])
@@ -289,7 +322,9 @@ def continue_phrase(
             None if current_user is None else current_user.id,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
     except NoContinuationAvailable as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
@@ -313,7 +348,9 @@ def generate_phrase(
             enforce_end_constraint=payload.enforce_end_constraint,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
     except NoContinuationAvailable as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
@@ -335,7 +372,9 @@ def session_history(
             limit=limit,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
 
 
 @app.post(
@@ -353,7 +392,9 @@ def save_session_midi(
             None if current_user is None else current_user.id,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -373,7 +414,9 @@ def download_session_midi(
             None if current_user is None else current_user.id,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -392,7 +435,9 @@ def session_midi_zip(
             None if current_user is None else current_user.id,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -423,7 +468,9 @@ def session_memory(
             None if current_user is None else current_user.id,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
 
 
 @app.get(
@@ -448,7 +495,9 @@ def session_memory_graph_svg(
             order_filter=order,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
     return Response(content=svg, media_type="image/svg+xml")
 
 
@@ -468,7 +517,9 @@ def session_constraint_graph_svg(
             max_steps=max_steps,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
     return Response(content=svg, media_type="image/svg+xml")
 
 
@@ -486,6 +537,8 @@ def session_graph_svg_legacy(
         session_id,
         max_nodes=max_nodes,
         max_edges=max_edges,
+        mode="slice",
+        order=None,
         current_user=current_user,
     )
 
@@ -498,6 +551,7 @@ def session_graph_svg_legacy(
 def delete_session_memory_phrase(
     session_id: str,
     slot: int,
+    memory_id: str | None = Query(default=None),
     current_user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ) -> SessionMemoryResponse:
     try:
@@ -505,9 +559,12 @@ def delete_session_memory_phrase(
             session_id,
             None if current_user is None else current_user.id,
             slot,
+            memory_id=memory_id,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -536,7 +593,9 @@ async def import_session_midi(
             uploaded_files,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error
     except MidiImportError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     finally:
@@ -559,4 +618,6 @@ def reset_session(
             None if current_user is None else current_user.id,
         )
     except UnknownSessionError as error:
-        raise HTTPException(status_code=404, detail=f"Unknown session: {error.args[0]}") from error
+        raise HTTPException(
+            status_code=404, detail=f"Unknown session: {error.args[0]}"
+        ) from error

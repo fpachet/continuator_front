@@ -1,67 +1,27 @@
-"""Regression checks against the installed Continuator engine and HTTP API."""
+"""Integration checks against the installed engine and HTTP API."""
+
 from __future__ import annotations
 
-import importlib
-from io import BytesIO
 import json
-
+from io import BytesIO
 import mido
 import pytest
-from fastapi.testclient import TestClient
-
 from app.continuator_adapter import ContinuatorSessionEngine
-from app.schemas import MidiEvent, ViewpointSeed
+from app.schemas import ViewpointSeed
 from app.session_manager import SessionManager
+from .helpers import create_session, learn, pitch_events
 
 
-@pytest.fixture
-def phrase():
-    return [
-        MidiEvent(type=kind, note=pitch, velocity=velocity, delta_seconds=delta)
-        for pitch in (60, 62, 64, 65)
-        for kind, velocity, delta in (("note_on", 90, 0), ("note_off", 0, 0.25))
-    ]
-
-
-@pytest.fixture
-def api(tmp_path, monkeypatch):
-    monkeypatch.setenv("CONTINUATOR_DB_PATH", str(tmp_path / "test.sqlite3"))
-    monkeypatch.setenv("CONTINUATOR_SESSION_EXPORT_DIR", str(tmp_path / "exports"))
-    monkeypatch.delenv("CONTINUATOR_SEED_MIDI_FILE", raising=False)
-    monkeypatch.delenv("CONTINUATOR_SEED_MIDI_FOLDER", raising=False)
-    from app import main
-    importlib.reload(main)
-    with TestClient(main.app) as client:
-        yield client, main
-
-
-def create_session(client, **settings):
-    response = client.post("/api/session", json=settings)
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert "engine_kind" not in payload["configuration"]
-    assert "decay_mode" not in payload["configuration"]
-    return payload["session_id"]
-
-
-def learn(client, session_id, phrase):
-    response = client.post("/api/continue", json={
-        "session_id": session_id,
-        "phrase": [event.model_dump() for event in phrase],
-        "continuation_note_count": 4,
-    })
-    assert response.status_code == 200, response.text
-    assert response.json()["generated_phrase"]["note_count"] == 4
-    assert response.json()["generation_trace"]
-    return response.json()
-
-
-@pytest.mark.parametrize("start,end", [(True, True), (True, False), (False, True), (False, False)])
+@pytest.mark.parametrize(
+    "start,end", [(True, True), (True, False), (False, True), (False, False)]
+)
 def test_generate_constraints_and_native_traces(phrase, start, end):
     engine = ContinuatorSessionEngine()
     engine.learn_phrase_events(phrase)
     payload, constraints, trace, _ = engine.generate_phrase(
-        note_count=4, enforce_start_constraint=start, enforce_end_constraint=end,
+        note_count=4,
+        enforce_start_constraint=start,
+        enforce_end_constraint=end,
     )
     assert payload.note_count == 4
     assert constraints.start.requested == start
@@ -79,7 +39,9 @@ def test_generate_constraints_and_native_traces(phrase, start, end):
 
 
 def test_order_rebuild_preserves_transposed_memory_without_pruning(phrase):
-    engine = ContinuatorSessionEngine(transposition=True, forget_past=True, keep_last_inputs=2)
+    engine = ContinuatorSessionEngine(
+        transposition=True, forget_past=True, keep_last_inputs=2
+    )
     engine.learn_phrase_events(phrase)
     before, seeds_before = engine.get_memory_snapshot()
     assert len(before) == 12
@@ -94,20 +56,14 @@ def test_order_rebuild_preserves_transposed_memory_without_pruning(phrase):
     assert len(engine.get_memory_snapshot()[0]) == 2
 
 
-def pitch_events(pitches):
-    return [
-        MidiEvent(type=kind, note=pitch, velocity=velocity, delta_seconds=delta)
-        for pitch in pitches
-        for kind, velocity, delta in (("note_on", 90, 0), ("note_off", 0, 0.25))
-    ]
-
-
 @pytest.mark.parametrize("learn_input", [False, True])
 def test_continuation_keeps_played_prefix_before_relaxing_ending(learn_input):
     engine = ContinuatorSessionEngine()
     engine.learn_phrase_events(pitch_events([60, 62, 64, 65, 67, 69, 71, 72]))
     _, output, constraints, trace, message = engine.continue_phrase(
-        pitch_events([60, 62]), learn_input=learn_input, continuation_note_count=4,
+        pitch_events([60, 62]),
+        learn_input=learn_input,
+        continuation_note_count=4,
     )
     assert [note.pitch for note in output.notes] == [64, 65, 67, 69]
     assert constraints.start.applied and not constraints.start.relaxed
@@ -120,7 +76,9 @@ def test_continuation_keeps_prefix_and_ending_when_both_are_feasible():
     engine = ContinuatorSessionEngine()
     engine.learn_phrase_events(pitch_events([60, 62, 64, 65, 67, 69, 71, 72]))
     _, output, constraints, _, message = engine.continue_phrase(
-        pitch_events([60, 62]), learn_input=False, continuation_note_count=6,
+        pitch_events([60, 62]),
+        learn_input=False,
+        continuation_note_count=6,
     )
     assert [note.pitch for note in output.notes] == [64, 65, 67, 69, 71, 72]
     assert constraints.start.applied and constraints.end.applied
@@ -134,7 +92,9 @@ def test_prefix_backs_off_order_before_relaxing_ending():
     for pitches in ([60, 62, 64, 65, 66], [67, 62, 69, 71]):
         engine.learn_phrase_events(pitch_events(pitches))
     _, output, constraints, trace, message = engine.continue_phrase(
-        pitch_events([60, 62]), learn_input=False, continuation_note_count=2,
+        pitch_events([60, 62]),
+        learn_input=False,
+        continuation_note_count=2,
     )
     assert [note.pitch for note in output.notes] == [69, 71]
     assert constraints.start.applied and not constraints.start.relaxed
@@ -148,7 +108,9 @@ def test_uncontinuable_prefix_explicitly_reports_fresh_memory_fallback():
     engine = ContinuatorSessionEngine()
     engine.learn_phrase_events(pitch_events([60, 62, 64, 65]))
     _, output, constraints, trace, message = engine.continue_phrase(
-        pitch_events([65]), learn_input=False, continuation_note_count=4,
+        pitch_events([65]),
+        learn_input=False,
+        continuation_note_count=4,
     )
     assert output.note_count == 4
     assert constraints.start.relaxed and not constraints.start.applied
@@ -156,17 +118,28 @@ def test_uncontinuable_prefix_explicitly_reports_fresh_memory_fallback():
     assert "fresh phrase from memory" in message
 
 
-@pytest.mark.parametrize("prefix,successors", [([60, 62], {64, 65}), ([67, 62], {69, 71})])
+@pytest.mark.parametrize(
+    "prefix,successors", [([60, 62], {64, 65}), ([67, 62], {69, 71})]
+)
 def test_preserved_handoff_retains_earlier_prefix_context(prefix, successors):
     engine = ContinuatorSessionEngine()
-    for pitches in ([60, 62, 64, 65], [60, 62, 65, 66],
-                    [67, 62, 69, 71], [67, 62, 71, 72]):
+    for pitches in (
+        [60, 62, 64, 65],
+        [60, 62, 65, 66],
+        [67, 62, 69, 71],
+        [67, 62, 71, 72],
+    ):
         engine.learn_phrase_events(pitch_events(pitches))
     _, output, constraints, trace, _ = engine.continue_phrase(
-        pitch_events(prefix), learn_input=False, continuation_note_count=1,
+        pitch_events(prefix),
+        learn_input=False,
+        continuation_note_count=1,
         enforce_end_constraint=False,
         handoff_viewpoint=ViewpointSeed(
-            pitch=62, duration_bin=0, overlaps_left=False, overlaps_right=False,
+            pitch=62,
+            duration_bin=0,
+            overlaps_left=False,
+            overlaps_right=False,
         ),
     )
     assert output.notes[0].pitch in successors
@@ -179,9 +152,14 @@ def test_unknown_preserved_handoff_falls_back_to_played_prefix():
     engine = ContinuatorSessionEngine()
     engine.learn_phrase_events(pitch_events([60, 62, 64, 65]))
     _, output, constraints, _, message = engine.continue_phrase(
-        pitch_events([60, 62]), learn_input=False, continuation_note_count=2,
+        pitch_events([60, 62]),
+        learn_input=False,
+        continuation_note_count=2,
         handoff_viewpoint=ViewpointSeed(
-            pitch=127, duration_bin=0, overlaps_left=False, overlaps_right=False,
+            pitch=127,
+            duration_bin=0,
+            overlaps_left=False,
+            overlaps_right=False,
         ),
     )
     assert [note.pitch for note in output.notes] == [64, 65]
@@ -194,7 +172,12 @@ def test_http_continuation_returns_successors_of_played_prefix(api):
     session_id = create_session(client)
     learn(client, session_id, pitch_events([60, 62, 64, 65, 67, 69, 71, 72]))
     payload = learn(client, session_id, pitch_events([60, 62]))
-    assert [note["pitch"] for note in payload["generated_phrase"]["notes"]] == [64, 65, 67, 69]
+    assert [note["pitch"] for note in payload["generated_phrase"]["notes"]] == [
+        64,
+        65,
+        67,
+        69,
+    ]
     assert payload["constraints"]["start"]["applied"]
     assert payload["constraints"]["end"]["relaxed"]
 
@@ -207,7 +190,9 @@ def test_http_learning_graphs_settings_and_reset(api, phrase):
     assert empty.status_code == 409
     learn(client, session_id, phrase)
     for mode in ("slice", "all", "most_used", "neighborhood"):
-        response = client.get(f"/api/sessions/{session_id}/graphs/memory.svg", params={"mode": mode})
+        response = client.get(
+            f"/api/sessions/{session_id}/graphs/memory.svg", params={"mode": mode}
+        )
         assert response.status_code == 200, response.text
         assert "<svg" in response.text
         assert "VO Regular BP" in response.text
@@ -216,11 +201,15 @@ def test_http_learning_graphs_settings_and_reset(api, phrase):
     assert "<svg" in response.text
     memory_url = f"/api/sessions/{session_id}/memory"
     before = client.get(memory_url).json()["items"]
-    response = client.patch(f"/api/sessions/{session_id}/settings", json={"markov_order": 2})
+    response = client.patch(
+        f"/api/sessions/{session_id}/settings", json={"markov_order": 2}
+    )
     assert response.status_code == 200, response.text
     assert response.json()["configuration"]["markov_order"] == 2
     assert client.get(memory_url).json()["items"] == before
-    generated = client.post(f"/api/sessions/{session_id}/generate", json={"note_count": 4})
+    generated = client.post(
+        f"/api/sessions/{session_id}/generate", json={"note_count": 4}
+    )
     assert generated.status_code == 200, generated.text
     assert generated.json()["generated_phrase"]["note_count"] == 4
     response = client.post(f"/api/sessions/{session_id}/reset")
@@ -231,7 +220,10 @@ def test_http_learning_graphs_settings_and_reset(api, phrase):
 @pytest.mark.parametrize("old_engine", ["classic", "context_bp", "vo_regular_bp"])
 def test_reopen_legacy_saved_session_after_restart(api, phrase, old_engine):
     client, main = api
-    registered = client.post("/api/auth/register", json={"username": "migration_user", "password": "test-password-123"})
+    registered = client.post(
+        "/api/auth/register",
+        json={"username": "migration_user", "password": "test-password-123"},
+    )
     assert registered.status_code == 200, registered.text
     user_id = registered.json()["user"]["id"]
     session_id = create_session(client)
@@ -246,7 +238,9 @@ def test_reopen_legacy_saved_session_after_restart(api, phrase, old_engine):
     assert restored.json()["restored_from_history"]
     assert restored.json()["restored_phrase_count"] == 1
     assert "engine_kind" not in restored.json()["configuration"]
-    generated = client.post(f"/api/sessions/{session_id}/generate", json={"note_count": 4})
+    generated = client.post(
+        f"/api/sessions/{session_id}/generate", json={"note_count": 4}
+    )
     assert generated.status_code == 200, generated.text
     listed = client.get("/api/my/sessions").json()["items"]
     assert len(listed) == 1
@@ -260,14 +254,31 @@ def test_midi_import_and_export(api, phrase):
     track = mido.MidiTrack()
     midi_file.tracks.append(track)
     for event in phrase:
-        track.append(mido.Message(event.type, note=event.note, velocity=event.velocity, time=round(event.delta_seconds * 960)))
+        track.append(
+            mido.Message(
+                event.type,
+                note=event.note,
+                velocity=event.velocity,
+                time=round(event.delta_seconds * 960),
+            )
+        )
     output = BytesIO()
     midi_file.save(file=output)
-    response = client.post(f"/api/sessions/{session_id}/import-midi", files=[("files", ("phrase.mid", output.getvalue(), "audio/midi"))])
+    response = client.post(
+        f"/api/sessions/{session_id}/import-midi",
+        files=[("files", ("phrase.mid", output.getvalue(), "audio/midi"))],
+    )
     assert response.status_code == 200, response.text
     assert response.json()["imported_file_count"] == 1
-    assert client.get(f"/api/sessions/{session_id}/memory").json()["summary"]["active_phrase_count"] == 1
-    generated = client.post(f"/api/sessions/{session_id}/generate", json={"note_count": 4})
+    assert (
+        client.get(f"/api/sessions/{session_id}/memory").json()["summary"][
+            "active_phrase_count"
+        ]
+        == 1
+    )
+    generated = client.post(
+        f"/api/sessions/{session_id}/generate", json={"note_count": 4}
+    )
     assert generated.status_code == 200, generated.text
     response = client.post(f"/api/sessions/{session_id}/save-midi")
     assert response.status_code == 200, response.text

@@ -1,13 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 import base64
 import threading
 import uuid
 
-from .continuator_adapter import ContinuatorSessionEngine, MidiImportError, NoContinuationAvailable
+from .graph_renderer import GraphRenderer
+from .continuator_adapter import (
+    ContinuatorSessionEngine,
+    MidiImportError,
+    NoContinuationAvailable,
+)
 from .midi_export import (
     midi_files_to_zip_bytes,
     phrase_payload_to_midi_bytes,
@@ -46,6 +51,7 @@ from .schemas import (
     UserSessionListItem,
     UserSessionsResponse,
 )
+from .session_operations import session_operation
 from .storage import PhraseStorage
 
 
@@ -74,6 +80,7 @@ class SessionState:
     last_seen_at: str
     configuration: SessionConfiguration
     engine: ContinuatorSessionEngine
+    lock: object = field(default_factory=threading.RLock, repr=False)
     continuation_request_count: int = 0
     last_generation_trace: list[GenerationTraceStep] | None = None
     last_generation_constraints: GenerationConstraintsStatus | None = None
@@ -94,13 +101,25 @@ class SessionManager:
         self.seed_midi_folder = seed_midi_folder
         self.session_export_dir = session_export_dir or Path("session_midi_exports")
         self._sessions: dict[str, SessionState] = {}
+        self._session_locks: dict[str, object] = {}
         self._lock = threading.RLock()
+
+    def _session_lock(self, session_id: str):
+        with self._lock:
+            if session_id not in self._session_locks:
+                self._session_locks[session_id] = threading.RLock()
+            return self._session_locks[session_id]
+
+    def _persist_memory(self, state: SessionState) -> None:
+        self.storage.save_memory(state.session_id, state.engine.get_memory_records())
 
     @property
     def seeded(self) -> bool:
         return bool(self.seed_midi_file or self.seed_midi_folder)
 
-    def _build_configuration(self, request: CreateSessionRequest) -> SessionConfiguration:
+    def _build_configuration(
+        self, request: CreateSessionRequest
+    ) -> SessionConfiguration:
         return SessionConfiguration(
             learn_input=request.learn_input,
             transposition=request.transposition,
@@ -117,7 +136,9 @@ class SessionManager:
             midi_copy_output_name=None,
         )
 
-    def _build_engine(self, configuration: SessionConfiguration) -> ContinuatorSessionEngine:
+    def _build_engine(
+        self, configuration: SessionConfiguration, *, load_seed_material: bool = True
+    ) -> ContinuatorSessionEngine:
         return ContinuatorSessionEngine(
             learn_input=configuration.learn_input,
             transposition=configuration.transposition,
@@ -126,6 +147,7 @@ class SessionManager:
             markov_order=configuration.markov_order,
             seed_midi_file=self.seed_midi_file,
             seed_midi_folder=self.seed_midi_folder,
+            load_seed_material=load_seed_material,
         )
 
     @staticmethod
@@ -165,17 +187,19 @@ class SessionManager:
             last_seen_at=created_at,
             configuration=configuration,
             engine=engine,
+            lock=self._session_lock(session_id),
         )
 
+        with self.storage.transaction():
+            self.storage.create_session(
+                session_id=session_id,
+                user_id=owner_user_id,
+                created_at=created_at,
+                metadata=configuration.model_dump(),
+            )
+            self._persist_memory(state)
         with self._lock:
             self._sessions[session_id] = state
-
-        self.storage.create_session(
-            session_id=session_id,
-            user_id=owner_user_id,
-            created_at=created_at,
-            metadata=configuration.model_dump(),
-        )
         return CreateSessionResponse(
             session_id=session_id,
             created_at=created_at,
@@ -188,7 +212,9 @@ class SessionManager:
     ) -> tuple[SessionState, int, bool]:
         session_id = str(session_record["id"])
         owner_user_id = (
-            None if session_record["user_id"] is None else str(session_record["user_id"])
+            None
+            if session_record["user_id"] is None
+            else str(session_record["user_id"])
         )
 
         with self._lock:
@@ -199,19 +225,36 @@ class SessionManager:
             return loaded_session, 0, False
 
         configuration = SessionConfiguration.model_validate(session_record["metadata"])
-        engine = self._build_engine(configuration)
-        restored_phrase_count = 0
-        for payload_data in self.storage.get_rebuild_phrases(
-            session_id,
-            last_reset_at=session_record.get("last_reset_at"),
-        ):
-            payload = PhrasePayload.model_validate(payload_data)
-            phrase_events = [MidiEvent.model_validate(event) for event in payload.events]
-            try:
-                engine.learn_phrase_events(phrase_events)
-            except NoContinuationAvailable:
-                continue
-            restored_phrase_count += 1
+        engine = self._build_engine(
+            configuration,
+            load_seed_material=not session_record.get("memory_initialized", False),
+        )
+        if session_record.get("memory_initialized"):
+            records = self.storage.load_memory(session_id)
+            engine.restore_memory(records)
+            restored_phrase_count = len(
+                {
+                    record["source_phrase_id"]
+                    for record in records
+                    if not record["is_seed"]
+                }
+            )
+        else:
+            # One-time legacy migration. Future restores use exact variants,
+            # independent of subsequent changes to transposition/memory settings.
+            restored_phrase_count = 0
+            for record in self.storage.get_rebuild_phrase_records(session_id):
+                payload = PhrasePayload.model_validate(record["payload"])
+                phrase_events = [
+                    MidiEvent.model_validate(event) for event in payload.events
+                ]
+                try:
+                    engine.learn_phrase_events(
+                        phrase_events, source_phrase_id=str(record["id"])
+                    )
+                except NoContinuationAvailable:
+                    continue
+                restored_phrase_count += 1
 
         restored_at = utc_now_iso()
         state = SessionState(
@@ -221,6 +264,7 @@ class SessionManager:
             last_seen_at=restored_at,
             configuration=configuration,
             engine=engine,
+            lock=self._session_lock(session_id),
             continuation_request_count=self.storage.count_continuation_requests(
                 session_id,
                 last_reset_at=session_record.get("last_reset_at"),
@@ -235,6 +279,8 @@ class SessionManager:
                 return loaded_session, 0, False
             self._sessions[session_id] = state
 
+        if not session_record.get("memory_initialized"):
+            self._persist_memory(state)
         self.storage.touch_session(session_id, restored_at)
         return state, restored_phrase_count, True
 
@@ -247,7 +293,9 @@ class SessionManager:
             return True
         return owner_user_id == session.owner_user_id
 
-    def _require_session(self, session_id: str, owner_user_id: str | None) -> SessionState:
+    def _require_session(
+        self, session_id: str, owner_user_id: str | None
+    ) -> SessionState:
         with self._lock:
             session = self._sessions.get(session_id)
         if session is not None:
@@ -265,70 +313,41 @@ class SessionManager:
         restored_state, _, _ = self._restore_session_state(session_record)
         return restored_state
 
-    def _last_reset_at(self, session_id: str, owner_user_id: str | None) -> str | None:
-        session_record = self.storage.get_session_record(
-            session_id,
-            owner_user_id,
-            allow_guest=True,
-        )
-        if session_record is None:
-            raise UnknownSessionError(session_id)
-        last_reset_at = session_record.get("last_reset_at")
-        return None if last_reset_at is None else str(last_reset_at)
-
-    def _memory_response(
-        self,
-        state: SessionState,
-        last_reset_at: str | None,
-    ) -> SessionMemoryResponse:
-        payloads, seeded_count = state.engine.get_memory_snapshot()
-        live_payloads = payloads[seeded_count:]
-        rebuild_records = self.storage.get_rebuild_phrase_records(
-            state.session_id,
-            last_reset_at=last_reset_at,
-        )
-        record_offset = (
-            len(rebuild_records) - len(live_payloads)
-            if live_payloads and len(rebuild_records) >= len(live_payloads)
-            else None
-        )
-        items: list[MemoryPhraseItem] = []
-        for index, payload in enumerate(payloads):
-            phrase_id: str | None = None
-            if index >= seeded_count and record_offset is not None:
-                record_index = record_offset + (index - seeded_count)
-                if 0 <= record_index < len(rebuild_records):
-                    phrase_id = str(rebuild_records[record_index]["id"])
-            items.append(
-                MemoryPhraseItem(
-                    slot=index + 1,
-                    source="seed" if index < seeded_count else "live",
-                    phrase_id=phrase_id,
-                    deletable=phrase_id is not None,
-                    event_count=payload.event_count,
-                    note_count=payload.note_count,
-                    duration_seconds=payload.duration_seconds,
-                    payload=payload,
-                )
+    def _memory_response(self, state: SessionState) -> SessionMemoryResponse:
+        entries = state.engine.get_memory_entries()
+        items = [
+            MemoryPhraseItem(
+                slot=index + 1,
+                memory_id=entry.id,
+                source="seed" if entry.is_seed else "live",
+                phrase_id=entry.source_phrase_id,
+                deletable=not entry.is_seed and entry.source_phrase_id is not None,
+                event_count=payload.event_count,
+                note_count=payload.note_count,
+                duration_seconds=payload.duration_seconds,
+                payload=payload,
             )
-        summary = SessionMemorySummary(
-            active_phrase_count=len(items),
-            seeded_phrase_count=seeded_count,
-            live_phrase_count=max(0, len(items) - seeded_count),
-        )
+            for index, (entry, payload) in enumerate(entries)
+        ]
+        seeded_count = sum(entry.is_seed for entry, _ in entries)
         return SessionMemoryResponse(
             session_id=state.session_id,
             configuration=state.configuration,
-            summary=summary,
+            summary=SessionMemorySummary(
+                active_phrase_count=len(items),
+                seeded_phrase_count=seeded_count,
+                live_phrase_count=len(items) - seeded_count,
+            ),
             items=items,
         )
 
+    @session_operation
     def open_session(self, session_id: str, owner_user_id: str) -> OpenSessionResponse:
         session_record = self.storage.get_session_record(session_id, owner_user_id)
         if session_record is None:
             raise UnknownSessionError(session_id)
-        state, restored_phrase_count, restored_from_history = self._restore_session_state(
-            session_record
+        state, restored_phrase_count, restored_from_history = (
+            self._restore_session_state(session_record)
         )
         if not restored_from_history:
             state.last_seen_at = utc_now_iso()
@@ -342,7 +361,9 @@ class SessionManager:
             restored_from_history=restored_from_history,
         )
 
-    def list_user_sessions(self, owner_user_id: str, limit: int = 24) -> UserSessionsResponse:
+    def list_user_sessions(
+        self, owner_user_id: str, limit: int = 24
+    ) -> UserSessionsResponse:
         records = self.storage.list_sessions_for_user(owner_user_id, limit=limit)
         with self._lock:
             loaded_session_ids = {
@@ -360,7 +381,9 @@ class SessionManager:
                     if record.get("last_reset_at") is None
                     else str(record["last_reset_at"])
                 ),
-                configuration=SessionConfiguration.model_validate(record["configuration"]),
+                configuration=SessionConfiguration.model_validate(
+                    record["configuration"]
+                ),
                 phrase_count=int(record["phrase_count"]),
                 input_phrase_count=int(record["input_phrase_count"]),
                 active_learned_phrase_count=int(record["active_learned_phrase_count"]),
@@ -370,6 +393,7 @@ class SessionManager:
         ]
         return UserSessionsResponse(items=items)
 
+    @session_operation
     def continue_phrase(
         self,
         request: ContinueRequest,
@@ -378,6 +402,7 @@ class SessionManager:
         state = self._require_session(request.session_id, owner_user_id)
         created_at = utc_now_iso()
         request_id = uuid.uuid4().hex
+        source_phrase_id = uuid.uuid4().hex
         should_learn = (
             state.configuration.learn_input
             if request.learn_input is None
@@ -395,6 +420,7 @@ class SessionManager:
             continuation_note_count=request.continuation_note_count,
             enforce_end_constraint=request.enforce_end_constraint,
             handoff_viewpoint=request.handoff_viewpoint,
+            source_phrase_id=source_phrase_id,
         )
 
         state.last_seen_at = created_at
@@ -408,7 +434,7 @@ class SessionManager:
         )
         self.storage.touch_session(state.session_id, created_at)
         self.storage.log_phrase(
-            phrase_id=uuid.uuid4().hex,
+            phrase_id=source_phrase_id,
             request_id=request_id,
             session_id=state.session_id,
             kind="input",
@@ -426,6 +452,8 @@ class SessionManager:
             payload=generated_phrase.model_dump(mode="json"),
         )
 
+        self._persist_memory(state)
+
         return ContinueResponse(
             session_id=state.session_id,
             request_id=request_id,
@@ -437,6 +465,7 @@ class SessionManager:
             status_message=status_message,
         )
 
+    @session_operation
     def generate_phrase(
         self,
         session_id: str,
@@ -488,6 +517,7 @@ class SessionManager:
             status_message=status_message,
         )
 
+    @session_operation
     def import_midi_files(
         self,
         session_id: str,
@@ -500,14 +530,16 @@ class SessionManager:
 
         created_at = utc_now_iso()
         request_id = uuid.uuid4().hex
-        imported_files, skipped_files = state.engine.import_midi_files(midi_files)
+        imported_files, skipped_files = state.engine.import_midi_files(
+            midi_files, request_id=request_id
+        )
 
         state.last_seen_at = created_at
         self._clear_last_generation_graph(state)
         self.storage.touch_session(state.session_id, created_at)
         for index, imported_file in enumerate(imported_files):
             self.storage.log_phrase(
-                phrase_id=f"{request_id}-import-{index:04d}",
+                phrase_id=imported_file.source_phrase_id,
                 request_id=request_id,
                 session_id=state.session_id,
                 kind="input",
@@ -516,6 +548,7 @@ class SessionManager:
                 payload=imported_file.payload.model_dump(mode="json"),
             )
 
+        self._persist_memory(state)
         return ImportMidiResponse(
             session_id=state.session_id,
             created_at=created_at,
@@ -533,6 +566,7 @@ class SessionManager:
             skipped_files=skipped_files,
         )
 
+    @session_operation
     def get_history(
         self,
         session_id: str,
@@ -547,6 +581,7 @@ class SessionManager:
         ]
         return SessionHistoryResponse(session_id=session_id, items=items)
 
+    @session_operation
     def save_session_midi(
         self,
         session_id: str,
@@ -557,7 +592,9 @@ class SessionManager:
 
         rows = self.storage.get_played_and_generated_phrases(session_id)
         if not rows:
-            raise ValueError("No played or generated phrases are available to save yet.")
+            raise ValueError(
+                "No played or generated phrases are available to save yet."
+            )
 
         exported_at = utc_now_iso()
         folder_name = "-".join(
@@ -607,6 +644,7 @@ class SessionManager:
             files=files,
         )
 
+    @session_operation
     def download_session_midi(
         self,
         session_id: str,
@@ -617,7 +655,9 @@ class SessionManager:
 
         rows = self.storage.get_played_and_generated_phrases(session_id)
         if not rows:
-            raise ValueError("No played or generated phrases are available to save yet.")
+            raise ValueError(
+                "No played or generated phrases are available to save yet."
+            )
 
         exported_at = utc_now_iso()
         folder_name = "-".join(
@@ -666,6 +706,7 @@ class SessionManager:
             files=files,
         )
 
+    @session_operation
     def session_midi_zip(
         self,
         session_id: str,
@@ -679,12 +720,23 @@ class SessionManager:
         archive_name = f"{payload.folder_name}.zip"
         return archive_name, midi_files_to_zip_bytes(files), payload
 
-    def get_memory(self, session_id: str, owner_user_id: str | None) -> SessionMemoryResponse:
+    @session_operation
+    def get_memory(
+        self, session_id: str, owner_user_id: str | None
+    ) -> SessionMemoryResponse:
         state = self._require_session(session_id, owner_user_id)
-        return self._memory_response(
-            state,
-            self._last_reset_at(session_id, owner_user_id),
-        )
+        return self._memory_response(state)
+
+    @session_operation
+    def _graph_data(self, session_id: str, owner_user_id: str | None, *, memory: bool):
+        state = self._require_session(session_id, owner_user_id)
+        snapshot = state.engine.graph_snapshot(include_counts=memory)
+        return snapshot, {
+            "trace": state.last_generation_trace,
+            "constraints": state.last_generation_constraints,
+            "request_id": state.last_generation_request_id,
+            "created_at": state.last_generation_created_at,
+        }
 
     def render_memory_graph_svg(
         self,
@@ -696,18 +748,16 @@ class SessionManager:
         graph_mode: str = "slice",
         order_filter: int | None = None,
     ) -> str:
-        state = self._require_session(session_id, owner_user_id)
-        focus_symbols = (
-            [step.symbol for step in state.last_generation_trace]
-            if state.last_generation_trace
-            else None
-        )
-        return state.engine.render_graph_svg(
+        snapshot, data = self._graph_data(session_id, owner_user_id, memory=True)
+        # Layout and SVG formatting run after releasing the session lock.
+        return GraphRenderer(snapshot).render_graph_svg(
             max_nodes=max_nodes,
             max_edges=max_edges,
             graph_mode=graph_mode,
             order_filter=order_filter,
-            focus_symbols=focus_symbols,
+            focus_symbols=[step.symbol for step in data["trace"]]
+            if data["trace"]
+            else None,
         )
 
     def render_constraint_graph_svg(
@@ -717,83 +767,47 @@ class SessionManager:
         *,
         max_steps: int = 96,
     ) -> str:
-        state = self._require_session(session_id, owner_user_id)
-        return state.engine.render_constraint_graph_svg(
-            trace=state.last_generation_trace,
-            constraints=state.last_generation_constraints,
-            request_id=state.last_generation_request_id,
-            created_at=state.last_generation_created_at,
-            max_steps=max_steps,
+        snapshot, data = self._graph_data(session_id, owner_user_id, memory=False)
+        return GraphRenderer(snapshot).render_constraint_graph_svg(
+            max_steps=max_steps, **data
         )
 
+    @session_operation
     def delete_memory_phrase(
         self,
         session_id: str,
         owner_user_id: str | None,
         slot: int,
+        memory_id: str | None = None,
     ) -> SessionMemoryResponse:
         state = self._require_session(session_id, owner_user_id)
-        last_reset_at = self._last_reset_at(session_id, owner_user_id)
-        payloads, seeded_count = state.engine.get_memory_snapshot()
-        if slot < 1 or slot > len(payloads):
-            raise ValueError(f"Unknown memory slot: {slot}")
-        if slot <= seeded_count:
-            raise ValueError("Seed memory phrases come from configured seed material.")
-
-        live_payloads = payloads[seeded_count:]
-        live_index = slot - seeded_count - 1
-        rebuild_records = self.storage.get_rebuild_phrase_records(
-            session_id,
-            last_reset_at=last_reset_at,
-        )
-        if len(rebuild_records) < len(live_payloads):
-            raise ValueError("This memory phrase cannot be mapped to a stored learned phrase.")
-
-        record_offset = len(rebuild_records) - len(live_payloads)
-        target_record_index = record_offset + live_index
-        if target_record_index < 0 or target_record_index >= len(rebuild_records):
-            raise ValueError(f"Unknown memory slot: {slot}")
-
-        remaining_live_records = [
-            record
-            for index, record in enumerate(
-                rebuild_records[record_offset : record_offset + len(live_payloads)]
-            )
-            if index != live_index
-        ]
-        remaining_payloads = [
-            PhrasePayload.model_validate(record["payload"])
-            for record in remaining_live_records
-        ]
-        state.engine.replace_live_memory(remaining_payloads)
-
-        remaining_phrase_ids = [str(record["id"]) for record in remaining_live_records]
-        self.storage.keep_only_active_learned_phrases(
-            session_id,
-            remaining_phrase_ids,
-            last_reset_at=last_reset_at,
-        )
+        state.engine.delete_memory_slot(slot, expected_id=memory_id)
+        self._persist_memory(state)
         self._clear_last_generation_graph(state)
         state.last_seen_at = utc_now_iso()
         self.storage.touch_session(session_id, state.last_seen_at)
-        return self._memory_response(
-            state,
-            self._last_reset_at(session_id, owner_user_id),
-        )
+        return self._memory_response(state)
 
-    def reset_session(self, session_id: str, owner_user_id: str | None) -> ResetSessionResponse:
+    @session_operation
+    def reset_session(
+        self, session_id: str, owner_user_id: str | None
+    ) -> ResetSessionResponse:
         state = self._require_session(session_id, owner_user_id)
         state.engine.reset()
         state.continuation_request_count = 0
         self._clear_last_generation_graph(state)
         state.last_seen_at = utc_now_iso()
-        self.storage.mark_session_reset(session_id, state.last_seen_at, state.last_seen_at)
+        self.storage.mark_session_reset(
+            session_id, state.last_seen_at, state.last_seen_at
+        )
+        self._persist_memory(state)
         return ResetSessionResponse(
             session_id=session_id,
             reset_at=state.last_seen_at,
             configuration=state.configuration,
         )
 
+    @session_operation
     def update_session_settings(
         self,
         session_id: str,
@@ -820,12 +834,14 @@ class SessionManager:
             metadata=state.configuration.model_dump(),
             last_seen_at=updated_at,
         )
+        self._persist_memory(state)
         return UpdateSessionSettingsResponse(
             session_id=session_id,
             updated_at=updated_at,
             configuration=state.configuration,
         )
 
+    @session_operation
     def update_session_name(
         self,
         session_id: str,
@@ -855,6 +871,7 @@ class SessionManager:
             configuration=state.configuration,
         )
 
+    @session_operation
     def update_session_preferences(
         self,
         session_id: str,

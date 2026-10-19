@@ -232,7 +232,7 @@ Those are not always the same:
 
 - If `forget old phrases` is enabled, some historical phrases may no longer be active in memory.
 - If `transpose` is enabled, one learned phrase can appear as several active memory sequences.
-- If the backend is restarted, the in-memory engine is rebuilt, while SQLite history remains on disk.
+- If the backend is restarted, the engine restores its exact committed memory variants from SQLite.
 
 ## Memory Model
 
@@ -244,7 +244,15 @@ It shows:
 - A recency ribbon from oldest to newest.
 - A list of active memory slots, newest first.
 
-The memory view is based on the Continuator engine's current `input_sequences`, not on the SQLite history log.
+The memory view is based on the Continuator engine's current `input_sequences`.
+Each variant has a stable `memory_id` and a source `phrase_id`. Transposed
+variants share their source ID but can be deleted individually. Delete requests
+include the variant ID, so an outdated view cannot delete a different phrase
+that moved into the same slot.
+
+SQLite stores exact notes (including overlap and handoff timing) for each active
+variant. Restoration does not transpose, prune, or re-import the seed corpus.
+Seed flags follow the variants that remain after rolling-memory eviction.
 
 If a seed MIDI file or folder is loaded, memory items are labeled as:
 
@@ -261,10 +269,10 @@ Current limitation:
 The advanced drawer currently exposes existing Continuator parameters already present in the original Gradio interface:
 
 - `Learn input`
+- `Markov order K`
 - `Transpose`
 - `Forget old phrases`
 - `Keep only N last inputs`
-- `Decay mode`
 
 Design choice:
 
@@ -278,14 +286,29 @@ backend/
   app/
     config.py
     continuator_adapter.py
+    graph_renderer.py
     main.py
+    memory.py
     midi_export.py
+    phrase_formatting.py
     schemas.py
     session_manager.py
+    session_operations.py
     storage.py
+  tests/
   data/
 frontend/
   app.js
+  app-state.js
+  constants.js
+  midi-capture.js
+  midi-input.js
+  piano-roll.js
+  playback-controller.js
+  playback-renderers.js
+  session-controller.js
+  views.js
+  tests/
   index.html
   styles.css
 Dockerfile
@@ -295,13 +318,22 @@ README.md
 Main responsibilities:
 
 - `frontend/index.html`: page structure and UI regions.
-- `frontend/app.js`: MIDI capture, phrase segmentation, API calls, playback, and client-side visualization.
+- `frontend/app.js`: composition root, event bindings, preferences, and application startup.
+- `frontend/app-state.js` and `constants.js`: DOM bindings, shared state, and static configuration.
+- `frontend/midi-capture.js` and `midi-input.js`: phrase segmentation, hardware/virtual MIDI input, and monitoring.
+- `frontend/playback-renderers.js` and `playback-controller.js`: audio/Faust instruments, MIDI output, playback, and infinite-mode scheduling.
+- `frontend/session-controller.js`: API requests, authentication, session lifecycle, imports, and generation requests.
+- `frontend/views.js` and `piano-roll.js`: status/settings/memory/history views and canvas rendering.
+- Controllers receive dependencies explicitly from `app.js`; they never import the composition root. Standalone capture, renderer, and API logic can be tested without a browser.
 - `frontend/styles.css`: layout and visual design.
 - `backend/app/main.py`: FastAPI routes.
 - `backend/app/midi_export.py`: phrase-payload to MIDI conversion and ZIP packaging.
 - `backend/app/session_manager.py`: session lifecycle, orchestration, and API-facing session logic.
 - `backend/app/continuator_adapter.py`: bridge between web JSON payloads and the Continuator Python engine.
-- `backend/app/storage.py`: SQLite session and phrase logging.
+- `backend/app/storage.py`: transactional SQLite history, reset revisions, learning order, and exact variant persistence.
+- `backend/app/memory.py`: stable variant identity and lossless note snapshots.
+- `backend/app/session_operations.py`: per-session operation locking and rollback recovery.
+- `backend/app/graph_renderer.py`: pure SVG layout from detached snapshots and traces. Layout runs outside the session/engine locks.
 - `continuator`: installed Python package providing the Continuator engine.
 
 ## API Surface
@@ -316,6 +348,9 @@ Current API endpoints:
 - `POST /api/sessions/{session_id}/generate`: generate a phrase directly from memory.
 - `GET /api/sessions/{session_id}/history`: retrieve recent logged phrase history.
 - `GET /api/sessions/{session_id}/memory`: retrieve the active memory snapshot for the live engine.
+- `DELETE /api/sessions/{session_id}/memory/{slot}?memory_id={id}`: delete one live variant, checking its stable identity before changing memory.
+- `GET /api/sessions/{session_id}/graphs/memory.svg`: render a detached memory snapshot.
+- `GET /api/sessions/{session_id}/graphs/constraints.svg`: render the latest generation trace and constraint status.
 - `GET /api/sessions/{session_id}/midi-download`: return played and generated phrases as base64 MIDI file payloads.
 - `GET /api/sessions/{session_id}/midi.zip`: download played and generated phrases as a ZIP archive for the browser save/download flow.
 - `POST /api/sessions/{session_id}/save-midi`: save played and generated phrases as MIDI files on the backend as a server-side fallback.
@@ -344,6 +379,10 @@ restores the final note's overlap state while retaining earlier prefix context.
 
 ## Local Development
 
+Use Python 3.11 or newer. Frontend development checks use Node.js 24 (or an
+ESLint-supported Node.js release: 20.19+, 22.13+, or 24+). The deployed app
+serves native JavaScript modules and does not require Node.js or an npm build.
+
 Create a virtual environment, install dependencies, and launch the backend:
 
 ```bash
@@ -358,7 +397,10 @@ Run integration checks against the pinned Continuator dependency:
 ```bash
 pip install -r backend/requirements-dev.txt
 PYTHONPATH=backend python -m pytest backend/tests -q
-node --input-type=module --check < frontend/app.js
+python -m ruff check backend/app backend/tests --select F,E9
+npm ci
+npm run check
+npm test
 ```
 
 Open:
@@ -460,6 +502,15 @@ Typical deployment flow:
 3. Push this repository to the Space repository.
 4. Let the Space build automatically from the included `Dockerfile`.
 
+Existing SQLite databases upgrade automatically on startup. The migration adds
+learning sequences, reset revisions, and exact memory variants while preserving
+history. The first opening of a legacy session creates its variant snapshot.
+No manual SQL migration or memory reset is required. Keep the configured database
+on persistent storage when saved sessions must survive a Space rebuild.
+
+After a deploy, refresh the browser. HTML, JavaScript modules, and stylesheets
+revalidate against the server so the split frontend loads the current release.
+
 If you want phrase history to survive restarts, attach a storage volume or bucket and mount it at `/data` (or another path), then point the database there with an environment variable such as:
 
 ```bash
@@ -527,7 +578,7 @@ The Hugging Face YAML block is only repository metadata for the Space platform. 
 ## Current Limitations
 
 - Session engines are in memory only.
-- Signed-in sessions are restored from logged learned input after a backend restart.
+- Signed-in sessions restore exact committed active memory after a backend restart.
 - Guest sessions cannot be reopened through the saved-session account interface.
 - The `Memory` tab shows session memory, not cross-session user memory.
 - Web MIDI support depends on browser support and user permission.
@@ -545,33 +596,23 @@ Natural next steps for this project:
 - Stronger observability for generation behavior and debugging.
 - A richer corpus management workflow for seed material.
 
-### Code review follow-ups (October 2026)
+### Code review implementation progress (October 2026)
 
-- **High priority — durable learning order and reset boundaries.**
-  `session_manager.utc_now_iso()` records only seconds, while storage rebuilds
-  memory in `(created_at, id)` order and filters with `created_at > last_reset_at`.
-  UUIDs can reorder phrases learned in the same second, and a phrase learned
-  immediately after Reset can disappear on restoration. Store a monotonic
-  learning sequence and an explicit reset revision instead of deriving memory
-  membership/order from timestamps.
-- **High priority — serialize complete session operations.** The adapter locks
-  engine calls, but `SessionManager` updates configuration, generation traces,
-  and SQLite history after that lock is released. Concurrent reset, settings,
-  and generation requests can leave these views inconsistent. Add a lock per
-  `SessionState` covering each complete operation and group related database
-  writes in one transaction.
-- **Medium priority — track phrase identity through transposition.** One learned
-  input can produce twelve memory variants but only one SQLite phrase record.
-  `_memory_response()` and `delete_memory_phrase()` infer identity from list
-  offsets, so transposed memory can have no deletable entries. Record the source
-  phrase ID with each variant and update seed membership when rolling memory
-  removes old sequences.
-- **Organization.** Split `frontend/app.js` into MIDI capture, playback/renderers,
-  session/API state, and view modules. Move SVG graph layout/rendering out of
-  `ContinuatorSessionEngine`, passing snapshots and native traces into a pure
-  renderer. This will make performance work and isolated testing easier.
+| Task | Status | Implemented behavior |
+| --- | --- | --- |
+| Durable learning order and reset boundaries | Complete | Monotonic history sequences and explicit reset revisions replace timestamp/UUID ordering and membership. |
+| Complete session operation serialization | Complete | One lock per session covers engine, settings, trace and persistence changes. Related writes commit together; failed operations roll back and reload committed memory and settings. Other sessions can continue independently. |
+| Phrase identity through transposition | Complete | Stable variant and source IDs replace list-offset inference. Individual transposed variants can be deleted and stay deleted after restart or settings changes. Seed identity follows rolling eviction. |
+| Module organization and graph isolation | Complete | Frontend capture, input, playback/renderers, session/API, views, state and configuration have separate modules. SVG layout consumes detached snapshots outside performance locks. |
 
-The 2.0 migration removes obsolete engine/decay branches and inferred trace
-generation. It also fixes K-change rebuilds pruning transposed memory, normalizes
-trace boundary markers, and moves synchronous MIDI import/learning off the async
-HTTP event loop. The follow-ups above remain open.
+Validation: 34 backend integration/regression tests and 6 frontend module tests,
+plus Python/JavaScript static checks and browser checks of capture, generation,
+playback, memory and graph views. Tests cover same-second reset/relearn,
+legacy-schema migration, transposed deletion, seed eviction, polyphonic timing,
+transaction failure recovery and concurrent requests.
+
+Existing databases upgrade automatically in a transaction. Legacy phrase order
+is recovered from SQLite insertion order; the first restoration creates exact
+variant snapshots. Old same-second reset ambiguities cannot be reconstructed
+from timestamps alone, so legacy migration preserves the previous reset filter.
+New reset/learn operations use revisions and have no such ambiguity.

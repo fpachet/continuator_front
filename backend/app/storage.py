@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from pathlib import Path
 import json
 import sqlite3
@@ -62,23 +63,88 @@ class PhraseStorage:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
+        self._local = threading.local()
         self._initialize()
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.db_path, check_same_thread=False)
+    @contextmanager
+    def _connect(self):
+        active = getattr(self._local, "connection", None)
+        if active is not None:
+            yield active
+            return
+        connection = sqlite3.connect(self.db_path, timeout=30)
         connection.row_factory = sqlite3.Row
-        return connection
+        connection.execute("PRAGMA foreign_keys = ON")
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
+    @contextmanager
+    def transaction(self):
+        """Share one atomic transaction across a complete session operation."""
+        if getattr(self._local, "connection", None) is not None:
+            yield
+            return
+        with self._connect() as connection:
+            self._local.connection = connection
+            try:
+                yield
+            finally:
+                del self._local.connection
 
     def _initialize(self) -> None:
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             connection.executescript(SCHEMA_SQL)
+            connection.execute("BEGIN IMMEDIATE")
             self._migrate_schema(connection)
-            connection.commit()
 
     def _migrate_schema(self, connection: sqlite3.Connection) -> None:
         self._ensure_column(connection, "sessions", "user_id", "TEXT")
         self._ensure_column(connection, "sessions", "last_reset_at", "TEXT")
+        legacy_revision = "memory_revision" not in {
+            row["name"] for row in connection.execute("PRAGMA table_info(sessions)")
+        }
+        self._ensure_column(
+            connection, "sessions", "memory_revision", "INTEGER NOT NULL DEFAULT 0"
+        )
+        self._ensure_column(
+            connection, "sessions", "memory_initialized", "INTEGER NOT NULL DEFAULT 0"
+        )
+        self._ensure_column(
+            connection, "phrases", "memory_revision", "INTEGER NOT NULL DEFAULT 0"
+        )
+        self._ensure_column(connection, "phrases", "sequence", "INTEGER")
+        # SQLite's existing rowid preserves insertion order, including same-second
+        # imports and requests. New records use an explicit monotonic sequence.
+        connection.execute("UPDATE phrases SET sequence = rowid WHERE sequence IS NULL")
+        connection.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_phrases_sequence ON phrases(sequence)"
+        )
+        if legacy_revision:
+            # Old data has no reset revision: preserve its previous membership.
+            connection.execute("""
+                UPDATE phrases SET memory_revision = -1
+                WHERE EXISTS (
+                    SELECT 1 FROM sessions WHERE sessions.id = phrases.session_id
+                    AND sessions.last_reset_at IS NOT NULL
+                    AND phrases.created_at <= sessions.last_reset_at
+                )
+            """)
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS memory_variants (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+                position INTEGER NOT NULL,
+                source_phrase_id TEXT,
+                is_seed INTEGER NOT NULL,
+                notes_json TEXT NOT NULL
+            )
+        """)
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memory_session ON memory_variants(session_id, position)"
+        )
         self._ensure_column(
             connection,
             "phrases",
@@ -122,7 +188,7 @@ class PhraseStorage:
         password_salt: str,
         created_at: str,
     ) -> None:
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO users (
@@ -143,10 +209,11 @@ class PhraseStorage:
                     created_at,
                 ),
             )
-            connection.commit()
 
-    def get_user_by_username(self, username_normalized: str) -> dict[str, object] | None:
-        with self._lock, self._connect() as connection:
+    def get_user_by_username(
+        self, username_normalized: str
+    ) -> dict[str, object] | None:
+        with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT id, username, password_hash, password_salt, created_at
@@ -165,7 +232,7 @@ class PhraseStorage:
         token_hash: str,
         now_iso: str,
     ) -> dict[str, object] | None:
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT users.id, users.username, users.created_at
@@ -188,7 +255,7 @@ class PhraseStorage:
         created_at: str,
         expires_at: str,
     ) -> None:
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO auth_tokens (token_hash, user_id, created_at, expires_at)
@@ -196,15 +263,13 @@ class PhraseStorage:
                 """,
                 (token_hash, user_id, created_at, expires_at),
             )
-            connection.commit()
 
     def delete_auth_token(self, token_hash: str) -> None:
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             connection.execute(
                 "DELETE FROM auth_tokens WHERE token_hash = ?",
                 (token_hash,),
             )
-            connection.commit()
 
     def create_session(
         self,
@@ -214,7 +279,7 @@ class PhraseStorage:
         metadata: dict[str, object],
     ) -> None:
         payload = json.dumps(metadata, ensure_ascii=False)
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO sessions (
@@ -229,15 +294,13 @@ class PhraseStorage:
                 """,
                 (session_id, user_id, created_at, created_at, None, payload),
             )
-            connection.commit()
 
     def touch_session(self, session_id: str, last_seen_at: str) -> None:
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             connection.execute(
                 "UPDATE sessions SET last_seen_at = ? WHERE id = ?",
                 (last_seen_at, session_id),
             )
-            connection.commit()
 
     def update_session_metadata(
         self,
@@ -246,7 +309,7 @@ class PhraseStorage:
         last_seen_at: str | None = None,
     ) -> None:
         payload = json.dumps(metadata, ensure_ascii=False)
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             if last_seen_at is None:
                 connection.execute(
                     "UPDATE sessions SET metadata_json = ? WHERE id = ?",
@@ -261,7 +324,6 @@ class PhraseStorage:
                     """,
                     (payload, last_seen_at, session_id),
                 )
-            connection.commit()
 
     def mark_session_reset(
         self,
@@ -269,16 +331,15 @@ class PhraseStorage:
         last_reset_at: str,
         last_seen_at: str,
     ) -> None:
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             connection.execute(
                 """
                 UPDATE sessions
-                SET last_reset_at = ?, last_seen_at = ?
+                SET last_reset_at = ?, last_seen_at = ?, memory_revision = memory_revision + 1
                 WHERE id = ?
                 """,
                 (last_reset_at, last_seen_at, session_id),
             )
-            connection.commit()
 
     def session_exists(
         self,
@@ -287,7 +348,7 @@ class PhraseStorage:
         *,
         allow_guest: bool = False,
     ) -> bool:
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             if user_id is None:
                 row = connection.execute(
                     "SELECT 1 FROM sessions WHERE id = ? AND user_id IS NULL LIMIT 1",
@@ -318,11 +379,11 @@ class PhraseStorage:
         *,
         allow_guest: bool = False,
     ) -> dict[str, object] | None:
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             if user_id is None:
                 row = connection.execute(
                     """
-                    SELECT id, user_id, created_at, last_seen_at, last_reset_at, metadata_json
+                    SELECT id, user_id, created_at, last_seen_at, last_reset_at, metadata_json, memory_initialized
                     FROM sessions
                     WHERE id = ? AND user_id IS NULL
                     LIMIT 1
@@ -333,7 +394,7 @@ class PhraseStorage:
                 if allow_guest:
                     row = connection.execute(
                         """
-                        SELECT id, user_id, created_at, last_seen_at, last_reset_at, metadata_json
+                        SELECT id, user_id, created_at, last_seen_at, last_reset_at, metadata_json, memory_initialized
                         FROM sessions
                         WHERE id = ? AND (user_id = ? OR user_id IS NULL)
                         LIMIT 1
@@ -343,7 +404,7 @@ class PhraseStorage:
                 else:
                     row = connection.execute(
                         """
-                        SELECT id, user_id, created_at, last_seen_at, last_reset_at, metadata_json
+                        SELECT id, user_id, created_at, last_seen_at, last_reset_at, metadata_json, memory_initialized
                         FROM sessions
                         WHERE id = ? AND user_id = ?
                         LIMIT 1
@@ -359,6 +420,7 @@ class PhraseStorage:
             "last_seen_at": row["last_seen_at"],
             "last_reset_at": row["last_reset_at"],
             "metadata": json.loads(row["metadata_json"]),
+            "memory_initialized": bool(row["memory_initialized"]),
         }
 
     def list_sessions_for_user(
@@ -366,7 +428,7 @@ class PhraseStorage:
         user_id: str,
         limit: int = 24,
     ) -> list[dict[str, object]]:
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT
@@ -377,18 +439,13 @@ class PhraseStorage:
                     sessions.metadata_json,
                     COUNT(phrases.id) AS phrase_count,
                     SUM(CASE WHEN phrases.kind = 'input' THEN 1 ELSE 0 END) AS input_phrase_count,
-                    SUM(
-                        CASE
-                            WHEN phrases.kind = 'input'
-                             AND COALESCE(phrases.learned, 1) = 1
-                             AND (
-                                sessions.last_reset_at IS NULL
-                                OR phrases.created_at > sessions.last_reset_at
-                             )
-                            THEN 1
-                            ELSE 0
-                        END
-                    ) AS active_learned_phrase_count
+                    CASE WHEN sessions.memory_initialized THEN (
+                        SELECT COUNT(DISTINCT source_phrase_id) FROM memory_variants
+                        WHERE memory_variants.session_id = sessions.id AND is_seed = 0
+                    ) ELSE SUM(CASE WHEN phrases.kind = 'input'
+                        AND COALESCE(phrases.learned, 1) = 1
+                        AND phrases.memory_revision = sessions.memory_revision THEN 1 ELSE 0 END)
+                    END AS active_learned_phrase_count
                 FROM sessions
                 LEFT JOIN phrases ON phrases.session_id = sessions.id
                 WHERE sessions.user_id = ?
@@ -413,7 +470,9 @@ class PhraseStorage:
                 "configuration": json.loads(row["metadata_json"]),
                 "phrase_count": int(row["phrase_count"] or 0),
                 "input_phrase_count": int(row["input_phrase_count"] or 0),
-                "active_learned_phrase_count": int(row["active_learned_phrase_count"] or 0),
+                "active_learned_phrase_count": int(
+                    row["active_learned_phrase_count"] or 0
+                ),
             }
             for row in rows
         ]
@@ -431,12 +490,13 @@ class PhraseStorage:
               AND COALESCE(learned, 1) = 1
         """
         params: list[object] = [session_id]
-        if last_reset_at is not None:
-            query += " AND created_at > ?"
-            params.append(last_reset_at)
-        query += " ORDER BY created_at ASC, id ASC"
+        query += (
+            " AND memory_revision = (SELECT memory_revision FROM sessions WHERE id = ?)"
+        )
+        params.append(session_id)
+        query += " ORDER BY sequence ASC"
 
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
 
         return [json.loads(str(row["payload_json"])) for row in rows]
@@ -454,12 +514,13 @@ class PhraseStorage:
               AND COALESCE(learned, 1) = 1
         """
         params: list[object] = [session_id]
-        if last_reset_at is not None:
-            query += " AND created_at > ?"
-            params.append(last_reset_at)
-        query += " ORDER BY created_at ASC, id ASC"
+        query += (
+            " AND memory_revision = (SELECT memory_revision FROM sessions WHERE id = ?)"
+        )
+        params.append(session_id)
+        query += " ORDER BY sequence ASC"
 
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             rows = connection.execute(query, params).fetchall()
 
         return [
@@ -484,17 +545,17 @@ class PhraseStorage:
               AND COALESCE(learned, 1) = 1
         """
         params: list[object] = [session_id]
-        if last_reset_at is not None:
-            query += " AND created_at > ?"
-            params.append(last_reset_at)
+        query += (
+            " AND memory_revision = (SELECT memory_revision FROM sessions WHERE id = ?)"
+        )
+        params.append(session_id)
         if phrase_ids_to_keep:
             placeholders = ", ".join("?" for _ in phrase_ids_to_keep)
             query += f" AND id NOT IN ({placeholders})"
             params.extend(phrase_ids_to_keep)
 
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             cursor = connection.execute(query, params)
-            connection.commit()
         return int(cursor.rowcount)
 
     def count_continuation_requests(
@@ -516,11 +577,10 @@ class PhraseStorage:
               )
         """
         params: list[object] = [session_id]
-        if last_reset_at is not None:
-            query += " AND input.created_at > ?"
-            params.append(last_reset_at)
+        query += " AND input.memory_revision = (SELECT memory_revision FROM sessions WHERE id = ?)"
+        params.append(session_id)
 
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             row = connection.execute(query, params).fetchone()
 
         return int(row["count"] or 0) if row is not None else 0
@@ -540,7 +600,7 @@ class PhraseStorage:
         note_count = int(payload.get("note_count", 0))
         duration_seconds = float(payload.get("duration_seconds", 0.0))
 
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             connection.execute(
                 """
                 INSERT INTO phrases (
@@ -553,8 +613,12 @@ class PhraseStorage:
                     note_count,
                     duration_seconds,
                     learned,
-                    payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    payload_json,
+                    sequence,
+                    memory_revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    (SELECT COALESCE(MAX(sequence), 0) + 1 FROM phrases),
+                    (SELECT memory_revision FROM sessions WHERE id = ?))
                 """,
                 (
                     phrase_id,
@@ -567,12 +631,12 @@ class PhraseStorage:
                     duration_seconds,
                     None if learned is None else int(learned),
                     serialized_payload,
+                    session_id,
                 ),
             )
-            connection.commit()
 
     def get_history(self, session_id: str, limit: int = 20) -> list[dict[str, object]]:
-        with self._lock, self._connect() as connection:
+        with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT
@@ -586,7 +650,7 @@ class PhraseStorage:
                     payload_json
                 FROM phrases
                 WHERE session_id = ?
-                ORDER BY created_at DESC
+                ORDER BY sequence DESC
                 LIMIT ?
                 """,
                 (session_id, limit),
@@ -606,8 +670,10 @@ class PhraseStorage:
             for row in rows
         ]
 
-    def get_played_and_generated_phrases(self, session_id: str) -> list[dict[str, object]]:
-        with self._lock, self._connect() as connection:
+    def get_played_and_generated_phrases(
+        self, session_id: str
+    ) -> list[dict[str, object]]:
+        with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT
@@ -637,10 +703,7 @@ class PhraseStorage:
                     )
                   )
                 ORDER BY
-                    phrases.created_at ASC,
-                    phrases.request_id ASC,
-                    CASE phrases.kind WHEN 'input' THEN 0 ELSE 1 END,
-                    phrases.id ASC
+                    phrases.sequence ASC
                 """,
                 (session_id,),
             ).fetchall()
@@ -658,3 +721,48 @@ class PhraseStorage:
             }
             for row in rows
         ]
+
+    def save_memory(self, session_id: str, entries: list[dict[str, object]]) -> None:
+        """Persist exact variants; unchanged note data is stored only once."""
+        with self._connect() as connection:
+            ids = {entry["id"] for entry in entries}
+            existing = connection.execute(
+                "SELECT id FROM memory_variants WHERE session_id = ?", (session_id,)
+            ).fetchall()
+            connection.executemany(
+                "DELETE FROM memory_variants WHERE id = ?",
+                [(row["id"],) for row in existing if row["id"] not in ids],
+            )
+            connection.executemany(
+                """
+                INSERT INTO memory_variants (id, session_id, position, source_phrase_id, is_seed, notes_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET position = excluded.position
+                WHERE memory_variants.position != excluded.position
+            """,
+                [
+                    (
+                        entry["id"],
+                        session_id,
+                        index,
+                        entry["source_phrase_id"],
+                        int(entry["is_seed"]),
+                        entry["notes_json"],
+                    )
+                    for index, entry in enumerate(entries)
+                ],
+            )
+            connection.execute(
+                "UPDATE sessions SET memory_initialized = 1 WHERE id = ?", (session_id,)
+            )
+
+    def load_memory(self, session_id: str) -> list[dict[str, object]]:
+        with self._connect() as connection:
+            return [
+                dict(row)
+                for row in connection.execute(
+                    "SELECT id, source_phrase_id, is_seed, notes_json FROM memory_variants "
+                    "WHERE session_id = ? ORDER BY position",
+                    (session_id,),
+                )
+            ]
