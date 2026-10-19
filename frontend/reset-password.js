@@ -1,8 +1,16 @@
 import { accountRequest, jsonPost } from "./account-pages.js";
+import { createBackupStatus } from "./backup-status.js";
 
 const form = document.getElementById("password-reset-form");
 const message = document.getElementById("reset-message");
 const button = document.getElementById("reset-password-button");
+const backup = createBackupStatus(
+  document.getElementById("reset-backup-status"),
+);
+void backup.refresh();
+window.setInterval(() => {
+  if (!document.hidden) void backup.refresh();
+}, 3000);
 let token =
   new URLSearchParams(window.location.hash.slice(1)).get("token") || "";
 // Keep the capability out of the address bar, browser history, requests and
@@ -25,6 +33,7 @@ form.addEventListener("submit", async (event) => {
     return;
   }
   button.disabled = true;
+  backup.beginWrite();
   try {
     await accountRequest(
       "/api/auth/reset-password",
@@ -39,6 +48,7 @@ form.addEventListener("submit", async (event) => {
     message.textContent = error.message;
     message.classList.add("is-error");
   } finally {
+    backup.endWrite();
     button.disabled = false;
   }
 });

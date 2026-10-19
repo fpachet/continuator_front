@@ -561,7 +561,8 @@ password twice. The random token travels in the link fragment, is removed from
 the address bar immediately, and is sent only in the reset request body. Only
 its hash is stored. Successful use atomically consumes the link, changes the
 password, and revokes all of that user's sign-in tokens while preserving their
-musical sessions. The recipient then signs in normally. Creating a link alone
+musical sessions. The reset page shows cloud-save status; wait for **Cloud saved**
+after changing the password. The recipient then signs in normally. Creating a link alone
 does not change the password or sign the user out.
 
 Reset tokens and audit events are included in cloud backups. Reset and
