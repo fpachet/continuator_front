@@ -33,8 +33,16 @@ body {
   position: relative;
   overflow-x: hidden;
   background:
-    radial-gradient(circle at top left, rgba(109, 211, 206, 0.18), transparent 34%),
-    radial-gradient(circle at top right, rgba(244, 162, 97, 0.16), transparent 28%),
+    radial-gradient(
+      circle at top left,
+      rgba(109, 211, 206, 0.18),
+      transparent 34%
+    ),
+    radial-gradient(
+      circle at top right,
+      rgba(244, 162, 97, 0.16),
+      transparent 28%
+    ),
     linear-gradient(180deg, #071217 0%, #0d1f27 50%, #081118 100%);
   color: var(--text);
   font-family: "Avenir Next", "Segoe UI Variable", "Trebuchet MS", sans-serif;
@@ -53,8 +61,16 @@ body.sheet-open {
 
 .page-aura {
   background:
-    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.07), transparent 18%),
-    radial-gradient(circle at 82% 8%, rgba(255, 255, 255, 0.05), transparent 14%);
+    radial-gradient(
+      circle at 18% 12%,
+      rgba(255, 255, 255, 0.07),
+      transparent 18%
+    ),
+    radial-gradient(
+      circle at 82% 8%,
+      rgba(255, 255, 255, 0.05),
+      transparent 14%
+    );
   opacity: 0.85;
 }
 
@@ -183,7 +199,12 @@ body.sheet-open {
   position: absolute;
   inset: 0 0 auto;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.34), transparent);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.34),
+    transparent
+  );
 }
 
 .accent-card {
@@ -291,7 +312,9 @@ body.sheet-open {
   border-right: 2px solid rgba(255, 255, 255, 0.55);
   border-bottom: 2px solid rgba(255, 255, 255, 0.55);
   transform: rotate(45deg);
-  transition: transform 160ms ease, border-color 160ms ease;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease;
 }
 
 .account-trigger.is-open::after {
@@ -342,13 +365,21 @@ body.sheet-open {
   padding: 18px;
   border-radius: 22px;
   background:
-    linear-gradient(135deg, rgba(109, 211, 206, 0.06), rgba(255, 255, 255, 0.02)),
+    linear-gradient(
+      135deg,
+      rgba(109, 211, 206, 0.06),
+      rgba(255, 255, 255, 0.02)
+    ),
     rgba(255, 255, 255, 0.03);
   border: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 .account-panel[hidden] {
   display: none;
+}
+
+.account-dialog [hidden] {
+  display: none !important;
 }
 
 .account-panel .info-grid {
@@ -360,15 +391,71 @@ body.sheet-open {
   margin-bottom: 0;
 }
 
-.hero-account-panel {
-  position: absolute;
-  top: calc(100% + 10px);
-  right: 0;
-  z-index: 10;
-  width: min(420px, calc(100vw - 56px));
-  margin-bottom: 0;
+.account-dialog {
+  position: fixed;
+  inset: 0;
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  margin: auto;
+  color: var(--text);
+  background: #11252e;
+  border: 1px solid rgba(138, 210, 214, 0.35);
   box-shadow: var(--shadow);
-  backdrop-filter: blur(18px);
+}
+
+.account-dialog::backdrop {
+  background: rgba(4, 11, 15, 0.72);
+  backdrop-filter: blur(6px);
+}
+
+.account-dialog h2 {
+  padding-right: 62px;
+}
+.account-close {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+}
+.account-save-choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0;
+}
+.account-save-choice input {
+  width: auto;
+}
+.save-status-bar {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin: 0 28px 12px;
+  padding: 10px 14px;
+  border: 1px solid rgba(138, 210, 214, 0.2);
+  border-radius: 14px;
+  background: rgba(9, 28, 36, 0.9);
+  font-size: 0.85rem;
+}
+.save-status-bar button {
+  margin-left: auto;
+}
+#cloud-save-status[data-status="saved"] {
+  color: #a6e7c5;
+}
+#cloud-save-status[data-status="failed"],
+#cloud-save-status[data-status="local"] {
+  color: #f3ce8c;
+}
+html.phone-layout .save-status-bar {
+  margin: 8px;
+  gap: 8px;
+}
+html.phone-layout .save-status-bar button {
+  padding: 8px;
 }
 
 .sheet-overlay {
@@ -442,9 +529,24 @@ body.sheet-open {
   height: 24px;
   pointer-events: none;
   background:
-    linear-gradient(135deg, transparent 0 38%, rgba(244, 162, 97, 0.88) 38% 48%, transparent 48% 100%),
-    linear-gradient(135deg, transparent 0 56%, rgba(244, 162, 97, 0.68) 56% 66%, transparent 66% 100%),
-    linear-gradient(135deg, transparent 0 74%, rgba(244, 162, 97, 0.48) 74% 84%, transparent 84% 100%);
+    linear-gradient(
+      135deg,
+      transparent 0 38%,
+      rgba(244, 162, 97, 0.88) 38% 48%,
+      transparent 48% 100%
+    ),
+    linear-gradient(
+      135deg,
+      transparent 0 56%,
+      rgba(244, 162, 97, 0.68) 56% 66%,
+      transparent 66% 100%
+    ),
+    linear-gradient(
+      135deg,
+      transparent 0 74%,
+      rgba(244, 162, 97, 0.48) 74% 84%,
+      transparent 84% 100%
+    );
   opacity: 1;
 }
 
@@ -663,7 +765,10 @@ button {
   color: #081118;
   font-weight: 700;
   padding: 11px 16px;
-  transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
   box-shadow: 0 12px 30px rgba(239, 127, 88, 0.22);
 }
 
@@ -677,8 +782,11 @@ button:disabled {
 }
 
 button.ghost {
-  background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.07), rgba(109, 211, 206, 0.045));
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.07),
+    rgba(109, 211, 206, 0.045)
+  );
   color: var(--text);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.05),
@@ -688,8 +796,11 @@ button.ghost {
 
 button.ghost:hover:not(:disabled) {
   border-color: rgba(244, 162, 97, 0.48);
-  background:
-    linear-gradient(145deg, rgba(244, 162, 97, 0.14), rgba(109, 211, 206, 0.07));
+  background: linear-gradient(
+    145deg,
+    rgba(244, 162, 97, 0.14),
+    rgba(109, 211, 206, 0.07)
+  );
 }
 
 button.ghost.is-pending {
@@ -720,7 +831,11 @@ button.ghost.is-pending {
 }
 
 .workspace-tab.is-active {
-  background: linear-gradient(135deg, rgba(244, 162, 97, 0.24), rgba(109, 211, 206, 0.16));
+  background: linear-gradient(
+    135deg,
+    rgba(244, 162, 97, 0.24),
+    rgba(109, 211, 206, 0.16)
+  );
   border-color: rgba(255, 255, 255, 0.08);
   color: var(--text);
 }
@@ -798,7 +913,11 @@ button.ghost.is-pending {
   padding: 18px;
   border-radius: 20px;
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.035), rgba(109, 211, 206, 0.018)),
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.035),
+      rgba(109, 211, 206, 0.018)
+    ),
     var(--surface-fill);
   border: 1px solid var(--surface-border);
   box-shadow:
@@ -808,7 +927,11 @@ button.ghost.is-pending {
 
 .accent-section {
   background:
-    linear-gradient(135deg, rgba(109, 211, 206, 0.12), rgba(255, 255, 255, 0.03)),
+    linear-gradient(
+      135deg,
+      rgba(109, 211, 206, 0.12),
+      rgba(255, 255, 255, 0.03)
+    ),
     var(--surface-fill-strong);
   border-color: rgba(109, 211, 206, 0.24);
 }
@@ -854,7 +977,11 @@ button.ghost.is-pending {
 }
 
 .view-tab.is-active {
-  background: linear-gradient(135deg, rgba(244, 162, 97, 0.24), rgba(109, 211, 206, 0.16));
+  background: linear-gradient(
+    135deg,
+    rgba(244, 162, 97, 0.24),
+    rgba(109, 211, 206, 0.16)
+  );
   border-color: rgba(255, 255, 255, 0.08);
   color: var(--text);
 }
@@ -955,7 +1082,11 @@ input[type="password"]:disabled {
   border: 1px solid rgba(255, 255, 255, 0.07);
   border-radius: 16px;
   background:
-    linear-gradient(135deg, rgba(109, 211, 206, 0.07), rgba(244, 162, 97, 0.04)),
+    linear-gradient(
+      135deg,
+      rgba(109, 211, 206, 0.07),
+      rgba(244, 162, 97, 0.04)
+    ),
     rgba(255, 255, 255, 0.026);
   overflow: hidden;
 }
@@ -1050,7 +1181,10 @@ input[type="password"]:disabled {
   overflow: hidden;
   cursor: pointer;
   transform: translateZ(0);
-  transition: background 90ms ease, border-color 90ms ease, box-shadow 90ms ease;
+  transition:
+    background 90ms ease,
+    border-color 90ms ease,
+    box-shadow 90ms ease;
   outline: none;
 }
 
@@ -1078,7 +1212,12 @@ input[type="password"]:disabled {
   height: 100%;
   border: 1px solid #9ebbb9;
   background-color: #f4fbf8;
-  background-image: linear-gradient(180deg, #ffffff 0%, #eef8f5 54%, #dbeae7 100%);
+  background-image: linear-gradient(
+    180deg,
+    #ffffff 0%,
+    #eef8f5 54%,
+    #dbeae7 100%
+  );
   color: #071217;
   color-scheme: only light;
   forced-color-adjust: none;
@@ -1250,7 +1389,11 @@ input[type="password"]:disabled {
 .auth-message-box {
   min-height: 0;
   margin-bottom: 18px;
-  background: linear-gradient(135deg, rgba(244, 162, 97, 0.08), rgba(255, 255, 255, 0.02));
+  background: linear-gradient(
+    135deg,
+    rgba(244, 162, 97, 0.08),
+    rgba(255, 255, 255, 0.02)
+  );
 }
 
 .head-action {
@@ -1370,7 +1513,11 @@ input[type="password"]:disabled {
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(7, 14, 20, 0.72);
   color: var(--text);
-  font: 0.88rem/1.6 "SFMono-Regular", "Fira Code", "IBM Plex Mono", monospace;
+  font:
+    0.88rem/1.6 "SFMono-Regular",
+    "Fira Code",
+    "IBM Plex Mono",
+    monospace;
   resize: vertical;
 }
 
@@ -1413,7 +1560,11 @@ input[type="password"]:disabled {
   min-height: 64px;
   border-radius: 18px;
   padding: 14px;
-  background: linear-gradient(135deg, rgba(109, 211, 206, 0.08), rgba(255, 255, 255, 0.02));
+  background: linear-gradient(
+    135deg,
+    rgba(109, 211, 206, 0.08),
+    rgba(255, 255, 255, 0.02)
+  );
   border: 1px solid var(--border);
   color: var(--muted);
   line-height: 1.55;
@@ -1508,7 +1659,11 @@ input[type="password"]:disabled {
   border-radius: 16px;
   border: 1px solid var(--surface-border);
   background:
-    linear-gradient(145deg, rgba(255, 255, 255, 0.035), rgba(109, 211, 206, 0.018)),
+    linear-gradient(
+      145deg,
+      rgba(255, 255, 255, 0.035),
+      rgba(109, 211, 206, 0.018)
+    ),
     rgba(18, 39, 47, 0.52);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
@@ -1700,7 +1855,9 @@ input[type="password"]:disabled {
 
 .piano-roll.is-roll-playing {
   border-color: rgba(255, 245, 212, 0.42);
-  box-shadow: 0 0 0 1px rgba(255, 245, 212, 0.16), 0 0 22px rgba(255, 245, 212, 0.1);
+  box-shadow:
+    0 0 0 1px rgba(255, 245, 212, 0.16),
+    0 0 22px rgba(255, 245, 212, 0.1);
 }
 
 .roll-playhead {
@@ -1711,7 +1868,9 @@ input[type="password"]:disabled {
   width: 2px;
   border-radius: 999px;
   background: rgba(255, 245, 212, 0.95);
-  box-shadow: 0 0 0 1px rgba(255, 245, 212, 0.24), 0 0 16px rgba(255, 245, 212, 0.42);
+  box-shadow:
+    0 0 0 1px rgba(255, 245, 212, 0.24),
+    0 0 16px rgba(255, 245, 212, 0.42);
   pointer-events: none;
   transform: translateX(0);
   transition: transform 30ms linear;
@@ -1737,7 +1896,9 @@ input[type="password"]:disabled {
 
 .piano-roll.is-previewing {
   border-color: rgba(244, 162, 97, 0.55);
-  box-shadow: 0 0 0 1px rgba(244, 162, 97, 0.22), 0 0 0 12px rgba(244, 162, 97, 0.08);
+  box-shadow:
+    0 0 0 1px rgba(244, 162, 97, 0.22),
+    0 0 0 12px rgba(244, 162, 97, 0.08);
   animation: preview-pulse 900ms ease;
 }
 
@@ -1922,12 +2083,20 @@ input[type="password"]:disabled {
 
 .history-item.is-selected {
   border-color: rgba(244, 162, 97, 0.42);
-  background: linear-gradient(135deg, rgba(244, 162, 97, 0.14), rgba(255, 255, 255, 0.03));
+  background: linear-gradient(
+    135deg,
+    rgba(244, 162, 97, 0.14),
+    rgba(255, 255, 255, 0.03)
+  );
 }
 
 .history-item.is-previewed:not(.is-selected) {
   border-color: rgba(109, 211, 206, 0.34);
-  background: linear-gradient(135deg, rgba(109, 211, 206, 0.1), rgba(255, 255, 255, 0.03));
+  background: linear-gradient(
+    135deg,
+    rgba(109, 211, 206, 0.1),
+    rgba(255, 255, 255, 0.03)
+  );
 }
 
 .session-item {
@@ -2084,15 +2253,21 @@ input[type="password"]:disabled {
 
 @keyframes preview-pulse {
   0% {
-    box-shadow: 0 0 0 1px rgba(244, 162, 97, 0.08), 0 0 0 0 rgba(244, 162, 97, 0);
+    box-shadow:
+      0 0 0 1px rgba(244, 162, 97, 0.08),
+      0 0 0 0 rgba(244, 162, 97, 0);
   }
 
   40% {
-    box-shadow: 0 0 0 1px rgba(244, 162, 97, 0.24), 0 0 0 14px rgba(244, 162, 97, 0.1);
+    box-shadow:
+      0 0 0 1px rgba(244, 162, 97, 0.24),
+      0 0 0 14px rgba(244, 162, 97, 0.1);
   }
 
   100% {
-    box-shadow: 0 0 0 1px rgba(244, 162, 97, 0.22), 0 0 0 12px rgba(244, 162, 97, 0.08);
+    box-shadow:
+      0 0 0 1px rgba(244, 162, 97, 0.22),
+      0 0 0 12px rgba(244, 162, 97, 0.08);
   }
 }
 
@@ -2190,7 +2365,7 @@ input[type="password"]:disabled {
     max-width: 100%;
   }
 
-  .hero-account-panel {
+  .account-dialog {
     width: calc(100vw - 32px);
   }
 
@@ -2479,8 +2654,14 @@ html.phone-layout .workspace-tabs,
 html.phone-layout .performance-strip,
 html.phone-layout .live-input-actions,
 html.phone-layout .input-options,
-html.phone-layout #control-perform-panel .panel-stack > .panel-section:not(:first-child),
-html.phone-layout #control-perform-panel .panel-section:first-child > .section-head,
+html.phone-layout
+  #control-perform-panel
+  .panel-stack
+  > .panel-section:not(:first-child),
+html.phone-layout
+  #control-perform-panel
+  .panel-section:first-child
+  > .section-head,
 html.phone-layout #control-memory-panel,
 html.phone-layout #control-session-panel {
   display: none !important;
@@ -2492,10 +2673,8 @@ html.phone-layout .phone-output-label {
 
 html.phone-layout .layout {
   gap: 10px;
-  padding:
-    max(8px, env(safe-area-inset-top))
-    max(8px, env(safe-area-inset-right))
-    max(12px, env(safe-area-inset-bottom))
+  padding: max(8px, env(safe-area-inset-top))
+    max(8px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom))
     max(8px, env(safe-area-inset-left));
 }
 
@@ -2523,7 +2702,10 @@ html.phone-layout .control-workspace {
   backdrop-filter: none;
 }
 
-html.phone-layout #control-perform-panel .panel-stack > .panel-section:first-child {
+html.phone-layout
+  #control-perform-panel
+  .panel-stack
+  > .panel-section:first-child {
   padding: 0;
   border: 0;
   border-radius: 0;
@@ -2551,7 +2733,12 @@ html.phone-layout .black-key {
 html.phone-layout .white-key {
   border-color: #adc6c3;
   background-color: #f7fcfa;
-  background-image: linear-gradient(180deg, #ffffff 0%, #f2faf7 52%, #deece9 100%);
+  background-image: linear-gradient(
+    180deg,
+    #ffffff 0%,
+    #f2faf7 52%,
+    #deece9 100%
+  );
 }
 
 html.phone-layout .virtual-octave-controls .compact-button,

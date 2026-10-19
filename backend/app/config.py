@@ -19,6 +19,8 @@ class Settings:
     session_export_dir: Path
     seed_midi_file: Path | None
     seed_midi_folder: Path | None
+    backup_bucket: str | None
+    backup_interval_seconds: float
 
 
 def _env_path(name: str) -> Path | None:
@@ -37,4 +39,8 @@ def load_settings() -> Settings:
         or (DATA_DIR / "session_midi_exports"),
         seed_midi_file=_env_path("CONTINUATOR_SEED_MIDI_FILE"),
         seed_midi_folder=_env_path("CONTINUATOR_SEED_MIDI_FOLDER"),
+        backup_bucket=os.getenv("CONTINUATOR_BACKUP_BUCKET") or None,
+        backup_interval_seconds=max(
+            1, float(os.getenv("CONTINUATOR_BACKUP_INTERVAL_SECONDS", "5"))
+        ),
     )

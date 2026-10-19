@@ -19,6 +19,7 @@ def api(tmp_path, monkeypatch):
     monkeypatch.setenv("CONTINUATOR_SESSION_EXPORT_DIR", str(tmp_path / "exports"))
     monkeypatch.delenv("CONTINUATOR_SEED_MIDI_FILE", raising=False)
     monkeypatch.delenv("CONTINUATOR_SEED_MIDI_FOLDER", raising=False)
+    monkeypatch.delenv("CONTINUATOR_BACKUP_BUCKET", raising=False)
     from app import main
 
     importlib.reload(main)

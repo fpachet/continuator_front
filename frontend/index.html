@@ -8,11 +8,14 @@
     <title>Web Continuator</title>
     <script>
       (() => {
-        const requestedLayout = new URLSearchParams(window.location.search).get("layout");
+        const requestedLayout = new URLSearchParams(window.location.search).get(
+          "layout",
+        );
         const phoneUserAgent = /Android.+Mobile|iPhone|iPod/i.test(
           navigator.userAgent || "",
         );
-        const narrowViewport = window.matchMedia?.("(max-width: 700px)").matches;
+        const narrowViewport =
+          window.matchMedia?.("(max-width: 700px)").matches;
         const phoneLayout =
           requestedLayout === "phone" ||
           (requestedLayout !== "desktop" &&
@@ -22,7 +25,7 @@
         document.documentElement.classList.toggle("phone-layout", phoneLayout);
       })();
     </script>
-    <link rel="stylesheet" href="/assets/styles.css?v=20261019-review-modules" />
+    <link rel="stylesheet" href="/assets/styles.css?v=20261019-cloud-save" />
   </head>
   <body>
     <div class="page-aura"></div>
@@ -32,7 +35,9 @@
         <h1>Web Continuator</h1>
       </div>
       <div class="hero-side">
-        <span id="timing-readout" class="hero-status small-copy">Waiting for first phrase</span>
+        <span id="timing-readout" class="hero-status small-copy"
+          >Waiting for first phrase</span
+        >
         <div class="hero-actions">
           <button
             class="hero-utility-button ghost"
@@ -52,84 +57,129 @@
           aria-expanded="false"
           aria-controls="account-panel"
         >
-          <span id="auth-avatar" class="account-avatar" aria-hidden="true">G</span>
+          <span id="auth-avatar" class="account-avatar" aria-hidden="true"
+            >G</span
+          >
           <span class="account-trigger-copy">
-            <span id="auth-status-label" class="account-trigger-label">Guest mode</span>
-            <span id="auth-status-copy" class="account-trigger-meta">Click to sign in</span>
+            <span id="auth-status-label" class="account-trigger-label"
+              >Sign in</span
+            >
+            <span id="auth-status-copy" class="account-trigger-meta"
+              >Save and reopen sessions</span
+            >
           </span>
         </button>
-        <section id="account-panel" class="account-panel hero-account-panel" hidden>
-          <div class="section-head">
-            <div>
-              <h3>Account</h3>
-              <p id="account-panel-copy" class="section-copy">
-                Guest mode works immediately. Sign in only if you want your
-                sessions saved and reopenable.
-              </p>
-            </div>
-          </div>
-          <dl class="info-grid">
-            <div>
-              <dt>Current User</dt>
-              <dd id="auth-user-name">Not signed in</dd>
-            </div>
-            <div>
-              <dt>Saved Sessions</dt>
-              <dd id="saved-session-count">Guest mode</dd>
-            </div>
-          </dl>
-          <div id="auth-signed-out-panel">
-            <div class="auth-grid">
-              <div class="field">
-                <label for="auth-username-input">Username</label>
-                <input
-                  id="auth-username-input"
-                  type="text"
-                  minlength="2"
-                  maxlength="32"
-                  autocomplete="username"
-                  placeholder="continuator_user"
-                />
-                <p class="field-hint">
-                  Use 2 to 32 letters, digits, underscores, dots, or dashes.
-                </p>
-              </div>
-              <div class="field">
-                <label for="auth-password-input">Password</label>
-                <input
-                  id="auth-password-input"
-                  type="password"
-                  minlength="8"
-                  maxlength="128"
-                  autocomplete="current-password"
-                  placeholder="At least 8 characters"
-                />
-                <p class="field-hint">Passwords need at least 8 characters.</p>
-              </div>
-            </div>
-            <div class="button-row">
-              <button id="login-button" type="button">Sign In</button>
-              <button id="register-button" type="button" class="ghost">
-                Create Account
-              </button>
-            </div>
-          </div>
-          <div id="auth-signed-in-panel" class="button-row" hidden>
-            <button
-              id="account-open-sessions-button"
-              type="button"
-              class="ghost"
-            >
-              Open Saved Sessions
-            </button>
-            <button id="logout-button" type="button" class="ghost">Sign Out</button>
-          </div>
-          <div id="auth-message-box" class="message-box auth-message-box">
-            Guest mode is ready. Sign in only if you want saved sessions.
-          </div>
-        </section>
       </div>
     </header>
+
+    <div class="save-status-bar" aria-label="Session saving">
+      <span id="session-ownership-status"
+        >Guest session · play without signing in</span
+      >
+      <span id="cloud-save-status" role="status" aria-live="polite"
+        >Checking cloud backup…</span
+      >
+      <button id="save-account-button" class="ghost" type="button">
+        Sign in &amp; save session
+      </button>
+    </div>
+    <dialog
+      id="account-panel"
+      class="account-panel account-dialog"
+      aria-labelledby="account-title"
+      hidden
+    >
+      <div class="section-head">
+        <div>
+          <h2 id="account-title">Sign in and save your session</h2>
+          <p id="account-panel-copy" class="section-copy">
+            Play without an account. Sign in to keep this session in your saved
+            sessions and reopen it later.
+          </p>
+        </div>
+      </div>
+      <button
+        id="close-account-button"
+        class="ghost account-close"
+        type="button"
+        aria-label="Close account"
+      >
+        Close
+      </button>
+      <dl class="info-grid">
+        <div>
+          <dt>Current User</dt>
+          <dd id="auth-user-name">Not signed in</dd>
+        </div>
+        <div>
+          <dt>Saved Sessions</dt>
+          <dd id="saved-session-count">Guest mode</dd>
+        </div>
+      </dl>
+      <div id="auth-signed-out-panel">
+        <div class="auth-grid">
+          <div class="field">
+            <label for="auth-username-input">Username</label>
+            <input
+              id="auth-username-input"
+              type="text"
+              minlength="2"
+              maxlength="32"
+              autocomplete="username"
+              placeholder="continuator_user"
+            />
+            <p class="field-hint">
+              Use 2 to 32 letters, digits, underscores, dots, or dashes.
+            </p>
+          </div>
+          <div class="field">
+            <label for="auth-password-input">Password</label>
+            <input
+              id="auth-password-input"
+              type="password"
+              minlength="8"
+              maxlength="128"
+              autocomplete="current-password"
+              placeholder="At least 8 characters"
+            />
+            <p class="field-hint">Passwords need at least 8 characters.</p>
+          </div>
+        </div>
+        <label class="account-save-choice"
+          ><input id="claim-session-toggle" type="checkbox" checked /> Save the
+          current guest session to my account</label
+        >
+        <div class="button-row">
+          <button id="login-button" type="button">Sign In</button>
+          <button id="register-button" type="button" class="ghost">
+            Create Account
+          </button>
+        </div>
+      </div>
+      <div id="auth-signed-in-panel" hidden>
+        <div class="field">
+          <label for="account-session-select">Saved sessions</label>
+          <select id="account-session-select">
+            <option value="">No saved sessions yet</option>
+          </select>
+        </div>
+        <div class="button-row">
+          <button id="claim-session-button" type="button" hidden>
+            Save current session to my account
+          </button>
+          <button id="account-open-sessions-button" type="button" class="ghost">
+            Open selected session
+          </button>
+          <button id="logout-button" type="button" class="ghost">
+            Sign Out
+          </button>
+        </div>
+      </div>
+      <div id="auth-message-box" class="message-box auth-message-box">
+        No account is needed to play. Signing in can save the phrases you have
+        already played.
+      </div>
+    </dialog>
 
     <div id="readme-overlay" class="sheet-overlay" hidden></div>
     <aside
@@ -149,7 +199,11 @@
             are saved.
           </p>
         </div>
-        <button id="close-readme-button" class="ghost sheet-close" type="button">
+        <button
+          id="close-readme-button"
+          class="ghost sheet-close"
+          type="button"
+        >
           Close
         </button>
       </div>
@@ -158,9 +212,9 @@
         <section class="readme-block">
           <h3>What It Does</h3>
           <p>
-            Web Continuator captures a phrase from browser MIDI, sends it to
-            the Python Continuator engine, and plays back the continuation
-            either through the built-in browser synth or a MIDI output port.
+            Web Continuator captures a phrase from browser MIDI, sends it to the
+            Python Continuator engine, and plays back the continuation either
+            through the built-in browser synth or a MIDI output port.
           </p>
         </section>
 
@@ -170,8 +224,12 @@
             <li>Create or open a session.</li>
             <li>Click <strong>Connect MIDI</strong> and choose an input.</li>
             <li>Play a short phrase on your keyboard.</li>
-            <li>Wait for the phrase to end, or click <strong>Send Phrase</strong>.</li>
-            <li>Review the continuation in the piano rolls, history, and memory.</li>
+            <li>
+              Wait for the phrase to end, or click <strong>Send Phrase</strong>.
+            </li>
+            <li>
+              Review the continuation in the piano rolls, history, and memory.
+            </li>
           </ol>
         </section>
 
@@ -192,9 +250,19 @@
         <section class="readme-block">
           <h3>Studio Layout</h3>
           <ul class="readme-list">
-            <li><strong>Perform</strong>: live MIDI capture, playback routing, optional MIDI fan-out, phrase generation, replay, and infinite mode.</li>
-            <li><strong>Memory</strong>: corpus import, active engine memory, and phrase history.</li>
-            <li><strong>Session</strong>: session lifecycle, advanced Continuator settings, and saved sessions.</li>
+            <li>
+              <strong>Perform</strong>: live MIDI capture, playback routing,
+              optional MIDI fan-out, phrase generation, replay, and infinite
+              mode.
+            </li>
+            <li>
+              <strong>Memory</strong>: corpus import, active engine memory, and
+              phrase history.
+            </li>
+            <li>
+              <strong>Session</strong>: session lifecycle, advanced Continuator
+              settings, and saved sessions.
+            </li>
           </ul>
         </section>
 
@@ -211,10 +279,19 @@
         <section class="readme-block">
           <h3>Accounts and Saved Sessions</h3>
           <p>
-            Guest mode works immediately. Sign in only if you want sessions
-            saved under your username so you can reopen them later. The account
-            menu lives in the top-right header and includes sign in, sign out,
-            and saved-session access.
+            Play without an account. Use
+            <strong>Sign in &amp; save session</strong>
+            above the workspace to keep the current session, including its
+            existing phrases, under your username. The checked save option can
+            be turned off if you want to keep playing as a guest. Saved sessions
+            can be reopened from the account dialog on desktop and phone.
+          </p>
+          <p>
+            The cloud status shows <strong>Saving to cloud</strong>,
+            <strong>Cloud saved</strong>, or a failure that retries
+            automatically. Only a completed cloud save protects the latest
+            changes from a server reset. MIDI ZIP downloads provide an
+            additional personal copy.
           </p>
         </section>
 
@@ -222,13 +299,13 @@
           <h3>History and References</h3>
           <p>
             Continuator was developed by François Pachet at Sony CSL Paris in
-            1999 as an interactive musical system that learns a
-            performer’s style in real time and answers with stylistically
-            coherent continuations. The foundational paper introduced the idea
-            of a playable “virtual musician”, later articles described the
-            instrument in practice and in educational settings, and the current
-            Python implementation extends the approach with more explicit
-            controllable constraints.
+            1999 as an interactive musical system that learns a performer’s
+            style in real time and answers with stylistically coherent
+            continuations. The foundational paper introduced the idea of a
+            playable “virtual musician”, later articles described the instrument
+            in practice and in educational settings, and the current Python
+            implementation extends the approach with more explicit controllable
+            constraints.
           </p>
           <ul class="readme-list readme-link-list">
             <li>
@@ -282,10 +359,22 @@
         <section class="readme-block">
           <h3>Performance Notes</h3>
           <ul class="readme-list">
-            <li><strong>Auto-send phrase</strong> starts generation after the phrase ends.</li>
-            <li>A phrase closes after the selected phrase gap following the final note-off.</li>
-            <li><strong>Infinite mode</strong> keeps chaining continuations until you stop it.</li>
-            <li>Playing live MIDI interrupts whatever continuation is currently playing.</li>
+            <li>
+              <strong>Auto-send phrase</strong> starts generation after the
+              phrase ends.
+            </li>
+            <li>
+              A phrase closes after the selected phrase gap following the final
+              note-off.
+            </li>
+            <li>
+              <strong>Infinite mode</strong> keeps chaining continuations until
+              you stop it.
+            </li>
+            <li>
+              Playing live MIDI interrupts whatever continuation is currently
+              playing.
+            </li>
           </ul>
         </section>
       </div>
@@ -312,7 +401,11 @@
           Close
         </button>
       </div>
-      <div class="graph-tabs" role="tablist" aria-label="Continuator graph views">
+      <div
+        class="graph-tabs"
+        role="tablist"
+        aria-label="Continuator graph views"
+      >
         <button
           class="graph-tab is-active"
           data-graph-kind="memory"
@@ -332,7 +425,11 @@
           Last Constraint Graph
         </button>
       </div>
-      <div id="graph-controls" class="graph-controls" aria-label="Memory graph display options">
+      <div
+        id="graph-controls"
+        class="graph-controls"
+        aria-label="Memory graph display options"
+      >
         <label>
           <span>Mode</span>
           <select id="graph-mode-select">
@@ -350,10 +447,7 @@
         </label>
       </div>
       <div class="graph-image-frame">
-        <img
-          id="graph-image"
-          alt="Continuator internal graph snapshot"
-        />
+        <img id="graph-image" alt="Continuator internal graph snapshot" />
       </div>
     </aside>
 
@@ -367,11 +461,17 @@
             <div class="status-cluster">
               <span class="status-pill" id="session-status">No session</span>
               <span class="status-pill" id="midi-status">Disconnected</span>
-              <span class="status-pill" id="phrase-status">Waiting for MIDI</span>
+              <span class="status-pill" id="phrase-status"
+                >Waiting for MIDI</span
+              >
             </div>
           </div>
 
-          <div class="workspace-tabs" role="tablist" aria-label="Studio control views">
+          <div
+            class="workspace-tabs"
+            role="tablist"
+            aria-label="Studio control views"
+          >
             <button
               class="workspace-tab is-active"
               data-control-tab="perform"
@@ -406,12 +506,18 @@
 
           <div class="performance-strip">
             <div class="readiness-steps" aria-label="Performance readiness">
-              <span id="ready-session-step" class="readiness-step">Session</span>
+              <span id="ready-session-step" class="readiness-step"
+                >Session</span
+              >
               <span id="ready-midi-step" class="readiness-step">MIDI</span>
               <span id="ready-phrase-step" class="readiness-step">Phrase</span>
               <span id="ready-output-step" class="readiness-step">Output</span>
             </div>
-            <button id="global-panic-button" class="ghost danger-button global-panic-button" type="button">
+            <button
+              id="global-panic-button"
+              class="ghost danger-button global-panic-button"
+              type="button"
+            >
               Stop / Panic
             </button>
           </div>
@@ -430,8 +536,15 @@
                   </div>
                 </div>
                 <div class="button-row live-input-actions">
-                  <button id="connect-midi-button" class="desktop-midi-control">Connect MIDI</button>
-                  <button id="refresh-midi-button" class="ghost desktop-midi-control">Refresh Ports</button>
+                  <button id="connect-midi-button" class="desktop-midi-control">
+                    Connect MIDI
+                  </button>
+                  <button
+                    id="refresh-midi-button"
+                    class="ghost desktop-midi-control"
+                  >
+                    Refresh Ports
+                  </button>
                   <label class="toggle">
                     <input id="auto-send-toggle" type="checkbox" checked />
                     <span>Auto-send phrase</span>
@@ -458,17 +571,31 @@
                       <strong>Virtual MIDI Keyboard</strong>
                       <span id="virtual-octave-label">C4-B5</span>
                     </div>
-                    <div class="virtual-octave-controls" aria-label="Octave controls">
-                      <button id="virtual-octave-down-button" class="ghost compact-button" type="button">
+                    <div
+                      class="virtual-octave-controls"
+                      aria-label="Octave controls"
+                    >
+                      <button
+                        id="virtual-octave-down-button"
+                        class="ghost compact-button"
+                        type="button"
+                      >
                         Oct -
                       </button>
-                      <button id="virtual-octave-up-button" class="ghost compact-button" type="button">
+                      <button
+                        id="virtual-octave-up-button"
+                        class="ghost compact-button"
+                        type="button"
+                      >
                         Oct +
                       </button>
                     </div>
                   </div>
                   <div class="virtual-keyboard-controls">
-                    <label class="velocity-control" for="virtual-velocity-input">
+                    <label
+                      class="velocity-control"
+                      for="virtual-velocity-input"
+                    >
                       <span>Velocity</span>
                       <input
                         id="virtual-velocity-input"
@@ -477,7 +604,11 @@
                         max="127"
                         value="100"
                       />
-                      <output id="virtual-velocity-value" for="virtual-velocity-input">100</output>
+                      <output
+                        id="virtual-velocity-value"
+                        for="virtual-velocity-input"
+                        >100</output
+                      >
                     </label>
                     <label class="toggle compact-toggle">
                       <input id="virtual-sustain-toggle" type="checkbox" />
@@ -522,11 +653,17 @@
                 >
                   Preparing your session…
                 </div>
-                <details class="phone-collapsible input-options" data-phone-collapsible open>
+                <details
+                  class="phone-collapsible input-options"
+                  data-phone-collapsible
+                  open
+                >
                   <summary>Input options</summary>
                   <div class="phone-collapsible-body">
                     <div class="field">
-                      <label for="phrase-timeout-input">Phrase gap (seconds)</label>
+                      <label for="phrase-timeout-input"
+                        >Phrase gap (seconds)</label
+                      >
                       <input
                         id="phrase-timeout-input"
                         type="number"
@@ -537,15 +674,25 @@
                         inputmode="decimal"
                       />
                       <p class="field-hint">
-                        Capture completes after this delay once all notes are released.
+                        Capture completes after this delay once all notes are
+                        released.
                       </p>
-                      <div id="phrase-gap-meter" class="phrase-gap-meter" hidden>
+                      <div
+                        id="phrase-gap-meter"
+                        class="phrase-gap-meter"
+                        hidden
+                      >
                         <div class="phrase-gap-meter-head">
-                          <span id="phrase-gap-meter-label">Listening for more notes</span>
+                          <span id="phrase-gap-meter-label"
+                            >Listening for more notes</span
+                          >
                           <strong id="phrase-gap-meter-copy">1.0s</strong>
                         </div>
                         <div class="phrase-gap-track" aria-hidden="true">
-                          <div id="phrase-gap-meter-bar" class="phrase-gap-bar"></div>
+                          <div
+                            id="phrase-gap-meter-bar"
+                            class="phrase-gap-bar"
+                          ></div>
                         </div>
                       </div>
                     </div>
@@ -572,15 +719,23 @@
                   <button id="generate-memory-button" class="ghost">
                     Generate From Memory
                   </button>
-                  <button id="replay-generated-button" class="ghost">Replay Output</button>
+                  <button id="replay-generated-button" class="ghost">
+                    Replay Output
+                  </button>
                   <button id="clear-phrase-button" class="ghost">Clear</button>
                 </div>
-                <details class="phone-collapsible generation-options" data-phone-collapsible open>
+                <details
+                  class="phone-collapsible generation-options"
+                  data-phone-collapsible
+                  open
+                >
                   <summary>Generation options</summary>
                   <div class="phone-collapsible-body">
                     <div class="generation-grid">
                       <div class="field generation-field">
-                        <label for="continuation-length-input">Continuation length (notes)</label>
+                        <label for="continuation-length-input"
+                          >Continuation length (notes)</label
+                        >
                         <input
                           id="continuation-length-input"
                           type="number"
@@ -598,10 +753,16 @@
                         <div class="infinite-transport">
                           <div class="transport-copy">
                             <strong id="infinite-state-label">Idle</strong>
-                            <span id="infinite-seed-label">Seed: play or preview a phrase</span>
+                            <span id="infinite-seed-label"
+                              >Seed: play or preview a phrase</span
+                            >
                           </div>
                           <div class="transport-actions">
-                            <button id="start-infinite-button" class="ghost transport-button" type="button">
+                            <button
+                              id="start-infinite-button"
+                              class="ghost transport-button"
+                              type="button"
+                            >
                               Play
                             </button>
                             <button
@@ -635,13 +796,18 @@
                   </select>
                 </div>
                 <div class="route-picker desktop-midi-control">
-                  <label class="route-picker-label" for="audio-output-select">Sound Output</label>
+                  <label class="route-picker-label" for="audio-output-select"
+                    >Sound Output</label
+                  >
                   <select id="audio-output-select" disabled>
                     <option>System default</option>
                   </select>
                 </div>
                 <div class="route-picker desktop-midi-control">
-                  <label class="route-picker-label" for="midi-copy-output-select">
+                  <label
+                    class="route-picker-label"
+                    for="midi-copy-output-select"
+                  >
                     Also send MIDI to
                   </label>
                   <select id="midi-copy-output-select" disabled>
@@ -653,7 +819,11 @@
                     <span>Health</span>
                     <strong id="renderer-health">Browser renderer ready</strong>
                   </span>
-                  <span id="midi-copy-status-chip" class="playback-status-chip" hidden>
+                  <span
+                    id="midi-copy-status-chip"
+                    class="playback-status-chip"
+                    hidden
+                  >
                     <span>MIDI copy</span>
                     <strong id="midi-copy-status">Off</strong>
                   </span>
@@ -662,7 +832,11 @@
                   <button id="test-note-button" class="ghost" type="button">
                     Test Note
                   </button>
-                  <button id="panic-button" class="ghost danger-button" type="button">
+                  <button
+                    id="panic-button"
+                    class="ghost danger-button"
+                    type="button"
+                  >
                     Panic
                   </button>
                 </div>
@@ -672,7 +846,11 @@
                 </p>
               </section>
 
-              <section id="faust-renderer-panel" class="panel-section accent-section" hidden>
+              <section
+                id="faust-renderer-panel"
+                class="panel-section accent-section"
+                hidden
+              >
                 <div class="section-head">
                   <div>
                     <h3>Instrument Settings</h3>
@@ -684,7 +862,11 @@
                     <div class="field faust-field">
                       <div class="faust-label-row">
                         <label for="faust-brightness-input">Brightness</label>
-                        <output id="faust-brightness-value" for="faust-brightness-input">0.58</output>
+                        <output
+                          id="faust-brightness-value"
+                          for="faust-brightness-input"
+                          >0.58</output
+                        >
                       </div>
                       <input
                         id="faust-brightness-input"
@@ -698,7 +880,11 @@
                     <div class="field faust-field">
                       <div class="faust-label-row">
                         <label for="faust-hardness-input">Hardness</label>
-                        <output id="faust-hardness-value" for="faust-hardness-input">0.34</output>
+                        <output
+                          id="faust-hardness-value"
+                          for="faust-hardness-input"
+                          >0.34</output
+                        >
                       </div>
                       <input
                         id="faust-hardness-input"
@@ -712,7 +898,11 @@
                     <div class="field faust-field">
                       <div class="faust-label-row">
                         <label for="faust-damping-input">Damping</label>
-                        <output id="faust-damping-value" for="faust-damping-input">0.42</output>
+                        <output
+                          id="faust-damping-value"
+                          for="faust-damping-input"
+                          >0.42</output
+                        >
                       </div>
                       <input
                         id="faust-damping-input"
@@ -726,7 +916,11 @@
                     <div class="field faust-field">
                       <div class="faust-label-row">
                         <label for="faust-release-input">Release</label>
-                        <output id="faust-release-value" for="faust-release-input">0.95 s</output>
+                        <output
+                          id="faust-release-value"
+                          for="faust-release-input"
+                          >0.95 s</output
+                        >
                       </div>
                       <input
                         id="faust-release-input"
@@ -740,7 +934,9 @@
                     <div class="field faust-field">
                       <div class="faust-label-row">
                         <label for="faust-body-input">Body</label>
-                        <output id="faust-body-value" for="faust-body-input">0.33</output>
+                        <output id="faust-body-value" for="faust-body-input"
+                          >0.33</output
+                        >
                       </div>
                       <input
                         id="faust-body-input"
@@ -754,7 +950,9 @@
                     <div class="field faust-field">
                       <div class="faust-label-row">
                         <label for="faust-stereo-input">Stereo</label>
-                        <output id="faust-stereo-value" for="faust-stereo-input">0.45</output>
+                        <output id="faust-stereo-value" for="faust-stereo-input"
+                          >0.45</output
+                        >
                       </div>
                       <input
                         id="faust-stereo-input"
@@ -813,7 +1011,10 @@
                       </p>
                     </div>
                   </div>
-                  <div id="faust-custom-controls" class="faust-control-grid"></div>
+                  <div
+                    id="faust-custom-controls"
+                    class="faust-control-grid"
+                  ></div>
                   <p id="faust-custom-controls-hint" class="field-hint">
                     Compile a polyphonic instrument to expose its parameters.
                   </p>
@@ -908,7 +1109,8 @@
                     <span class="settings-chip">No active memory yet</span>
                   </div>
                   <p id="memory-hint" class="small-copy memory-hint">
-                    Create a session and play a phrase to inspect the active Continuator memory.
+                    Create a session and play a phrase to inspect the active
+                    Continuator memory.
                   </p>
                   <div id="memory-ribbon" class="memory-ribbon"></div>
                   <div id="memory-list" class="history-list memory-list">
@@ -921,12 +1123,15 @@
                     <div>
                       <h3>Phrase History</h3>
                       <p class="section-copy">
-                        Follow the phrases that were played, learned, and generated in this session.
+                        Follow the phrases that were played, learned, and
+                        generated in this session.
                       </p>
                     </div>
                   </div>
                   <div id="history-list" class="history-list">
-                    <p class="muted">Create a session to start building history.</p>
+                    <p class="muted">
+                      Create a session to start building history.
+                    </p>
                   </div>
                 </section>
               </div>
@@ -948,16 +1153,22 @@
                   </div>
                 </div>
                 <p id="session-save-note" class="session-save-note">
-                  Guest session: sign in before creating a new session if you want it saved.
+                  Play without signing in. Sign in to save this session to your
+                  account.
                 </p>
                 <div class="button-row">
                   <button id="create-session-button">Create Session</button>
-                  <button id="reset-session-button" class="ghost">Reset Memory</button>
+                  <button id="reset-session-button" class="ghost">
+                    Reset Memory
+                  </button>
                   <button id="save-session-midi-button" class="ghost">
                     Save Session MIDI
                   </button>
                   <label class="toggle compact-toggle">
-                    <input id="remember-midi-export-file-toggle" type="checkbox" />
+                    <input
+                      id="remember-midi-export-file-toggle"
+                      type="checkbox"
+                    />
                     <span>Don't ask again</span>
                   </label>
                 </div>
@@ -999,7 +1210,9 @@
                       <span>Forget old phrases and keep a rolling memory</span>
                     </label>
                     <div class="field">
-                      <label for="keep-last-input">Keep only N last inputs</label>
+                      <label for="keep-last-input"
+                        >Keep only N last inputs</label
+                      >
                       <input
                         id="keep-last-input"
                         type="number"
@@ -1058,11 +1271,17 @@
                 <div id="my-sessions-list" class="history-list">
                   <p class="muted">Sign in to see your saved sessions.</p>
                 </div>
-                <div id="saved-session-preview" class="session-preview-panel" hidden>
+                <div
+                  id="saved-session-preview"
+                  class="session-preview-panel"
+                  hidden
+                >
                   <div class="session-preview-head">
                     <div>
                       <span class="small-copy">Selected saved session</span>
-                      <strong id="saved-session-preview-name">No session selected</strong>
+                      <strong id="saved-session-preview-name"
+                        >No session selected</strong
+                      >
                     </div>
                     <button
                       id="saved-session-preview-open-button"
@@ -1081,7 +1300,11 @@
                         maxlength="80"
                         autocomplete="off"
                       />
-                      <button id="rename-session-button" class="ghost" type="button">
+                      <button
+                        id="rename-session-button"
+                        class="ghost"
+                        type="button"
+                      >
                         Rename
                       </button>
                     </div>
@@ -1169,7 +1392,9 @@
         <article class="card snapshot-card">
           <div class="card-head">
             <h2>Live Snapshot</h2>
-            <span class="small-copy">Always-visible capture and generation feedback</span>
+            <span class="small-copy"
+              >Always-visible capture and generation feedback</span
+            >
           </div>
           <dl class="info-grid">
             <div>
@@ -1197,6 +1422,6 @@
       </section>
     </main>
 
-    <script type="module" src="/assets/app.js?v=20261019-review-modules"></script>
+    <script type="module" src="/assets/app.js?v=20261019-cloud-save"></script>
   </body>
 </html>

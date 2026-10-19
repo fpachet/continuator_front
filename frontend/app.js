@@ -1,4 +1,7 @@
 import { state, elements } from "./app-state.js";
+import { createBackupStatus } from "./backup-status.js";
+
+const backupStatus = createBackupStatus(elements.cloudSaveStatus);
 import {
   DEFAULT_PLAYBACK_CHOICE,
   FAUST_CLAVIER_ID,
@@ -1047,6 +1050,30 @@ function preferredGenerationNoteCount(referenceEvents = null) {
 }
 
 function renderAccountTrigger() {
+  const sessionSelect = elements.accountSessionSelect;
+  const selectedId =
+    state.accountSelectedSessionId || state.sessionId || sessionSelect.value;
+  const options = state.savedSessions.map((session) => {
+    const option = document.createElement("option");
+    option.value = session.session_id;
+    option.textContent = `${session.configuration.display_name || session.session_id.slice(0, 8)} · ${session.phrase_count} phrases`;
+    return option;
+  });
+  if (!options.length) {
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "No saved sessions yet";
+    options.push(empty);
+  }
+  sessionSelect.replaceChildren(...options);
+  if (state.savedSessions.some((session) => session.session_id === selectedId))
+    sessionSelect.value = selectedId;
+  sessionSelect.disabled = !state.authUser || !state.savedSessions.length;
+  elements.accountOpenSessionsButton.disabled =
+    !state.authUser || !state.savedSessions.length;
+  elements.accountTitle.textContent = state.authUser
+    ? "Account and saved sessions"
+    : "Sign in and save your session";
   if (state.authUser) {
     const username = state.authUser.username;
     elements.authStatus.dataset.authState = "signed-in";
@@ -1064,12 +1091,15 @@ function renderAccountTrigger() {
   elements.authStatus.title =
     "Guest mode. Click to sign in or create an account.";
   elements.authAvatar.textContent = "G";
-  elements.authStatusLabel.textContent = "Guest mode";
-  elements.authStatusCopy.textContent = "Click to sign in";
+  elements.authStatusLabel.textContent = "Sign in";
+  elements.authStatusCopy.textContent = "Save and reopen sessions";
 }
 
 function syncSheetOpenClass() {
-  document.body.classList.toggle("sheet-open", state.readmeOpen);
+  document.body.classList.toggle(
+    "sheet-open",
+    state.readmeOpen || state.accountPanelOpen,
+  );
 }
 
 function setReadmeOpen(open) {
@@ -1300,9 +1330,16 @@ function stopGraphPanelDrag(event) {
 function setAccountPanelOpen(open) {
   state.accountPanelOpen = open;
   elements.accountPanel.hidden = !open;
+  if (open && !elements.accountPanel.open) {
+    elements.accountPanel.showModal();
+  } else if (!open && elements.accountPanel.open) {
+    elements.accountPanel.close();
+  }
   elements.authStatus.setAttribute("aria-expanded", String(open));
   elements.authStatus.classList.toggle("is-open", open);
+  syncSheetOpenClass();
   if (open) {
+    syncAuthUI();
     scheduleVisibleSessionRefresh();
     const focusTarget = state.authUser
       ? elements.accountOpenSessionsButton
@@ -2748,14 +2785,48 @@ function bindEvents() {
     setAccountPanelOpen(!state.accountPanelOpen);
   });
 
-  elements.accountOpenSessionsButton.addEventListener("click", () => {
-    setControlView("session");
+  elements.closeAccountButton.addEventListener("click", () =>
+    setAccountPanelOpen(false),
+  );
+  elements.accountSessionSelect.addEventListener("change", () => {
+    state.accountSelectedSessionId = elements.accountSessionSelect.value;
+  });
+  elements.accountPanel.addEventListener("cancel", (event) => {
+    event.preventDefault();
     setAccountPanelOpen(false);
-    scheduleVisibleSessionRefresh();
-    elements.controlWorkspace?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
+  });
+  elements.accountPanel.addEventListener("click", (event) => {
+    if (event.target !== elements.accountPanel) return;
+    const bounds = elements.accountPanel.getBoundingClientRect();
+    if (
+      event.clientX < bounds.left ||
+      event.clientX > bounds.right ||
+      event.clientY < bounds.top ||
+      event.clientY > bounds.bottom
+    ) {
+      setAccountPanelOpen(false);
+    }
+  });
+  elements.saveAccountButton.addEventListener("click", () =>
+    setAccountPanelOpen(true),
+  );
+  elements.claimSessionButton.addEventListener("click", async () => {
+    try {
+      await claimCurrentSession();
+    } catch (error) {
+      setAuthMessage(error.message, true);
+    }
+  });
+
+  elements.accountOpenSessionsButton.addEventListener("click", async () => {
+    try {
+      const sessionId = elements.accountSessionSelect.value;
+      if (!sessionId) return;
+      await openSavedSession(sessionId);
+      setAccountPanelOpen(false);
+    } catch (error) {
+      setAuthMessage(error.message, true);
+    }
   });
 
   document.addEventListener("click", (event) => {
@@ -2767,7 +2838,8 @@ function bindEvents() {
     }
     if (
       elements.accountPanel.contains(event.target) ||
-      elements.authStatus.contains(event.target)
+      elements.authStatus.contains(event.target) ||
+      elements.saveAccountButton.contains(event.target)
     ) {
       return;
     }
@@ -2775,6 +2847,10 @@ function bindEvents() {
   });
 
   document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && state.accountPanelOpen) {
+      setAccountPanelOpen(false);
+      return;
+    }
     if (event.key === "Escape" && state.readmeOpen) {
       setReadmeOpen(false);
       return;
@@ -3328,6 +3404,10 @@ function bindEvents() {
 async function initialize() {
   syncPhoneLayout();
   bindEvents();
+  void backupStatus.refresh();
+  window.setInterval(() => {
+    if (!document.hidden) void backupStatus.refresh();
+  }, 3000);
   state.userMidiCopyOutputPreference = loadStoredMidiCopyOutputPreference();
   state.userAudioOutputPreference = loadStoredAudioOutputPreference();
   try {
@@ -3470,6 +3550,7 @@ const {
   refreshAuthState,
   initializeReadySession,
   submitAuth,
+  claimCurrentSession,
   logoutUser,
   refreshSavedSessions,
   openSavedSession,
@@ -3486,6 +3567,7 @@ const {
   generateFreshPhrase,
   importSelectedMidiFiles,
 } = createSessionController({
+  backupStatus,
   applyPreferredAudioOutput: (...args) => applyPreferredAudioOutput(...args),
   attachInput: (...args) => attachInput(...args),
   chooseMidiExportZipFileHandle: (...args) =>

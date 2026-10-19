@@ -57,10 +57,11 @@ What is implemented today:
 - Continuator settings exposed through a compact advanced drawer.
 - Per-session `History` and `Memory` visualization.
 - `Save Session MIDI` export from the Session panel.
+- Accounts, saved-session reopening, and saving an existing guest session to an account.
+- Optional private Hugging Face Bucket backups of accounts, phrase history, and exact session memory.
 
 What is intentionally not implemented yet:
 
-- Persistent user accounts.
 - Persistent per-user musical memory across sessions.
 - Shared session storage across multiple backend instances.
 - A production-grade multi-user database architecture.
@@ -90,10 +91,11 @@ client hints, phone browser identification, touch-pointer capability, and
 physical CSS screen dimensions so Android phones still select the phone surface
 when the browser reports a desktop-sized viewport. The layout class is applied
 before styles load to avoid briefly showing the full desktop controls. The phone
-surface contains only the virtual keyboard, a small live-status message, and the
-captured/generated piano rolls.
-Configuration, accounts, memory inspection, hardware MIDI, and device routing
-remain available in the unchanged desktop/tablet layout.
+surface contains the virtual keyboard, a small live-status message, the
+captured/generated piano rolls, and an account/save-status bar. The account dialog
+supports sign-in and reopening saved sessions on both phone and desktop.
+Configuration, memory inspection, hardware MIDI, and device routing remain
+available in the desktop/tablet layout.
 
 Phone interaction is deliberately automatic:
 
@@ -331,6 +333,8 @@ Main responsibilities:
 - `backend/app/session_manager.py`: session lifecycle, orchestration, and API-facing session logic.
 - `backend/app/continuator_adapter.py`: bridge between web JSON payloads and the Continuator Python engine.
 - `backend/app/storage.py`: transactional SQLite history, reset revisions, learning order, and exact variant persistence.
+- `backend/app/cloud_backup.py`: consistent snapshots, private bucket uploads, retention, and validated startup recovery.
+- `frontend/backup-status.js`: cloud durability feedback that accounts for pending browser writes.
 - `backend/app/memory.py`: stable variant identity and lossless note snapshots.
 - `backend/app/session_operations.py`: per-session operation locking and rollback recovery.
 - `backend/app/graph_renderer.py`: pure SVG layout from detached snapshots and traces. Layout runs outside the session/engine locks.
@@ -451,6 +455,9 @@ Environment variables currently supported:
 - `CONTINUATOR_SESSION_EXPORT_DIR`: choose where fallback backend-side MIDI exports are written.
 - `CONTINUATOR_SEED_MIDI_FILE`: preload each new session with one MIDI file.
 - `CONTINUATOR_SEED_MIDI_FOLDER`: preload each new session with a folder of MIDI files.
+- `CONTINUATOR_BACKUP_BUCKET`: optional private bucket ID, for example `pachet/continuator-front-backups`.
+- `CONTINUATOR_BACKUP_TOKEN`: backend-only secret with read/write access to that bucket. Falls back to the standard Hub `HF_TOKEN` or cached login for local development.
+- `CONTINUATOR_BACKUP_INTERVAL_SECONDS`: background backup interval, default `5`, minimum `1` second.
 
 Examples:
 
@@ -505,13 +512,48 @@ Typical deployment flow:
 Existing SQLite databases upgrade automatically on startup. The migration adds
 learning sequences, reset revisions, and exact memory variants while preserving
 history. The first opening of a legacy session creates its variant snapshot.
-No manual SQL migration or memory reset is required. Keep the configured database
-on persistent storage when saved sessions must survive a Space rebuild.
+No manual SQL migration or memory reset is required. Configure cloud backups or
+use a persistent filesystem when saved sessions must survive a Space rebuild.
 
 After a deploy, refresh the browser. HTML, JavaScript modules, and stylesheets
 revalidate against the server so the split frontend loads the current release.
 
-If you want phrase history to survive restarts, attach a storage volume or bucket and mount it at `/data` (or another path), then point the database there with an environment variable such as:
+### Private cloud backups on free hardware
+
+1. Create a **private** [Hugging Face Storage Bucket](https://huggingface.co/docs/hub/storage-buckets).
+2. In the Space settings, add the variable `CONTINUATOR_BACKUP_BUCKET` with the bucket ID.
+3. Add `CONTINUATOR_BACKUP_TOKEN` as a **secret**, using a token with read/write access to the bucket. A dedicated token scoped to this bucket is preferable.
+4. Deploy and wait for **Cloud saved** in the bar above the workspace.
+
+The live SQLite database stays on the local filesystem. SQLite's backup API
+captures committed WAL changes consistently, then a single background worker
+uploads an immutable snapshot and publishes `continuator-backups/latest.json`
+only after the snapshot succeeds. The latest three snapshots are retained.
+Uploads retry automatically; generation requests do not wait for the network.
+The UI distinguishes **Saving to cloud**, **Cloud saved**, **Cloud save failed**,
+and **Local storage only**. A snapshot is reported saved only while it covers
+all committed writes, including account and ownership changes.
+
+On startup, the app downloads and checks the latest snapshot's checksum, SQLite
+integrity, references, and database identity before opening it. Recovery errors
+stop startup rather than allowing an empty database to overwrite a good cloud
+backup. A newer local copy is preserved; conflicting local/cloud databases
+require manual recovery. Older retained snapshots can be downloaded by the
+bucket owner for manual recovery if needed.
+
+**Limits:** changes after the last successful backup can still be lost on an
+abrupt reset. Wait for **Cloud saved** before leaving important work, and keep
+personal MIDI ZIP exports as an extra copy. Backups include password hashes and
+authentication tokens as well as music; keep the bucket private and the token
+out of frontend code and Git. One application process must own this bucket
+prefix; this is not replication or a multi-server database. Backend MIDI export
+folders are not included because the phrase data can regenerate those files.
+
+**First deployment:** enabling this feature cannot rescue an already erased
+database. Export important phrases before replacing an older, unprotected Space.
+Subsequent restarts recover from the most recent successful cloud backup.
+
+An actual persistent filesystem can alternatively hold the live database:
 
 ```bash
 CONTINUATOR_DB_PATH=/data/continuator.sqlite3
@@ -532,12 +574,12 @@ CONTINUATOR_SEED_MIDI_FILE=/data/seeds/example.mid
 CONTINUATOR_SEED_MIDI_FOLDER=/data/seeds
 ```
 
-For a first public demo, the simplest deployment is:
+For a public demo that preserves saved sessions:
 
 - free CPU hardware
-- no persistent storage
+- private bucket backups, without a paid persistent disk
 - no seed corpus
-- browser-side MIDI ZIP export only
+- browser-side MIDI ZIP exports for personal copies
 
 That keeps the setup minimal and is enough to validate browser MIDI capture, API round-trips, and continuation playback.
 
@@ -578,8 +620,9 @@ The Hugging Face YAML block is only repository metadata for the Space platform. 
 ## Current Limitations
 
 - Session engines are in memory only.
-- Signed-in sessions restore exact committed active memory after a backend restart.
-- Guest sessions cannot be reopened through the saved-session account interface.
+- Signed-in sessions restore exact active memory from SQLite; after ephemeral-disk loss, recovery is limited to the latest successful cloud backup.
+- Guest sessions can be linked to an account without clearing their phrases or memory. Unclaimed guest sessions do not appear in the account's saved-session list.
+- Backup restore/upload assumes one backend process per bucket prefix.
 - The `Memory` tab shows session memory, not cross-session user memory.
 - Web MIDI support depends on browser support and user permission.
 - The built-in sampled piano and violin are loaded lazily from the [FluidR3 General MIDI browser soundfont](https://github.com/gleitz/midi-js-soundfonts) on first use.
@@ -604,12 +647,16 @@ Natural next steps for this project:
 | Complete session operation serialization | Complete | One lock per session covers engine, settings, trace and persistence changes. Related writes commit together; failed operations roll back and reload committed memory and settings. Other sessions can continue independently. |
 | Phrase identity through transposition | Complete | Stable variant and source IDs replace list-offset inference. Individual transposed variants can be deleted and stay deleted after restart or settings changes. Seed identity follows rolling eviction. |
 | Module organization and graph isolation | Complete | Frontend capture, input, playback/renderers, session/API, views, state and configuration have separate modules. SVG layout consumes detached snapshots outside performance locks. |
+| Cloud recovery on ephemeral hardware | Complete | Private bucket snapshots include accounts, phrases and exact memory; validated startup recovery, upload retries, three-snapshot retention and honest save status. Requires a bucket-scoped backend secret. |
+| Account and save UX | Complete | Native modal appears above graph windows, sign-in can claim the existing guest session, and account/reopen controls work on desktop and phone. |
 
-Validation: 34 backend integration/regression tests and 6 frontend module tests,
+Validation: 45 backend integration/regression tests and 9 frontend module tests,
 plus Python/JavaScript static checks and browser checks of capture, generation,
 playback, memory and graph views. Tests cover same-second reset/relearn,
 legacy-schema migration, transposed deletion, seed eviction, polyphonic timing,
-transaction failure recovery and concurrent requests.
+transaction failure recovery, concurrent requests, backup recovery/corruption,
+upload failures and retries, writes during uploads, ownership conflicts, and
+stale frontend save-status responses.
 
 Existing databases upgrade automatically in a transaction. Legacy phrase order
 is recovered from SQLite insertion order; the first restoration creates exact

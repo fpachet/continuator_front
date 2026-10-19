@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import (
     Cookie,
     Depends,
@@ -24,6 +26,7 @@ from .auth import (
     UsernameTakenError,
 )
 from .config import load_settings
+from .cloud_backup import CloudBackup, HubBucket
 from .continuator_runtime import continuator_runtime_info
 from .schemas import (
     AuthStatusResponse,
@@ -63,6 +66,12 @@ from .storage import PhraseStorage
 
 
 settings = load_settings()
+cloud_backup = CloudBackup(
+    settings.db_path,
+    HubBucket(settings.backup_bucket) if settings.backup_bucket else None,
+    interval=settings.backup_interval_seconds,
+)
+cloud_backup.restore()
 storage = PhraseStorage(settings.db_path)
 auth_manager = AuthManager(storage)
 session_manager = SessionManager(
@@ -73,7 +82,17 @@ session_manager = SessionManager(
 )
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    cloud_backup.start(storage)
+    try:
+        yield
+    finally:
+        await run_in_threadpool(cloud_backup.close)
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title=settings.app_name,
     version="0.1.0",
     description=(
@@ -161,6 +180,11 @@ def public_config() -> PublicConfigResponse:
     )
 
 
+@app.get("/api/backup", tags=["system"])
+def backup_status() -> dict:
+    return cloud_backup.status()
+
+
 @app.get("/api/auth/me", response_model=AuthStatusResponse, tags=["auth"])
 def auth_me(
     response: Response,
@@ -230,6 +254,23 @@ def my_sessions(
     current_user: AuthenticatedUser = Depends(require_current_user),
 ) -> UserSessionsResponse:
     return session_manager.list_user_sessions(current_user.id, limit=limit)
+
+
+@app.post(
+    "/api/my/sessions/{session_id}/claim",
+    response_model=OpenSessionResponse,
+    tags=["session"],
+)
+def claim_session(
+    session_id: str,
+    current_user: AuthenticatedUser = Depends(require_current_user),
+) -> OpenSessionResponse:
+    try:
+        return session_manager.claim_session(session_id, current_user.id)
+    except UnknownSessionError as error:
+        raise HTTPException(
+            status_code=404, detail="Session is unavailable."
+        ) from error
 
 
 @app.post(

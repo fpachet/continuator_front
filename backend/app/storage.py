@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 import json
 import sqlite3
 import threading
+import uuid
 
 
 SCHEMA_SQL = """
@@ -64,6 +65,7 @@ class PhraseStorage:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
+        self.on_commit = None
         self._initialize()
 
     @contextmanager
@@ -78,6 +80,8 @@ class PhraseStorage:
         try:
             with connection:
                 yield connection
+            if connection.total_changes and self.on_commit is not None:
+                self.on_commit()
         finally:
             connection.close()
 
@@ -163,6 +167,57 @@ class PhraseStorage:
             ON auth_tokens(user_id)
             """
         )
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS backup_state (
+                singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+                database_id TEXT NOT NULL,
+                revision INTEGER NOT NULL
+            )
+        """)
+        connection.execute(
+            "INSERT OR IGNORE INTO backup_state VALUES (1, ?, 0)", (uuid.uuid4().hex,)
+        )
+        # Revisions live in SQLite, so a snapshot identifies exactly which
+        # committed writes it contains, including writes during an upload.
+        for table in ("users", "auth_tokens", "sessions", "phrases", "memory_variants"):
+            for operation in ("INSERT", "UPDATE", "DELETE"):
+                connection.execute(f"""
+                    CREATE TRIGGER IF NOT EXISTS backup_{table}_{operation.lower()}
+                    AFTER {operation} ON {table}
+                    BEGIN
+                        UPDATE backup_state SET revision = revision + 1 WHERE singleton = 1;
+                    END
+                """)
+
+    def backup_identity(self) -> tuple[str, int]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT database_id, revision FROM backup_state"
+            ).fetchone()
+        return str(row[0]), int(row[1])
+
+    def snapshot(self, destination: Path) -> tuple[str, int]:
+        """Include committed WAL data without copying a live database file."""
+        with (
+            closing(sqlite3.connect(self.db_path)) as source,
+            closing(sqlite3.connect(destination)) as target,
+        ):
+            source.backup(target)
+            row = target.execute(
+                "SELECT database_id, revision FROM backup_state"
+            ).fetchone()
+        return str(row[0]), int(row[1])
+
+    def claim_session(self, session_id: str, user_id: str) -> bool:
+        with self._connect() as connection:
+            connection.execute(
+                "UPDATE sessions SET user_id = ? WHERE id = ? AND user_id IS NULL",
+                (user_id, session_id),
+            )
+            row = connection.execute(
+                "SELECT user_id FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone()
+        return row is not None and row[0] == user_id
 
     def _ensure_column(
         self,

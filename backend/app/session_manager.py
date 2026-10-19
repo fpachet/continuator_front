@@ -342,6 +342,14 @@ class SessionManager:
         )
 
     @session_operation
+    def claim_session(self, session_id: str, owner_user_id: str) -> OpenSessionResponse:
+        state = self._require_session(session_id, owner_user_id)
+        if not self.storage.claim_session(session_id, owner_user_id):
+            raise UnknownSessionError(session_id)
+        state.owner_user_id = owner_user_id
+        return self.open_session(session_id, owner_user_id)
+
+    @session_operation
     def open_session(self, session_id: str, owner_user_id: str) -> OpenSessionResponse:
         session_record = self.storage.get_session_record(session_id, owner_user_id)
         if session_record is None:

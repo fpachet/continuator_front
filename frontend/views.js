@@ -148,9 +148,21 @@ export function createViews(dependencies) {
         : "Output unavailable";
     }
     if (elements.sessionSaveNote) {
-      elements.sessionSaveNote.textContent = state.authUser
-        ? "Signed-in session: new sessions are saved under your account."
-        : "Guest session: sign in before creating a new session if you want it saved and reopenable.";
+      const owned = state.authUser && state.sessionIsOwned;
+      const ownership = owned
+        ? `Session linked to ${state.authUser.username}. Reopen it from Saved Sessions.`
+        : "Guest session · play without signing in. Sign in to keep this session in your account.";
+      elements.sessionSaveNote.textContent = ownership;
+      elements.sessionOwnershipStatus.textContent = ownership;
+      elements.saveAccountButton.textContent = owned
+        ? "Account & sessions"
+        : state.authUser
+          ? "Save to my account"
+          : "Sign in & save session";
+      elements.claimSessionButton.hidden =
+        !state.authUser || state.sessionIsOwned || !state.sessionId;
+      elements.claimSessionToggle.disabled =
+        !state.sessionId || state.sessionIsOwned;
     }
 
     setTimelineSegment(
@@ -559,7 +571,8 @@ export function createViews(dependencies) {
     elements.registerButton.disabled = signedIn;
     elements.logoutButton.disabled = !signedIn;
     elements.refreshSessionsButton.disabled = !signedIn;
-    elements.accountOpenSessionsButton.disabled = !signedIn;
+    elements.accountOpenSessionsButton.disabled =
+      !signedIn || !state.savedSessions.length;
   }
 
   function formatTimestamp(value) {
@@ -792,16 +805,16 @@ export function createViews(dependencies) {
     const user = state.authUser;
     renderAccountTrigger();
     elements.accountPanelCopy.textContent = user
-      ? "Manage your signed-in account here, then jump to your saved sessions when you want to reopen a prior memory."
-      : "Guest mode works immediately. Sign in only if you want your sessions saved and reopenable.";
+      ? "Link the current session to your account or reopen a saved session. Cloud backup status is shown above the workspace."
+      : "No account is needed to play. Sign in or create an account to keep this session, including phrases you have already played.";
     elements.authUserName.textContent = user ? user.username : "Not signed in";
     elements.authSignedOutPanel.hidden = Boolean(user);
     elements.authSignedInPanel.hidden = !user;
     elements.authPasswordInput.value = "";
     setAuthMessage(
       user
-        ? `Signed in as ${user.username}. New sessions will be saved under this account.`
-        : "Guest mode is ready. Sign in only if you want saved sessions.",
+        ? `Signed in as ${user.username}. ${state.sessionIsOwned ? "This session is linked to your account." : "Save the current guest session to keep it in your account."}`
+        : "Play freely as a guest. Sign in to save and reopen the current session.",
     );
     renderPerformanceState();
     updateAuthActionState();

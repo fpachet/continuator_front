@@ -4,6 +4,7 @@ import { VIRTUAL_MIDI_INPUT_ID, VIRTUAL_MIDI_INPUT_NAME } from "./constants.js";
 export function createSessionController(dependencies) {
   const {
     applyPreferredAudioOutput,
+    backupStatus,
     attachInput,
     chooseMidiExportZipFileHandle,
     clearCurrentSessionState,
@@ -68,6 +69,18 @@ export function createSessionController(dependencies) {
   } = dependencies;
 
   async function requestJson(url, options = {}) {
+    const writing = ["POST", "PATCH", "DELETE", "PUT"].includes(
+      options.method?.toUpperCase(),
+    );
+    if (writing) backupStatus?.beginWrite();
+    try {
+      return await fetchJson(url, options);
+    } finally {
+      if (writing) backupStatus?.endWrite();
+    }
+  }
+
+  async function fetchJson(url, options = {}) {
     const response = await fetch(url, options);
     const rawText = await response.text();
     let payload = null;
@@ -280,31 +293,43 @@ export function createSessionController(dependencies) {
     await applyPreferredAudioOutput();
     elements.authUsernameInput.value = payload.user.username;
     syncAuthUI();
-    await refreshSavedSessions();
-    setAccountPanelOpen(false);
-    if (state.sessionId) {
-      setAuthMessage(
-        mode === "register"
-          ? `Account created for ${payload.user.username}. Your current guest session stays open; new sessions will be saved.`
-          : `Signed in as ${payload.user.username}. Your current session stays open; new sessions will be saved.`,
-      );
-      setPhraseMessage(
-        mode === "register"
-          ? `Account created for ${payload.user.username}. Your current guest session stays open; new sessions will be saved.`
-          : `Signed in as ${payload.user.username}. Your current session stays open; new sessions will be saved.`,
-      );
-      return;
+    if (
+      state.sessionId &&
+      !state.sessionIsOwned &&
+      elements.claimSessionToggle.checked
+    ) {
+      await claimCurrentSession();
+    } else {
+      await refreshSavedSessions();
+      const message = `Signed in as ${payload.user.username}. ${
+        state.sessionId && !state.sessionIsOwned
+          ? "This session is still a guest session. Use Save current session to keep it in your account."
+          : "Your sessions are linked to your account."
+      }`;
+      setAuthMessage(message);
+      setPhraseMessage(message);
     }
-    setAuthMessage(
-      mode === "register"
-        ? `Account created for ${payload.user.username}. You can create a saved session now.`
-        : `Signed in as ${payload.user.username}. You can create or open a saved session now.`,
-    );
-    setPhraseMessage(
-      mode === "register"
-        ? `Account created for ${payload.user.username}. Create or open a session to continue.`
-        : `Signed in as ${payload.user.username}. Create or open a session to continue.`,
-    );
+    setAccountPanelOpen(false);
+  }
+
+  async function claimCurrentSession() {
+    if (!state.authUser || !state.sessionId || state.sessionIsOwned) return;
+    elements.claimSessionButton.disabled = true;
+    try {
+      await requestJson(`/api/my/sessions/${state.sessionId}/claim`, {
+        method: "POST",
+      });
+      // Keep phrase buffers, playback and memory in place. Only ownership changes.
+      state.sessionIsOwned = true;
+      syncAuthUI();
+      await refreshSavedSessions();
+      const message =
+        "This session and its existing phrases are now linked to your account. Check the cloud save status above.";
+      setAuthMessage(message);
+      setPhraseMessage(message);
+    } finally {
+      elements.claimSessionButton.disabled = false;
+    }
   }
 
   async function logoutUser() {
@@ -918,6 +943,7 @@ export function createSessionController(dependencies) {
     refreshAuthState,
     initializeReadySession,
     submitAuth,
+    claimCurrentSession,
     logoutUser,
     refreshSavedSessions,
     openSavedSession,
