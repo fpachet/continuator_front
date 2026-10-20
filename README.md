@@ -219,6 +219,12 @@ removed. Legacy saved metadata containing `engine_kind` or `decay_mode` is
 accepted and ignored when opening or listing sessions; restored sessions use
 VO Regular BP.
 
+The pinned library removes obsolete Gradio/polling launchers, the old VO import
+alias and the deprecated generic Markov adapter. This backend uses the maintained
+`from ctor.continuator import Continuator2` import. The optional local Gradio UI
+lives in the library's `ctor.ui` package and launches with
+`python -m ctor.ui.gradio_app`; it is separate from this browser frontend.
+
 Changing model/memory controls in the browser stages them until `Apply Settings`
 is pressed. Changing Markov order `K` rebuilds the live engine while preserving
 its existing note sequences, including transposed variants, without applying
