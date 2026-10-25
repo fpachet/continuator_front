@@ -394,8 +394,9 @@
               you stop it.
             </li>
             <li>
-              Playing live MIDI interrupts whatever continuation is currently
-              playing.
+              Playing live MIDI interrupts generated continuations. In the
+              Memory panel, turn off <strong>Stop memory playback when I play</strong>
+              to play along with a phrase started there.
             </li>
           </ul>
         </section>
@@ -1129,6 +1130,20 @@
                   </div>
                   <div id="memory-summary" class="settings-summary">
                     <span class="settings-chip">No active memory yet</span>
+                  </div>
+                  <div class="field">
+                    <label class="toggle">
+                      <input
+                        id="stop-memory-on-user-play-toggle"
+                        type="checkbox"
+                        aria-describedby="stop-memory-on-user-play-hint"
+                        checked
+                      />
+                      <span>Stop memory playback when I play</span>
+                    </label>
+                    <p id="stop-memory-on-user-play-hint" class="field-hint">
+                      Turn off to play along with phrases started in this panel.
+                    </p>
                   </div>
                   <p id="memory-hint" class="small-copy memory-hint">
                     Create a session and play a phrase to inspect the active

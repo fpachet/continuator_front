@@ -279,8 +279,14 @@ export function createMidiInput(dependencies) {
 
     updateVisualMidiState(messageEvent);
 
+    const keepMemoryPlaying =
+      state.stopMemoryOnUserPlay === false &&
+      state.activePlayback &&
+      state.activeMemoryPlaybackIndex != null &&
+      !state.infiniteModeEnabled &&
+      !state.infiniteRequestInFlight;
     const interruptedPlayback =
-      type === "note_on"
+      type === "note_on" && !keepMemoryPlaying
         ? stopLoopAndPlayback(
             `Stopped the current continuation and switched to live MIDI from ${sourceLabel}.`,
           )

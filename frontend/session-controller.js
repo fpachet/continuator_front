@@ -859,7 +859,20 @@ export function createSessionController(dependencies) {
     }
   }
 
-  async function sendCurrentPhrase() {
+  async function sendCurrentPhrase({ automatic = false } = {}) {
+    if (
+      automatic &&
+      state.stopMemoryOnUserPlay === false &&
+      state.activePlayback &&
+      state.activeMemoryPlaybackIndex != null &&
+      !state.infiniteModeEnabled &&
+      !state.infiniteRequestInFlight
+    ) {
+      setPhraseMessage(
+        "Phrase captured. Memory playback continues. Use Send Phrase to generate a response.",
+      );
+      return;
+    }
     stopInfiniteMode({ stopPlayback: true, silent: true });
     const { payload, continuationNoteCount } =
       await requestContinuationFromEvents(state.lastCapturedPhrase, {

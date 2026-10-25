@@ -72,6 +72,8 @@ export const FAUST_CUSTOM_TEMPLATE_DSP_URL =
   "/assets/faust/custom-poly-template.dsp";
 export const PHRASE_TIMEOUT_STORAGE_KEY = "continuator.phrase.timeout.ms";
 export const MIDI_INPUT_MONITOR_STORAGE_KEY = "continuator.midi.input.monitor";
+export const STOP_MEMORY_ON_USER_PLAY_STORAGE_KEY =
+  "continuator.memory.stopOnUserPlay";
 export const MIDI_EXPORT_FILE_DB_NAME = "continuator-midi-zip-export";
 export const MIDI_EXPORT_FILE_STORE_NAME = "file-handles";
 export const MIDI_EXPORT_FILE_HANDLE_KEY = "session-midi-export-zip";

@@ -23,6 +23,7 @@ import {
   FAUST_CUSTOM_TEMPLATE_DSP_URL,
   PHRASE_TIMEOUT_STORAGE_KEY,
   MIDI_INPUT_MONITOR_STORAGE_KEY,
+  STOP_MEMORY_ON_USER_PLAY_STORAGE_KEY,
   MIDI_EXPORT_FILE_DB_NAME,
   MIDI_EXPORT_FILE_STORE_NAME,
   MIDI_EXPORT_FILE_HANDLE_KEY,
@@ -200,6 +201,17 @@ function initializeInputMonitorPreference() {
   applyInputMonitorPreference(loadStoredInputMonitorPreference(), {
     persist: false,
   });
+}
+
+function applyStopMemoryOnUserPlayPreference(enabled, { persist = true } = {}) {
+  state.stopMemoryOnUserPlay = Boolean(enabled);
+  elements.stopMemoryOnUserPlayToggle.checked = state.stopMemoryOnUserPlay;
+  if (persist) {
+    safeLocalStorageSet(
+      STOP_MEMORY_ON_USER_PLAY_STORAGE_KEY,
+      String(state.stopMemoryOnUserPlay),
+    );
+  }
 }
 
 function playbackPreferenceStorageKey() {
@@ -654,7 +666,7 @@ const recorder = new PhraseRecorder(
       `Phrase complete: ${phrase.length} events / ${notes.length} notes captured.`,
     );
     if (elements.autoSendToggle.checked) {
-      await sendCurrentPhrase();
+      await sendCurrentPhrase({ automatic: true });
     }
   },
   updatePhraseGapCountdown,
@@ -3158,6 +3170,17 @@ function bindEvents() {
     });
   });
 
+  elements.stopMemoryOnUserPlayToggle.addEventListener("change", () => {
+    applyStopMemoryOnUserPlayPreference(
+      elements.stopMemoryOnUserPlayToggle.checked,
+    );
+    setPhraseMessage(
+      state.stopMemoryOnUserPlay
+        ? "Memory phrases will stop when you play a note."
+        : "Memory phrases will keep playing while you play.",
+    );
+  });
+
   elements.midiOutputSelect.addEventListener("change", async () => {
     stopLiveMonitorPlayback();
     updateSelectedOutput();
@@ -3411,6 +3434,10 @@ async function initialize() {
   }
   initializePhraseTimeoutSetting();
   initializeInputMonitorPreference();
+  applyStopMemoryOnUserPlayPreference(
+    safeLocalStorageGet(STOP_MEMORY_ON_USER_PLAY_STORAGE_KEY) !== "false",
+    { persist: false },
+  );
   await initializeMidiExportFilePreference();
   populatePlaybackChoices();
   syncAuthUI();

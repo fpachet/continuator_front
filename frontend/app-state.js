@@ -154,6 +154,9 @@ export const elements = {
   ),
   learnInputToggle: document.querySelector("#learn-input-toggle"),
   autoSendToggle: document.querySelector("#auto-send-toggle"),
+  stopMemoryOnUserPlayToggle: document.querySelector(
+    "#stop-memory-on-user-play-toggle",
+  ),
   transposeToggle: document.querySelector("#transpose-toggle"),
   forgetToggle: document.querySelector("#forget-toggle"),
   markovOrderInput: document.querySelector("#markov-order-input"),
@@ -274,6 +277,7 @@ export const state = {
   liveMonitorChoiceValue: null,
   liveMonitorToken: 0,
   inputMonitorEnabled: false,
+  stopMemoryOnUserPlay: true,
   userPlaybackPreference: null,
   userMidiCopyOutputPreference: null,
   userAudioOutputPreference: null,
